@@ -1,0 +1,7 @@
+playwright>=1.40
+reportlab>=4
+pymupdf>=1.24
+pillow>=9
+numpy
+scipy
+fonttools

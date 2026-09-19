@@ -1,0 +1,6 @@
+{
+  "_note": "Chỉ font Google Fonts giấy phép OFL (dùng thương mại được). Số ngày nên dùng font có số lining.",
+  "title": ["Cormorant Garamond", "Playfair Display", "Cinzel", "Libre Baskerville", "EB Garamond", "Lora", "Josefin Sans", "Montserrat"],
+  "body": ["Montserrat", "Lora", "EB Garamond", "Libre Baskerville", "Josefin Sans", "Raleway", "Nunito Sans"],
+  "numbers": ["Lora", "Libre Baskerville", "Playfair Display", "Montserrat", "Raleway", "Nunito Sans"]
+}

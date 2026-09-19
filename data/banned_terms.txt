@@ -1,0 +1,32 @@
+# Từ cấm (thương hiệu, nhân vật, đội thể thao, tên nghệ sĩ...). Mỗi dòng 1 cụm, không phân biệt hoa thường.
+# Concept/angle chứa cụm nào ở đây thì bị bắt sửa (P3) hoặc loại.
+disney
+pixar
+marvel
+star wars
+harry potter
+hogwarts
+pokemon
+hello kitty
+barbie
+peanuts
+snoopy
+sesame street
+winnie the pooh
+mickey
+looney tunes
+nfl
+nba
+mlb
+nhl
+ncaa
+coca-cola
+starbucks
+lego
+thomas kinkade
+bob ross
+precious moments
+hallmark
+national park service
+in the style of
+taylor swift

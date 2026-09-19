@@ -1,0 +1,34 @@
+{
+  "year": 2027,
+  "market": "US",
+  "projects_dir": "projects",
+  "angles_per_keyword": 5,
+  "auto_pick": 1,
+  "max_repairs": 2,
+  "chatgpt_automation_dir": "C:/Users/Admin/Desktop/chatgpt-automation",
+  "llm": {
+    "backend": "chatgpt_web",
+    "profiles": [
+      "acc2",
+      "acc3",
+      "acc4",
+      "acc5",
+      "acc1"
+    ],
+    "headless": false,
+    "timeout_s": 600
+  },
+  "imagegen": {
+    "profiles": null,
+    "headless": false,
+    "timeout_s": 420,
+    "max_attempts": 3
+  },
+  "printify": {
+    "token": "",
+    "shop_id": null,
+    "print_provider_name": "District Photo",
+    "variant_title_contains": "11",
+    "price_cents": 2999
+  }
+}
