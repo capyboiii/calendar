@@ -148,5 +148,35 @@ class ConceptColorTest(unittest.TestCase):
         self.assertIn("paper", c["style"]["palette"])
 
 
+class PrintablePdfTest(unittest.TestCase):
+    def test_printable_generates_only_11x8_5(self):
+        import fitz
+        from calforge.render.build import printable_pdfs
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            fmt = load_format()
+            png = tmp_path / "m01_month.png"
+            Image.new("RGB", tuple(fmt["size_px"]), (200, 200, 200)).save(png)
+            out_dir = tmp_path / "digital"
+            out_dir.mkdir(parents=True, exist_ok=True)
+            old_a4 = out_dir / "calendar_a4.pdf"
+            old_a4.write_text("old", encoding="utf-8")
+
+            res = printable_pdfs([png], fmt, out_dir)
+            self.assertEqual(len(res), 1)
+            pdf_path = res[0]
+            self.assertEqual(pdf_path.name, "calendar_11x8_5.pdf")
+            self.assertFalse(old_a4.exists())
+            self.assertFalse((out_dir / "calendar_a4.pdf").exists())
+
+            doc = fitz.open(pdf_path)
+            self.assertEqual(len(doc), 1)
+            page = doc[0]
+            self.assertAlmostEqual(page.rect.width, 792.0, places=1)
+            self.assertAlmostEqual(page.rect.height, 612.0, places=1)
+            doc.close()
+
+
 if __name__ == "__main__":
     unittest.main()

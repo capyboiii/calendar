@@ -28,7 +28,7 @@ keyword
  │                  -> kiểm tra tỉ lệ/kích thước, so màu với ảnh neo      [ChatGPT web, mọi acc]
  ├─ 3. Upscale     Real-ESRGAN x4 (GPU) + trộn 30% Lanczos giữ vân giấy -> art/final/
  ├─ 4. Render      bìa trước, 12 × (trang ảnh + trang lưới), bìa sau = 26 PNG 3375×2625 @300DPI
- │                  + preflight + proof đè template + PDF printable Letter/A4
+ │                  + preflight + proof đè template + PDF printable 11×8.5"
  ├─ 5. Listing     title, mô tả HTML, 13 tag (từ concept)
  └─ 6. Printify    upload 26 trang -> tạo sản phẩm NHÁP (publish chỉ khi --publish)
 ```
@@ -65,6 +65,7 @@ python -m calforge render  <concept> [--months 1,3] [--placeholder-art x.png] [-
 python -m calforge listing <concept>
 python -m calforge printify <concept> [--publish]
 python -m calforge plan / import <concept>           # đường vòng qua trang /csv của chatgpt-automation
+python -m calforge ui [--port 8080]                  # mở giao diện web CalForge Studio
 ```
 
 `<concept>` là thư mục `projects/<keyword>/<angle-id>-<slug>/`.
@@ -84,7 +85,7 @@ projects/<keyword>/
     art/qc.md                  kích thước + độ lệch màu so với ảnh neo
     render/printify/           26 PNG upload Printify
     render/proof/              đè template Printify để soát lò xo / lỗ treo / mã vạch
-    render/digital/            calendar_letter.pdf, calendar_a4.pdf (printable)
+    render/digital/            calendar_11x8_5.pdf (printable 11×8.5")
     render/report.md           preflight, font, ảnh
     listing.json               title / mô tả / tag
     printify.json              id ảnh đã upload + product_id (sổ tiến độ Printify)
@@ -126,7 +127,7 @@ python -m unittest discover -s tests -t .
 
 ## Còn lại
 
-- [ ] Bảng chọn ảnh (web) thay cho việc xoá file để gen lại
+- [x] Giao diện web CalForge Studio (quản lý project, chọn/duyệt ảnh, soát proof, listing, task console)
 - [ ] Kiểm tra chữ lẫn trong ảnh (OCR)
 - [ ] Kiểm chứng tên vùng in thật của Printify (cần token) và đặt 1 cuốn in mẫu
 - [ ] Lưới cho `family_columns`, `moon_phases`, `tracker` (hiện dùng lưới chuẩn)

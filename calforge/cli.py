@@ -15,6 +15,9 @@
   printify <thư mục concept> [--publish] upload + tạo sản phẩm NHÁP
   produce <thư mục concept>              gen -> upscale -> render -> listing -> Printify
   run     "keyword"                      TRỌN GÓI: keyword -> sản phẩm
+  ui      [--port 8080] [--no-browser]   mở giao diện web CalForge Studio
+  accounts                               xem danh sách tài khoản ChatGPT
+  login   <profile>                      mở Chrome để đăng nhập tài khoản
 """
 from __future__ import annotations
 
@@ -22,6 +25,17 @@ import argparse
 import json
 import sys
 from pathlib import Path
+
+if sys.stdout and hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+if sys.stderr and hasattr(sys.stderr, "reconfigure"):
+    try:
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 from . import config
 from .core import dates
@@ -211,6 +225,49 @@ def cmd_printify(args, cfg):
     print("product:", st.get("product_id"), "(đã publish)" if st.get("published") else "(NHÁP)")
 
 
+def cmd_ui(args, cfg):
+    from .ui.server import run_server
+
+    run_server(host=args.host, port=args.port, open_browser=not args.no_browser)
+
+
+def cmd_accounts(args, cfg):
+    from .llm import accounts
+
+    if getattr(args, "delete", None):
+        try:
+            accounts.delete_account(args.delete, cfg)
+            print(f"\n✔ Đã xóa tài khoản '{args.delete}' và thư mục profile trên ổ đĩa thành công.\n")
+        except Exception as e:
+            print(f"\n❌ Lỗi: {e}\n")
+        return
+
+    accs = accounts.list_accounts(cfg)
+    pdir = accounts.get_profiles_dir(cfg)
+    print(f"\n📁 Thư mục profiles: {pdir}")
+    print(f"👥 Tổng số tài khoản: {len(accs)}\n")
+    print(f"{'Tài khoản':<15} {'Trạng thái':<22} {'Lượt dùng':<12} {'Sửa đổi'}")
+    print("-" * 65)
+    for a in accs:
+        status = "Đang mở 🔒" if a["is_locked"] else ("Đã có session ✔" if a["has_session"] else "Chưa có session")
+        last = " (dùng gần nhất)" if a["is_last_used"] else ""
+        print(f"{a['name']:<15} {status:<22} {str(a['use_count']) + last:<12} {a['modified_at']}")
+    print("-" * 65)
+    print("👉 Mở trình duyệt đăng nhập: python -m calforge login <tên_tài_khoản>\n")
+
+
+def cmd_login(args, cfg):
+    from .llm import accounts
+
+    try:
+        accounts.open_login_browser(args.profile, cfg)
+    except KeyboardInterrupt:
+        print("\nĐã hủy đăng nhập.")
+    except Exception as e:  # noqa: BLE001 - hiện thông báo gọn thay vì traceback (UI đọc stdout)
+        print(f"\n❌ Không mở được đăng nhập cho '{args.profile}': {e}")
+        sys.exit(1)
+
+
 def main(argv=None):
     cfg = config.load()
     ap = argparse.ArgumentParser(prog="calforge", description=__doc__,
@@ -286,6 +343,20 @@ def main(argv=None):
     p.add_argument("concept")
     p.add_argument("--publish", action="store_true")
     p.set_defaults(func=cmd_printify)
+
+    p = sub.add_parser("ui", help="mở giao diện web CalForge Studio")
+    p.add_argument("--port", type=int, default=8080, help="cổng mạng (mặc định 8080)")
+    p.add_argument("--host", default="127.0.0.1", help="host lắng nghe (mặc định 127.0.0.1)")
+    p.add_argument("--no-browser", action="store_true", help="không tự động mở trình duyệt")
+    p.set_defaults(func=cmd_ui)
+
+    p = sub.add_parser("accounts", help="liệt kê danh sách tài khoản ChatGPT")
+    p.add_argument("--delete", help="xóa tài khoản và thư mục profile trên ổ đĩa (vd: --delete test_acc)")
+    p.set_defaults(func=cmd_accounts)
+
+    p = sub.add_parser("login", help="mở trình duyệt Chrome để đăng nhập tài khoản ChatGPT")
+    p.add_argument("profile", help="tên tài khoản/profile (vd acc1, acc6)")
+    p.set_defaults(func=cmd_login)
 
     args = ap.parse_args(argv)
     args.func(args, cfg)

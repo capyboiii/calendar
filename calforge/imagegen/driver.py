@@ -23,7 +23,10 @@ log = logging.getLogger("calforge.imagegen")
 URL = "https://chatgpt.com/"
 SEL_PROMPT = ["#prompt-textarea", 'div.ProseMirror[contenteditable="true"]', "textarea[data-id]"]
 SEL_SEND = ['button[data-testid="send-button"]', 'button[aria-label*="Send" i]']
-MIN_SIDE = 768  # ảnh gen thật >= 1024; ảnh nền giao diện 512 -> loại
+# Lọc ảnh gen thật với ảnh nền/icon giao diện theo CẠNH DÀI. Không dùng cạnh ngắn: họa tiết
+# thường rộng và thấp (vd cành lá 2000x667) -> cạnh ngắn < 768 sẽ bị loại nhầm, khiến driver
+# tưởng chưa có ảnh và gen lại nhiều lần dù ChatGPT đã gen xong.
+MIN_SIDE = 768  # ảnh gen thật cạnh dài >= 1024; icon/nền giao diện <= 512 -> loại
 
 QUOTA_PAT = ("reached your limit", "reached the limit", "hit your limit", "limit for image",
              "image generation limit", "you can create more images", "able to create images again",
@@ -195,12 +198,20 @@ class _Worker:
 
     def _wait_image(self, page, before: dict) -> str:
         """Chờ đến khi có ảnh lớn trong lượt trả lời mới và ảnh đứng yên settle_s giây."""
-        deadline = time.monotonic() + self.timeout_s
-        chosen, since, quiet_since = None, 0.0, None
+        start = time.monotonic()
+        deadline = start + self.timeout_s
+        # Bỏ SỚM nếu tab kẹt: ChatGPT chưa mở nổi lượt trả lời (đang gen thì bubble hiện sau vài
+        # giây) -> đừng chờ hết 420s rồi mới chuyển tài khoản.
+        no_progress = min(120.0, self.timeout_s / 3)
+        chosen, since, quiet_since, progressed = None, 0.0, None, False
         while time.monotonic() < deadline:
             st = _eval(page, STATE_JS)
             new_turn = st["assistant"] > before["assistant"]
-            big = [im for im in st["imgs"] if min(im["w"], im["h"]) >= MIN_SIDE and im["done"]] if new_turn else []
+            if new_turn or st.get("busy"):
+                progressed = True
+            elif not progressed and time.monotonic() - start > no_progress:
+                raise TempError(f"tab kẹt: ChatGPT chưa phản hồi sau {no_progress:.0f}s")
+            big = [im for im in st["imgs"] if max(im["w"], im["h"]) >= MIN_SIDE and im["done"]] if new_turn else []
             if big:
                 best = max(big, key=lambda im: im["w"] * im["h"])["src"]
                 if best != chosen:
@@ -289,6 +300,7 @@ def run_jobs(jobs: list[GenJob], profiles_dir: Path, profiles: list[str], *, hea
                             job.attempts -= 1            # không tính lượt: lỗi của tài khoản
                             q.put(job)
                             on_event(f"[{profile}] HẾT LƯỢT, nghỉ tài khoản này: {str(e)[:120]}")
+                            recruit()                    # gọi tài khoản dự bị vào thay (nếu còn việc)
                             return
                         except Refused as e:
                             job.error = f"bị từ chối: {str(e)[:200]}"
@@ -304,21 +316,41 @@ def run_jobs(jobs: list[GenJob], profiles_dir: Path, profiles: list[str], *, hea
                                 finish(job)
                 finally:
                     ctx.close()
-        except Exception as e:  # noqa: BLE001 - không mở được Chrome/profile
-            on_event(f"[{profile}] không chạy được: {str(e)[:200]}")
+        except Exception as e:  # noqa: BLE001 - không mở được Chrome/profile (thường do profile bị khóa
+            # bởi Chrome mồ côi từ lần chạy trước) -> gọi tài khoản dự bị vào thay, đừng để job kẹt.
+            on_event(f"[{profile}] không mở được Chrome (profile bị khóa?): {str(e)[:160]}")
+            recruit()
         finally:
             with lock:
                 alive["n"] -= 1
 
+    # Chỉ mở số cửa sổ Chrome bằng số việc: gen ảnh neo (1 việc) không mở thừa 4 cửa sổ trắng.
+    # Giữ nguyên thứ tự tài khoản (ưu tiên); các tài khoản dư để dành làm dự bị.
+    n_workers = max(1, min(len(profiles), len(jobs)))
     threads = []
-    for i, p in enumerate(profiles):
-        alive["n"] += 1
-        t = threading.Thread(target=worker, args=(p,), daemon=True)
+    reserves = list(profiles[n_workers:])   # tài khoản dự bị, gọi vào khi worker hết lượt
+
+    def spawn(profile: str):
+        with lock:
+            alive["n"] += 1
+        t = threading.Thread(target=worker, args=(profile,), daemon=True)
         t.start()
         threads.append(t)
+
+    def recruit():
+        """Khi một worker nghỉ vì hết lượt: gọi một tài khoản dự bị vào thay (nếu còn việc)."""
+        with lock:
+            if remaining["n"] <= 0 or not reserves:
+                return
+            nxt = reserves.pop(0)
+        on_event(f"[{nxt}] gọi tài khoản dự bị vào thay")
+        spawn(nxt)
+
+    for p in profiles[:n_workers]:
+        spawn(p)
         time.sleep(1.5)  # bật Chrome lệch nhau cho đỡ nghẽn
     while any(t.is_alive() for t in threads):
-        for t in threads:
+        for t in list(threads):
             t.join(timeout=1)
     left = []
     while not q.empty():

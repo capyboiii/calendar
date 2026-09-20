@@ -4,7 +4,7 @@
   printify/front_cover.png, mXX_month.png, mXX_grid.png, back_cover.png   (3375x2625, 300 DPI)
   pages.pdf                          bản vector để duyệt
   proof/*_proof.png                  đè template Printify để soát lò xo, lỗ treo, mã vạch
-  digital/calendar_letter.pdf, calendar_a4.pdf   bản in tại nhà (không bleed, có lề)
+  digital/calendar_11x8_5.pdf        bản in tại nhà 11x8.5" (không bleed, có lề)
   report.md                          preflight + font + ảnh
 """
 from __future__ import annotations
@@ -13,7 +13,7 @@ import json
 from pathlib import Path
 
 from PIL import Image
-from reportlab.lib.pagesizes import A4, landscape, letter
+from reportlab.lib.pagesizes import landscape, letter
 from reportlab.pdfgen import canvas
 
 from ..core import kjv
@@ -62,8 +62,10 @@ def prepare_ornament(src: Path, out_dir: Path) -> tuple[dict, str]:
 
 
 def printable_pdfs(pngs: list[Path], fmt: dict, out_dir: Path, dpi: int = 200) -> list[Path]:
-    """PDF in tại nhà: cắt bleed, thu về `dpi`, đặt giữa trang Letter/A4 ngang, lề 0.25"."""
+    """PDF in tại nhà: cắt bleed, thu về `dpi`, đặt giữa trang 11x8.5" (Letter ngang), lề 0.25"."""
     out_dir.mkdir(parents=True, exist_ok=True)
+    for old in ("calendar_a4.pdf", "calendar_letter.pdf"):
+        (out_dir / old).unlink(missing_ok=True)
     bleed = round(fmt["bleed_px"])
     jpgs = []
     for p in pngs:
@@ -75,7 +77,7 @@ def printable_pdfs(pngs: list[Path], fmt: dict, out_dir: Path, dpi: int = 200) -
             im.resize((round(w_in * dpi), round(h_in * dpi)), Image.LANCZOS).save(j, quality=86)
         jpgs.append((j, w_in / h_in))
     made = []
-    for name, size in (("calendar_letter.pdf", landscape(letter)), ("calendar_a4.pdf", landscape(A4))):
+    for name, size in (("calendar_11x8_5.pdf", landscape(letter)),):
         path = out_dir / name
         c = canvas.Canvas(str(path), pagesize=size)
         pw, ph = size

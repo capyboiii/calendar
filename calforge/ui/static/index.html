@@ -1,0 +1,446 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CalForge Studio — Xuất Bản Lịch Treo Tường 11×8.5"</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Playfair+Display:ital,wght@0,600;1,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <!-- Top App Navigation -->
+  <header class="app-header">
+    <div class="header-left">
+      <div class="brand">
+        <div class="brand-icon">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="3" y="4" width="18" height="18" rx="3" ry="3"></rect>
+            <line x1="16" y1="2" x2="16" y2="6"></line>
+            <line x1="8" y1="2" x2="8" y2="6"></line>
+            <line x1="3" y1="10" x2="21" y2="10"></line>
+            <path d="M8 14h.01M12 14h.01M16 14h.01M8 18h.01M12 18h.01M16 18h.01"></path>
+          </svg>
+        </div>
+        <div class="brand-text">
+          <span class="brand-name">CalForge <span class="brand-badge">STUDIO</span></span>
+          <span class="brand-sub">Printify Wall Calendar 11×8.5"</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="header-center">
+      <div class="pill-meta" id="globalMeta">
+        <span class="meta-item"><strong>Năm:</strong> <span id="metaYear">2027</span></span>
+        <span class="meta-sep">•</span>
+        <span class="meta-item"><strong>Thị trường:</strong> <span id="metaMarket">US</span></span>
+        <span class="meta-sep">•</span>
+        <span class="meta-item"><strong>Nhà in:</strong> District Photo</span>
+      </div>
+    </div>
+
+    <div class="header-right">
+      <button class="btn btn-secondary btn-sm" id="btnOpenAccounts">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
+        Tài Khoản ChatGPT (<span id="headerAccCount">5</span>)
+      </button>
+      <button class="btn btn-primary btn-sm" id="btnNewProject">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+        Tạo Dự Án Mới
+      </button>
+    </div>
+  </header>
+
+  <div class="app-layout">
+    <!-- Sidebar: Project Navigator -->
+    <aside class="app-sidebar">
+      <div class="sidebar-header">
+        <span class="sidebar-title">BỘ SƯU TẬP LỊCH</span>
+        <span class="badge" id="projectCount">0</span>
+      </div>
+      <div class="sidebar-search">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+        <input type="text" id="projectSearch" placeholder="Lọc theo từ khóa...">
+      </div>
+      <div class="project-list" id="projectList">
+        <div class="empty-state-sidebar">Đang tải danh sách...</div>
+      </div>
+    </aside>
+
+    <!-- Main Workspace -->
+    <main class="app-main">
+      <!-- Concept Header Hero -->
+      <section class="concept-hero" id="conceptHero" style="display: none;">
+        <div class="hero-top">
+          <div class="hero-info">
+            <div class="hero-badges">
+              <span class="tag-chip family-chip" id="heroFamily">Watercolor</span>
+              <span class="tag-chip angle-chip" id="heroAngle">r1a1</span>
+              <span class="tag-chip status-chip" id="heroStatus">Stage: Render</span>
+            </div>
+            <h1 class="hero-title" id="heroTitle">Grace for Every Season</h1>
+            <p class="hero-subtitle" id="heroSubtitle">A Year of God's Faithfulness and Scripture Promises</p>
+          </div>
+          <div class="hero-actions">
+            <button class="btn btn-primary btn-sm" id="btnActionContinue" title="Chạy tiếp các bước còn thiếu (tự bỏ qua bước đã xong)">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="13 17 18 12 13 7"></polyline><polyline points="6 17 11 12 6 7"></polyline></svg>
+              <span id="btnContinueLabel">Chạy Tiếp</span>
+            </button>
+            <button class="btn btn-secondary btn-sm" id="btnActionProduce" title="Chạy sinh ảnh và render ra sản phẩm hoàn chỉnh">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+              Sản Xuất Toàn Bộ
+            </button>
+            <button class="btn btn-secondary btn-sm" id="btnActionRender" title="Render lại 26 trang in và PDF">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
+              Render Lại
+            </button>
+            <button class="btn btn-primary btn-sm" id="btnActionPrintify" title="Upload lên Printify tạo bản nháp">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+              Tạo Printify Draft
+            </button>
+          </div>
+        </div>
+
+        <!-- 6-Step Pipeline Stepper -->
+        <div class="stepper-card">
+          <div class="stepper-title">DÂY CHUYỀN SẢN XUẤT</div>
+          <div class="stepper" id="pipelineStepper">
+            <!-- Dynamically populated steps -->
+          </div>
+        </div>
+      </section>
+
+      <!-- Main Navigation Tabs -->
+      <nav class="studio-tabs" id="studioTabs" style="display: none;">
+        <button class="tab-btn active" data-tab="months">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
+          Kịch Bản 12 Tháng
+        </button>
+        <button class="tab-btn" data-tab="art">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline></svg>
+          Thư Viện Tranh & QC
+          <span class="tab-badge" id="artCountBadge">0</span>
+        </button>
+        <button class="tab-btn" data-tab="proofs">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
+          Soát Bản In 26 Trang & PDF
+          <span class="tab-badge special" id="preflightBadge">0 lỗi</span>
+        </button>
+        <button class="tab-btn" data-tab="listing">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"></path><line x1="7" y1="7" x2="7.01" y2="7"></line></svg>
+          Listing & Printify
+        </button>
+      </nav>
+
+      <!-- Empty Selection State -->
+      <div class="empty-state-main" id="emptyState">
+        <div class="empty-icon">
+          <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="4" width="18" height="18" rx="3" ry="3"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
+        </div>
+        <h2>Chào mừng đến với CalForge Studio</h2>
+        <p>Chọn một concept lịch ở thanh bên trái hoặc bấm "Tạo Dự Án Mới" để bắt đầu dây chuyền sáng tạo.</p>
+        <button class="btn btn-primary" onclick="document.getElementById('btnNewProject').click()">+ Tạo Lịch Mới Ngay</button>
+      </div>
+
+      <!-- Tab Content Area -->
+      <div class="tab-content" id="tabContent" style="display: none;">
+        
+        <!-- Tab 1: 12 Months & Concept -->
+        <section class="tab-pane active" id="pane-months">
+          <!-- Concept Meta Card -->
+          <div class="studio-card concept-meta-card">
+            <div class="meta-columns">
+              <div class="meta-col">
+                <span class="field-label">ĐỐI TƯỢNG MỤC TIÊU</span>
+                <p class="field-value" id="metaBuyer">-</p>
+              </div>
+              <div class="meta-col">
+                <span class="field-label">HOOK BÁN HÀNG</span>
+                <p class="field-value" id="metaHook">-</p>
+              </div>
+              <div class="meta-col">
+                <span class="field-label">PHONG CÁCH NGHỆ THUẬT</span>
+                <p class="field-value" id="metaStyle">-</p>
+              </div>
+            </div>
+
+            <!-- Color Story & Typography Swatches -->
+            <div class="design-system-row">
+              <div class="palette-block">
+                <span class="field-label">BẢNG MÀU THIẾT KẾ (COLOR STORY)</span>
+                <div class="swatches-grid" id="swatchesGrid"></div>
+              </div>
+              <div class="fonts-block">
+                <span class="field-label">FONTS ĐỒNG BỘ</span>
+                <div class="fonts-list" id="fontsList"></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 12 Month Grid -->
+          <div class="section-title-row">
+            <h3>CHI TIẾT 12 THÁNG</h3>
+            <span class="count-pill">12 tháng chuẩn lịch US</span>
+          </div>
+          <div class="months-grid" id="monthsGrid">
+            <!-- 12 Month Cards Injected Here -->
+          </div>
+        </section>
+
+        <!-- Tab 2: Art & QC -->
+        <section class="tab-pane" id="pane-art">
+          <div class="art-header-bar">
+            <div>
+              <h3>THƯ VIỆN TRANH MINH HỌA</h3>
+              <p class="subtext">Ảnh neo định hình phong cách, 12 tháng minh họa và hoa văn tách nền</p>
+            </div>
+            <div class="art-toggle-group">
+              <span class="toggle-label">Hiển thị:</span>
+              <button class="toggle-pill active" data-art-type="final">Bản Upscale Nét (Final)</button>
+              <button class="toggle-pill" data-art-type="raw">Bản ChatGPT Gốc (Raw)</button>
+            </div>
+          </div>
+
+          <!-- Anchor Art Spotlight -->
+          <div class="anchor-spotlight-card" id="anchorCard">
+            <!-- Anchor details injected here -->
+          </div>
+
+          <!-- 12 Months Artworks Grid -->
+          <div class="section-title-row">
+            <h4>TRANH 12 THÁNG</h4>
+            <span class="subtext" id="qcSummaryText">Tỉ lệ 3:2, độ phân giải cao cho in ấn</span>
+          </div>
+          <div class="artworks-grid" id="artworksGrid"></div>
+        </section>
+
+        <!-- Tab 3: Proofs & Printable PDF -->
+        <section class="tab-pane" id="pane-proofs">
+          <div class="proofs-toolbar">
+            <div class="proof-toggle-wrap">
+              <label class="switch">
+                <input type="checkbox" id="proofOverlayToggle" checked>
+                <span class="slider"></span>
+              </label>
+              <div class="switch-text">
+                <strong>Chế độ Soát Lò Xo & Lỗ Treo (Proof Mode)</strong>
+                <span>Đè template Printify District Photo để soát an toàn vùng cắt và dập lỗ</span>
+              </div>
+            </div>
+
+            <div class="proof-downloads">
+              <a href="#" class="btn btn-secondary btn-sm" id="btnDownloadPagesPdf" target="_blank">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                Duyệt Vector (pages.pdf)
+              </a>
+              <a href="#" class="btn btn-primary btn-sm" id="btnDownloadDigitalPdf" target="_blank">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="12" y1="18" x2="12" y2="12"></line><line x1="9" y1="15" x2="15" y2="15"></line></svg>
+                Tải Bản In 11×8.5" (calendar_11x8_5.pdf)
+              </a>
+            </div>
+          </div>
+
+          <!-- Preflight Alert Box -->
+          <div class="preflight-status-card" id="preflightBox">
+            <div class="preflight-icon">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
+            </div>
+            <div class="preflight-body">
+              <h4 id="preflightTitle">Preflight Sạch — Sẵn Sàng Xuất Xưởng</h4>
+              <p id="preflightDesc">Toàn bộ 26 trang đã được kiểm tra: chữ nằm an toàn trong lề, không chạm lỗ treo và lò xo.</p>
+            </div>
+          </div>
+
+          <!-- 26 Pages Grid -->
+          <div class="pages-strip-grid" id="pagesStripGrid">
+            <!-- 26 Page items dynamically injected -->
+          </div>
+        </section>
+
+        <!-- Tab 4: Listing & Publish -->
+        <section class="tab-pane" id="pane-listing">
+          <div class="listing-grid">
+            <!-- Left: SEO Title & Description -->
+            <div class="listing-left">
+              <div class="studio-card">
+                <div class="card-header-flex">
+                  <span class="field-label">TIÊU ĐỀ LISTING (SEO TITLE)</span>
+                  <button class="btn btn-ghost btn-xs copy-btn" data-target="listingTitle">Sao chép</button>
+                </div>
+                <div class="copy-box" id="listingTitle">Chưa có tiêu đề</div>
+              </div>
+
+              <div class="studio-card">
+                <div class="card-header-flex">
+                  <span class="field-label">MÔ TẢ SẢN PHẨM (HTML DESCRIPTION)</span>
+                  <button class="btn btn-ghost btn-xs copy-btn" data-target="listingDescRaw">Sao chép HTML</button>
+                </div>
+                <div class="description-preview" id="listingDescPreview"></div>
+                <textarea class="hidden-copy-target" id="listingDescRaw"></textarea>
+              </div>
+            </div>
+
+            <!-- Right: 13 Tags & Printify Status -->
+            <div class="listing-right">
+              <div class="studio-card">
+                <div class="card-header-flex">
+                  <span class="field-label">13 THẺ TÌM KIẾM (TAGS)</span>
+                  <button class="btn btn-ghost btn-xs" id="btnCopyAllTags">Sao chép tất cả</button>
+                </div>
+                <p class="subtext">Bấm vào từng thẻ để sao chép riêng:</p>
+                <div class="tags-cloud" id="tagsCloud"></div>
+              </div>
+
+              <!-- Printify Hub -->
+              <div class="studio-card printify-hub-card">
+                <div class="printify-badge-row">
+                  <span class="field-label">KẾT NỐI PRINTIFY</span>
+                  <span class="badge" id="printifyProductBadge">Chưa kết nối</span>
+                </div>
+                
+                <div class="printify-details-list">
+                  <div class="p-detail"><strong>Blueprint:</strong> Wall Calendar (Blank)</div>
+                  <div class="p-detail"><strong>Nhà in:</strong> District Photo</div>
+                  <div class="p-detail"><strong>Kích thước:</strong> 11 × 8.5" (Horizontal)</div>
+                  <div class="p-detail"><strong>Số trang upload:</strong> <span id="printifyUploadsCount">0 / 26</span></div>
+                  <div class="p-detail" id="printifyProductIdRow" style="display:none;"><strong>Product ID:</strong> <code id="printifyProductId"></code></div>
+                </div>
+
+                <div class="printify-action-row">
+                  <button class="btn btn-primary btn-block" id="btnTriggerPrintify">
+                    Upload 26 Trang & Tạo Sản Phẩm Nháp
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+      </div>
+    </main>
+  </div>
+
+  <!-- Floating Toast Notification -->
+  <div class="toast-notification" id="toastNotification" style="display: none;"></div>
+
+  <!-- Modal: New Project -->
+  <div class="modal-backdrop" id="modalNewProject" style="display: none;">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3>Khởi Tạo Bộ Lịch Mới</h3>
+        <button class="modal-close" id="btnCloseModal">✕</button>
+      </div>
+      <div class="modal-body">
+        <p class="subtext">Chỉ cần đưa từ khóa, AI sẽ tự động sinh các góc tiếp cận và kịch bản 12 tháng độc đáo.</p>
+        
+        <div class="form-group">
+          <label>TỪ KHÓA CHỦ ĐỀ (KEYWORD) *</label>
+          <input type="text" id="inputKeyword" class="form-control" placeholder="Ví dụ: christian, backyard chickens, coastal beach...">
+        </div>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label>NĂM LỊCH</label>
+            <input type="number" id="inputYear" class="form-control" value="2027">
+          </div>
+          <div class="form-group">
+            <label>HỌ PHONG CÁCH (TÙY CHỌN)</label>
+            <select id="selectFamily" class="form-control">
+              <option value="">-- Tự động đa dạng theo catalog --</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label>CHẾ ĐỘ CHẠY</label>
+          <div class="radio-cards">
+            <label class="radio-card active">
+              <input type="radio" name="runMode" value="ideate" checked>
+              <div>
+                <strong>Lên ý tưởng trước (Ideate Only)</strong>
+                <p>Sinh các góc tiếp cận và concept để xem trước duyệt kịch bản</p>
+              </div>
+            </label>
+            <label class="radio-card">
+              <input type="radio" name="runMode" value="full">
+              <div>
+                <strong>Dây chuyền trọn gói (Full Pipeline)</strong>
+                <p>Từ ý tưởng ➔ vẽ tranh ➔ upscale ➔ render ra sản phẩm Printify</p>
+              </div>
+            </label>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" id="btnCancelModal">Hủy</button>
+        <button class="btn btn-primary" id="btnSubmitNewProject">Bắt Đầu Dây Chuyền ➔</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: ChatGPT Accounts Management -->
+  <div class="modal-backdrop" id="modalAccounts" style="display: none;">
+    <div class="modal-card modal-card-lg">
+      <div class="modal-header">
+        <div class="modal-title-wrap">
+          <h3>Quản Lý Tài Khoản ChatGPT</h3>
+          <span class="subtext" id="accProfilesDir">Thư mục profiles: ...</span>
+        </div>
+        <button class="modal-close" id="btnCloseAccountsModal">✕</button>
+      </div>
+      <div class="modal-body">
+        <!-- Tip Alert Box -->
+        <div class="account-tip-box">
+          <div class="tip-icon">💡</div>
+          <div class="tip-text">
+            <strong>Cách đăng nhập nhiều tài khoản:</strong>
+            Mỗi tài khoản lưu trong một Chrome profile độc lập. Bấm nút <strong>"Đăng Nhập"</strong> để mở cửa sổ Chrome thật ➔ đăng nhập tài khoản của bạn trên ChatGPT ➔ đăng nhập xong thì <strong>đóng cửa sổ trình duyệt</strong> lại. CalForge sẽ tự động lưu phiên và xoay vòng qua các tài khoản khi sinh ý tưởng & vẽ tranh!
+          </div>
+        </div>
+
+        <!-- Add Account Row -->
+        <div class="add-account-row">
+          <input type="text" id="inputNewAccName" class="form-control" placeholder="Tên tài khoản mới (ví dụ: acc6, acc_vip)...">
+          <button class="btn btn-primary" id="btnCreateAccount">+ Thêm Tài Khoản</button>
+        </div>
+
+        <!-- Accounts List Table -->
+        <div class="accounts-table-wrap">
+          <table class="accounts-table">
+            <thead>
+              <tr>
+                <th>Tài Khoản</th>
+                <th>Trạng Thái Session</th>
+                <th>Lượt Dùng</th>
+                <th>Cập Nhật</th>
+                <th style="text-align: right;">Hành Động</th>
+              </tr>
+            </thead>
+            <tbody id="accountsTableBody">
+              <!-- Injected by JS -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" id="btnCloseAccountsFooter">Đóng</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Image Lightbox Modal -->
+  <div class="lightbox-modal" id="lightboxModal" style="display: none;">
+    <div class="lightbox-content">
+      <button class="lightbox-close" id="btnCloseLightbox">✕</button>
+      <img id="lightboxImg" src="" alt="Fullscreen artwork">
+      <div class="lightbox-caption" id="lightboxCaption"></div>
+    </div>
+  </div>
+
+  <!-- Toast Notification Container (Clean unobtrusive UI) -->
+  <div class="toast-container" id="toastContainer"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

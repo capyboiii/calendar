@@ -71,6 +71,7 @@ class _WebChat:
         return self.page.evaluate(TURNS_JS)
 
     def ask(self, prompt: str, label: str) -> str:
+        print(f"   [chat] gửi yêu cầu ({label})...", flush=True)
         before = self._state()
         box = self._find(SEL_PROMPT)
         box.click()
@@ -96,8 +97,10 @@ class _WebChat:
             self.page.wait_for_timeout(400)
 
         # Chờ trả lời xong: có lượt trả lời mới, hết nút Stop, và chữ đứng yên settle_s giây
-        deadline = time.monotonic() + self.timeout_s
+        started = time.monotonic()
+        deadline = started + self.timeout_s
         last_text, stable_since = None, time.monotonic()
+        next_beat = started + 15
         while True:
             st = self._state()
             if st["assistant"] > before["assistant"] and not st["busy"]:
@@ -105,9 +108,15 @@ class _WebChat:
                     last_text, stable_since = st["text"], time.monotonic()
                 elif time.monotonic() - stable_since >= self.settle_s and last_text.strip():
                     break
-            if time.monotonic() > deadline:
+            now = time.monotonic()
+            if now >= next_beat:  # nhịp báo mỗi 15s để biết còn đang chờ, không phải treo
+                state = "ChatGPT đang soạn" if st.get("busy") else "chờ ChatGPT phản hồi"
+                print(f"   [chat] {state}... ({now - started:.0f}s)", flush=True)
+                next_beat = now + 15
+            if now > deadline:
                 raise TimeoutError(f"[{label}] ChatGPT chưa trả lời xong sau {self.timeout_s:.0f}s")
             self.page.wait_for_timeout(700)
+        print(f"   [chat] nhận trả lời sau {time.monotonic() - started:.0f}s", flush=True)
 
         if not st["codes"]:
             from ..imagegen.driver import classify

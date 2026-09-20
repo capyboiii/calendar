@@ -54,25 +54,35 @@ def _status(concept_dir: Path, **kw) -> dict:
 def produce(concept_dir: Path, cfg: dict, *, printify: bool = True, publish: bool = False, on_event=print) -> dict:
     """Từ concept.json đến sản phẩm. Trả về status."""
     ig = cfg["imagegen"]
-    on_event(f"== {concept_dir.name}")
+    on_event(f"===== Sản xuất: {concept_dir.name} =====")
     plan.write_plan(concept_dir)
     profiles_dir = Path(ig.get("profiles_dir") or Path(cfg["chatgpt_automation_dir"]) / ".chrome-profiles")
+    on_event("▶ Bước 2/6: Sinh ảnh (ảnh neo trước, rồi 12 tháng + họa tiết song song)")
     res = generate_concept(concept_dir, profiles_dir, ig.get("profiles"), headless=ig.get("headless", False),
                            timeout_s=ig.get("timeout_s", 420), max_attempts=ig.get("max_attempts", 3),
                            on_event=on_event)
-    if res["missing"]:
+    # Chỉ ảnh neo + 12 tháng là BẮT BUỘC. Họa tiết chỉ là lớp trang trí; render tự chạy được khi
+    # thiếu nó, nên đừng để mỗi cái họa tiết chặn cả dây chuyền.
+    required_missing = [m for m in res["missing"] if m != "ornament"]
+    if required_missing:
         return _status(concept_dir, stage="images", ok=False,
-                       reason=f"còn thiếu ảnh: {', '.join(res['missing'])} - chạy lại khi tài khoản có lượt",
+                       reason=f"còn thiếu ảnh: {', '.join(required_missing)} - chạy lại khi tài khoản có lượt",
                        failed=res["failed"])
+    if "ornament" in res["missing"]:
+        on_event("  ⚠ Chưa gen được họa tiết - vẫn làm tiếp, trang lưới sẽ không có lớp họa tiết. "
+                 "Gen lại họa tiết sau bằng: gen <concept>")
     _status(concept_dir, stage="images", ok=True, drift_flags=res["drift_flags"])
 
-    on_event(f"Upscale bằng {upscale_engine()}")
+    on_event(f"▶ Bước 3/6: Upscale bằng {upscale_engine()}")
     upscale_concept(concept_dir, on_event)
+    on_event("▶ Bước 4/6: Render 26 trang Printify + PDF printable")
     r = render_concept(concept_dir)
     if r["issues"] or not r["complete"]:
         return _status(concept_dir, stage="render", ok=False, reason="preflight chưa sạch", issues=r["issues"])
+    on_event(f"  ✔ Render xong {len(r['pages'])} trang, preflight sạch")
     _status(concept_dir, stage="render", ok=True, pages=len(r["pages"]), digital=r["digital"])
 
+    on_event("▶ Bước 5/6: Tạo listing (title, tags, mô tả)")
     write_listing(concept_dir)
     if not printify:
         return _status(concept_dir, stage="listing", ok=True, note="bỏ qua Printify theo yêu cầu")
@@ -81,6 +91,7 @@ def produce(concept_dir: Path, cfg: dict, *, printify: bool = True, publish: boo
     if not token_from(cfg):
         return _status(concept_dir, stage="listing", ok=True,
                        note="chưa có Printify token - sản phẩm sẵn sàng upload (render/printify/)")
+    on_event("▶ Bước 6/6: Upload + tạo sản phẩm nháp trên Printify")
     try:
         state = create_product(concept_dir, cfg, publish=publish, on_event=on_event)
     except PrintifyError as e:
@@ -92,6 +103,7 @@ def produce(concept_dir: Path, cfg: dict, *, printify: bool = True, publish: boo
 def run(keyword: str, cfg: dict, *, pick: list[str] | None = None, auto_pick: int | None = None,
         printify: bool = True, publish: bool = False, on_event=print) -> list[dict]:
     backend = config.make_backend(cfg)
+    on_event("▶ Bước 1/6: Lên ý tưởng (P1 góc tiếp cận → P2 concept). Chờ ChatGPT vài phút...")
     res = run_ideation(keyword, backend, Path(cfg["projects_dir"]), year=cfg["year"], market=cfg["market"],
                        n_angles=cfg["angles_per_keyword"], pick=pick, auto_pick=auto_pick or cfg["auto_pick"],
                        max_repairs=cfg["max_repairs"])

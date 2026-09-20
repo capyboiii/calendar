@@ -57,6 +57,9 @@ def _ask_validated(chat: LazyChat, label: str, prompt: str, validator, max_repai
         errors, warnings = validator(data)
         if not errors:
             return data, [], warnings
+        if attempt < max_repairs:
+            print(f"  ⟳ Có {len(errors)} lỗi, bảo ChatGPT sửa (lần {attempt + 1}): "
+                  f"{errors[0][:80]}...", flush=True)
     return data, errors, warnings
 
 
@@ -78,11 +81,14 @@ def run_ideation(keyword: str, backend: Backend, projects_root: Path, *, year: i
         # thì sổ hỏi/đáp vẫn giữ câu trả lời đó -> dùng lại, không hỏi lại.
         run_no = last_run + 1 if need_p1 else last_run
         if need_p1:
+            print(f"▶ P1: ChatGPT nghĩ {n_angles} góc tiếp cận cho '{keyword}'...", flush=True)
             existing = [f'{a["title"]} ({a["frame_type"]})' for a in all_angles]
             prompt = templates.p1_angles(keyword, year, market, n_angles, existing, projects_root)
             data, errors, _ = _ask_validated(chat, f"p1_angles_run{run_no}", prompt, validate_angles, max_repairs)
             if errors:
                 raise RuntimeError("P1 vẫn lỗi sau khi sửa:\n- " + "\n- ".join(errors))
+            print(f"  ✔ P1: có {len(data['angles'])} góc: "
+                  + ", ".join(f"{a['title']} [{a.get('style_family')}]" for a in data["angles"]), flush=True)
             for a in data["angles"]:  # đánh id duy nhất xuyên các lượt
                 a["id"] = f"r{run_no}{a['id']}"
                 a["run"] = run_no
@@ -112,6 +118,8 @@ def run_ideation(keyword: str, backend: Backend, projects_root: Path, *, year: i
             if (cdir / "concept.json").exists():
                 result.concepts.append(cdir)
                 continue
+            print(f"▶ P2: viết concept 12 tháng cho \"{angle['title']}\" "
+                  f"[{angle.get('style_family')}]...", flush=True)
             angle_style = style or (angle.get("suggested_styles") or ["soft watercolor"])[0]
             angle_view = {k: v for k, v in angle.items() if k != "run"}
             prompt = templates.p2_concept(angle_view, angle_style, year, market)
