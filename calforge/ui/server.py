@@ -1,6 +1,7 @@
 """Máy chủ Web CalForge Studio (dùng Python standard library)."""
 from __future__ import annotations
 
+import hashlib
 import json
 import mimetypes
 import os
@@ -14,15 +15,18 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
-from .. import config
+from .. import config, layout
+from ..render.pages import PRESET_NAMES, resolve_grid_preset
 
 ROOT = Path(__file__).resolve().parents[2]
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 
 class Task:
-    def __init__(self, task_id: str, cmd: list[str], description: str):
+    def __init__(self, task_id: str, cmd: list[str], description: str, action: str = "", params: dict | None = None):
         self.id = task_id
+        self.action = action
+        self.params = params or {}
         self.cmd = cmd
         self.description = description
         self.status = "running"  # running, success, failed
@@ -44,6 +48,8 @@ class Task:
             return {
                 "id": self.id,
                 "description": self.description,
+                "action": self.action,
+                "params": self.params,
                 "status": self.status,
                 "start_time": self.start_time,
                 "end_time": self.end_time,
@@ -58,11 +64,11 @@ class TaskManager:
         self.tasks: dict[str, Task] = {}
         self.lock = threading.Lock()
 
-    def start_task(self, args: list[str], description: str) -> str:
+    def start_task(self, args: list[str], description: str, action: str = "", params: dict | None = None) -> str:
         task_id = f"t_{int(time.time() * 1000)}"
         # -u: không đệm stdout, để log chảy trực tiếp lên UI (không dồn về cuối)
         cmd = [sys.executable, "-u", "-m", "calforge"] + args
-        task = Task(task_id, cmd, description)
+        task = Task(task_id, cmd, description, action, params)
         with self.lock:
             self.tasks[task_id] = task
 
@@ -89,7 +95,8 @@ class TaskManager:
                     task.append_log(line.rstrip())
                 p.wait()
                 task.return_code = p.returncode
-                task.status = "success" if p.returncode == 0 else "failed"
+                if task.status != "stopped":
+                    task.status = "success" if p.returncode == 0 else "failed"
                 task.end_time = time.time()
                 task.append_log(f"\n🏁 Hoàn thành (mã thoát: {p.returncode}) trong {task.end_time - task.start_time:.1f}s")
             except Exception as e:
@@ -105,6 +112,24 @@ class TaskManager:
         with self.lock:
             task = self.tasks.get(task_id)
             return task.to_dict(since) if task else None
+
+    def running(self) -> Task | None:
+        with self.lock:
+            return next((t for t in self.tasks.values() if t.status == "running"), None)
+
+    def stop_task(self, task_id: str) -> bool:
+        """Dừng tác vụ + mọi tiến trình con (Chrome của Playwright) để lần chạy sau không vướng profile."""
+        with self.lock:
+            task = self.tasks.get(task_id)
+        if not task or task.status != "running" or not task.process:
+            return False
+        task.status = "stopped"
+        task.append_log("\n⏹ Người dùng bấm Dừng")
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/PID", str(task.process.pid), "/T", "/F"], capture_output=True, check=False)
+        else:
+            task.process.kill()
+        return True
 
     def list_tasks(self) -> list[dict]:
         with self.lock:
@@ -154,6 +179,8 @@ class StudioHandler(SimpleHTTPRequestHandler):
             return self._api_get_file(rel_path)
         if path == "/api/styles":
             return self._api_get_styles()
+        if path == "/api/thumb":
+            return self._api_thumb(query.get("path", [""])[0], int(query.get("w", [480])[0]))
         if path == "/api/task":
             task_id = query.get("id", [""])[0]
             since = int(query.get("since", [0])[0])
@@ -192,9 +219,16 @@ class StudioHandler(SimpleHTTPRequestHandler):
                 cmd_args = ["run", keyword]
                 if params.get("pick"):
                     cmd_args += ["--pick", params["pick"]]
+                batch = int(params.get("batch_size") or 1)
+                if batch > 1:
+                    cmd_args += ["--auto", str(min(batch, 20))]
+                if params.get("grid_preset"):
+                    cmd_args += ["--grid-preset", params["grid_preset"]]
+                if params.get("family"):
+                    cmd_args += ["--family", params["family"]]
                 if params.get("publish"):
                     cmd_args += ["--publish"]
-                desc = f"Chạy trọn gói cho keyword: {keyword}"
+                desc = f"Chạy trọn gói {batch} cuốn cho keyword: {keyword}" if batch > 1 else f"Chạy trọn gói cho keyword: {keyword}"
 
             elif action == "ideate":
                 keyword = params.get("keyword", "").strip()
@@ -207,6 +241,8 @@ class StudioHandler(SimpleHTTPRequestHandler):
                     cmd_args += ["--family", params["family"]]
                 if params.get("more"):
                     cmd_args += ["--more"]
+                if params.get("grid_preset"):
+                    cmd_args += ["--grid-preset", params["grid_preset"]]
                 desc = f"Lên ý tưởng cho keyword: {keyword}"
 
             elif action == "render":
@@ -261,8 +297,26 @@ class StudioHandler(SimpleHTTPRequestHandler):
             else:
                 return self._send_json({"error": f"Unknown action: {action}"}, status=HTTPStatus.BAD_REQUEST)
 
-            task_id = TASK_MANAGER.start_task(cmd_args, desc)
+            busy = TASK_MANAGER.running()
+            if busy and action != "login":
+                return self._send_json({"error": f"Đang chạy việc khác: {busy.description}. Chờ xong hoặc bấm Dừng."},
+                                       status=HTTPStatus.CONFLICT)
+            task_id = TASK_MANAGER.start_task(cmd_args, desc, action, params)
             return self._send_json({"task_id": task_id, "description": desc, "status": "started"})
+
+        if path in ("/api/open", "/api/task/stop"):
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(length).decode("utf-8")) if length > 0 else {}
+            except Exception as e:
+                return self._send_json({"error": f"Invalid JSON: {e}"}, status=HTTPStatus.BAD_REQUEST)
+            if path == "/api/task/stop":
+                return self._send_json({"ok": TASK_MANAGER.stop_task(str(body.get("id", "")))})
+            target = (ROOT / str(body.get("path", "")).lstrip("/\\")).resolve()
+            if not str(target).startswith(str(ROOT.resolve())) or not target.exists():
+                return self._send_json({"error": "Không tìm thấy thư mục"}, status=HTTPStatus.NOT_FOUND)
+            _open_in_explorer(target)
+            return self._send_json({"ok": True})
 
         if path == "/api/accounts/create":
             try:
@@ -298,10 +352,10 @@ class StudioHandler(SimpleHTTPRequestHandler):
 
         results = []
         for kw_dir in sorted(projects_dir.iterdir()):
-            if not kw_dir.is_dir() or kw_dir.name.startswith("."):
+            if not kw_dir.is_dir() or kw_dir.name.startswith((".", "_")):
                 continue
 
-            angles_file = kw_dir / "angles.json"
+            angles_file = layout.angles_file(kw_dir)
             angles = []
             if angles_file.exists():
                 try:
@@ -311,26 +365,33 @@ class StudioHandler(SimpleHTTPRequestHandler):
 
             concepts = []
             for c_dir in sorted(kw_dir.iterdir()):
-                if not c_dir.is_dir() or not (c_dir / "concept.json").exists():
+                if not c_dir.is_dir() or not layout.is_book(c_dir):
                     continue
 
                 concept_data = {}
                 try:
-                    concept_data = json.loads((c_dir / "concept.json").read_text(encoding="utf-8"))
+                    concept_data = json.loads(layout.concept_file(c_dir).read_text(encoding="utf-8"))
                 except Exception:
                     pass
 
                 status_data = {}
-                if (c_dir / "status.json").exists():
+                if layout.status_file(c_dir).exists():
                     try:
-                        status_data = json.loads((c_dir / "status.json").read_text(encoding="utf-8"))
+                        status_data = json.loads(layout.status_file(c_dir).read_text(encoding="utf-8"))
                     except Exception:
                         pass
 
-                raw_count = len([f for f in (c_dir / "art" / "raw").glob("*.*") if f.is_file()]) if (c_dir / "art" / "raw").exists() else 0
-                final_count = len([f for f in (c_dir / "art" / "final").glob("*.*") if f.is_file()]) if (c_dir / "art" / "final").exists() else 0
-                render_count = len([f for f in (c_dir / "render" / "printify").glob("*.png") if f.is_file()]) if (c_dir / "render" / "printify").exists() else 0
-                has_digital = (c_dir / "render" / "digital" / "calendar_11x8_5.pdf").exists()
+                # Grid mặc định có một nền AI dùng chung cho cả 12 tháng.
+                required_art = {"anchor", "cover", *[f"m{i:02d}" for i in range(1, 13)]}
+                if resolve_grid_preset(concept_data) == "art_matched":
+                    required_art.add("grid")
+                def _required_count(directory: Path) -> int:
+                    return len({f.stem for f in directory.glob("*.*") if f.is_file() and f.stem in required_art}) \
+                        if directory.exists() else 0
+                raw_count = _required_count(layout.raw(c_dir))
+                final_count = _required_count(layout.final(c_dir))
+                render_count = len([f for f in layout.print_dir(c_dir).glob("*.png") if f.is_file()])
+                has_digital = layout.printable_file(c_dir).exists()
 
                 concepts.append({
                     "id": c_dir.name,
@@ -339,11 +400,18 @@ class StudioHandler(SimpleHTTPRequestHandler):
                     "subtitle": (concept_data.get("cover") or {}).get("subtitle", ""),
                     "year": concept_data.get("year", cfg.get("year", 2027)),
                     "family": (concept_data.get("style") or {}).get("family", ""),
+                    "grid_preset": resolve_grid_preset(concept_data),
+                    "grid_preset_name": PRESET_NAMES.get(resolve_grid_preset(concept_data), ""),
+                    "grid_selection": (json.loads(layout.tech(c_dir, "grid_selection.json").read_text(encoding="utf-8"))
+                                       if layout.tech(c_dir, "grid_selection.json").exists()
+                                       else concept_data.get("grid_selection", {})),
                     "status": status_data,
                     "raw_count": raw_count,
                     "final_count": final_count,
+                    "art_total": len(required_art),
                     "render_count": render_count,
                     "has_digital": has_digital,
+                    **_book_outputs(c_dir),
                 })
 
             results.append({
@@ -351,6 +419,7 @@ class StudioHandler(SimpleHTTPRequestHandler):
                 "path": str(kw_dir.relative_to(ROOT)).replace("\\", "/"),
                 "total_angles": len(angles),
                 "concepts": concepts,
+                "batch": _read_batch(kw_dir),
             })
 
         return self._send_json({"projects": results, "year": cfg.get("year", 2027), "market": cfg.get("market", "US")})
@@ -363,7 +432,7 @@ class StudioHandler(SimpleHTTPRequestHandler):
         if not str(target).startswith(str(ROOT.resolve())) or not target.is_dir():
             return self._send_json({"error": "Invalid concept path"}, status=HTTPStatus.BAD_REQUEST)
 
-        concept_file = target / "concept.json"
+        concept_file = layout.concept_file(target)
         if not concept_file.exists():
             return self._send_json({"error": "concept.json not found"}, status=HTTPStatus.NOT_FOUND)
 
@@ -384,33 +453,43 @@ class StudioHandler(SimpleHTTPRequestHandler):
             return sorted(f.name for f in f_dir.iterdir() if f.is_file())
 
         concept_data = _read_json(concept_file) or {}
-        status_data = _read_json(target / "status.json") or {}
-        palette_data = _read_json(target / "palette.json") or {}
-        listing_data = _read_json(target / "listing.json") or {}
-        jobs_data = _read_json(target / "jobs.json") or []
-        printify_data = _read_json(target / "printify.json") or {}
+        status_data = _read_json(layout.status_file(target)) or {}
+        palette_data = _read_json(layout.tech(target, "palette.json")) or {}
+        listing_data = _read_json(layout.listing_file(target)) or {}
+        jobs_data = _read_json(layout.tech(target, "jobs.json")) or []
+        printify_data = _read_json(layout.tech(target, "printify.json")) or {}
+        grid_selection = _read_json(layout.tech(target, "grid_selection.json")) or concept_data.get("grid_selection", {})
 
-        render_report = _read_text(target / "render" / "report.md")
-        concept_report = _read_text(target / "concept_report.md")
+        render_report = _read_text(layout.render_file(target, "report.md"))
+        concept_report = _read_text(layout.tech(target, "concept_report.md"))
 
         files = {
-            "art_raw": _list_files(target / "art" / "raw"),
-            "art_final": _list_files(target / "art" / "final"),
-            "render_printify": _list_files(target / "render" / "printify"),
-            "render_proof": _list_files(target / "render" / "proof"),
-            "render_digital": _list_files(target / "render" / "digital"),
+            "art_raw": _list_files(layout.raw(target)),
+            "art_final": _list_files(layout.final(target)),
+            "render_printify": _list_files(layout.print_dir(target)),
+            "render_printify_14x11_5": _list_files(layout.print_dir(target, "printify_wall_14x11_5")),
+            "listing_images": _list_files(layout.listing(target)),
+            "render_proof": _list_files(layout.tech(target, "proof_11x8.5")),
+            "render_digital": [f for f in _list_files(layout.print_dir(target)) if f.endswith(".pdf")],
+            "grid_options": _list_files(layout.tech(target, "grid_options")),
         }
 
         return self._send_json({
             "path": rel_path.replace("\\", "/"),
             "name": target.name,
+            "grid_preset": resolve_grid_preset(concept_data),
+            "grid_preset_name": PRESET_NAMES.get(resolve_grid_preset(concept_data), ""),
             "concept": concept_data,
             "status": status_data,
             "palette": palette_data,
             "listing": listing_data,
             "jobs": jobs_data,
             "printify": printify_data,
+            "grid_selection": grid_selection,
             "render_report": render_report,
+            "render_validation": _read_json(layout.render_file(target, "validation.json")) or {},
+            "folders": {"raw": layout.RAW, "final": layout.FINAL, "print": layout.PRINT["printify_wall_11x8_5"],
+                        "listing": layout.LISTING, "system": layout.SYSTEM, "tech": layout.TECH},
             "concept_report": concept_report,
             "files": files,
         })
@@ -439,6 +518,24 @@ class StudioHandler(SimpleHTTPRequestHandler):
                 mime = "application/octet-stream"
 
         return self._serve_file(target, mime)
+
+    def _api_thumb(self, rel_path: str, width: int):
+        """Ảnh thu nhỏ (JPEG) cho lưới kết quả; lưu tạm theo mtime để lần sau trả ngay."""
+        target = (ROOT / rel_path.lstrip("/\\")).resolve()
+        if not str(target).startswith(str(ROOT.resolve())) or not target.is_file():
+            return self._send_json({"error": "File not found or forbidden"}, status=HTTPStatus.NOT_FOUND)
+        width = max(120, min(width, 1600))
+        cache = ROOT / ".cache" / "thumbs"
+        key = f"{hashlib.sha1(str(target).encode()).hexdigest()[:16]}_{int(target.stat().st_mtime)}_{width}.jpg"
+        out = cache / key
+        if not out.exists():
+            from PIL import Image
+            cache.mkdir(parents=True, exist_ok=True)
+            with Image.open(target) as im:
+                im = im.convert("RGB")
+                im.thumbnail((width, width * 2))
+                im.save(out, quality=85)
+        return self._serve_file(out, "image/jpeg")
 
     def _api_get_styles(self):
         styles_file = ROOT / "data" / "style_families.json"
@@ -476,6 +573,46 @@ class StudioHandler(SimpleHTTPRequestHandler):
     def log_message(self, format, *args):
         # Tắt log mặc định của SimpleHTTPRequestHandler cho đỡ rác console
         pass
+
+
+def _rel(p: Path) -> str:
+    return str(p.relative_to(ROOT)).replace("\\", "/")
+
+
+def _book_outputs(c_dir: Path) -> dict:
+    """Những thứ người bán cần thấy: ảnh bìa, 5 ảnh preview, PDF in tại nhà, listing."""
+    previews = sorted(layout.listing(c_dir).glob("*.jpg")) if layout.listing(c_dir).exists() else []
+    cover = previews[0] if previews else layout.print_dir(c_dir) / "front_cover.png"
+    pdfs = []
+    for fid, label in layout.PRINT.items():
+        f = layout.printable_file(c_dir, fid)
+        if f.exists():
+            pdfs.append({"label": label, "path": _rel(f)})
+    listing = {}
+    try:
+        listing = json.loads(layout.listing_file(c_dir).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        pass
+    return {"cover": _rel(cover) if cover.exists() else "", "previews": [_rel(p) for p in previews],
+            "pdfs": pdfs, "listing": listing}
+
+
+def _open_in_explorer(target: Path) -> None:
+    if os.name == "nt":
+        os.startfile(str(target))  # noqa: S606 - chỉ mở thư mục trong dự án
+    elif sys.platform == "darwin":
+        subprocess.Popen(["open", str(target)])
+    else:
+        subprocess.Popen(["xdg-open", str(target)])
+
+
+def _read_batch(kw_dir: Path) -> dict:
+    """Batch gần nhất của keyword (projects/<kw>/_he_thong/batch.json) - bảng báo cáo trên UI."""
+    try:
+        b = json.loads(layout.batch_file(kw_dir).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return {k: b.get(k) for k in ("target", "started", "finished", "report")}
 
 
 def run_server(host: str = "127.0.0.1", port: int = 8080, open_browser: bool = True):

@@ -1,7 +1,7 @@
 """Bìa trước và bìa sau cho Printify Wall Calendar 11x8.5.
 
-- Bìa trước: ảnh neo (bìa) tràn kín trang; dải nền giấy mờ dần ở phía trên để tên lịch đọc rõ
-  trên tranh; năm, tên lịch, phụ đề canh giữa, dưới vùng lò xo.
+- Bìa trước mới: AI đã art-direct cả artwork lẫn typography, renderer đặt nguyên ảnh.
+- Project cũ chưa có cover AI: dùng ảnh neo và chữ code như trước để tương thích.
 - Bìa sau: 12 ảnh thu nhỏ (4x3) kèm tên tháng + subtitle; chừa lỗ treo và ô mã vạch của nhà in.
 """
 from __future__ import annotations
@@ -34,7 +34,8 @@ def _fit_size(text: str, font: str, size: float, tracking: float, max_w: float, 
     return size
 
 
-def front_cover(fmt: dict, concept: dict, art: Path | None, work: Path, label: str = "front cover") -> Page:
+def front_cover(fmt: dict, concept: dict, art: Path | None, work: Path, label: str = "front cover",
+                ai_typeset: bool = False) -> Page:
     W, H = fmt["size_px"]
     st, pal = concept["style"], concept["style"]["palette"]
     cov = concept["cover"]
@@ -42,6 +43,8 @@ def front_cover(fmt: dict, concept: dict, art: Path | None, work: Path, label: s
     page.rect(0, 0, W, H, fill=pal["paper"])
     if art:
         page.image(art, 0, 0, W, H, role="art")
+    if ai_typeset:
+        return page
     overlay = work / "front_fade.png"
     _fade_overlay(overlay, (W, H), pal["paper"], 1150)
     page.image(overlay, 0, 0, W, 1150, role="overlay")

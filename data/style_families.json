@@ -1,31 +1,11 @@
 {
-  "_note": "Họ style cho artwork lịch. P1 phải trải góc tiếp cận ra nhiều họ; code ưu tiên họ ít dùng nhất trong danh mục sản phẩm. Thêm/bớt họ ở đây, không cần sửa code.",
+  "_note": "Ba style artwork được phép cho dự án mới. P1 phải chọn đúng một style trong danh sách này; code ưu tiên style ít dùng hơn khi các phương án có chất lượng tương đương.",
   "families": [
-    {"id": "watercolor_gouache", "name": "Watercolor & gouache painting",
-     "description": "transparent washes, soft blooms, painted texture"},
-    {"id": "oil_painterly", "name": "Oil / acrylic painterly",
-     "description": "rich impasto brush strokes, deep saturated color, gallery-painting feel"},
-    {"id": "vintage_engraving", "name": "Antique engraving / etching",
-     "description": "fine cross-hatched ink line work, optionally hand-tinted, old book-plate feel"},
-    {"id": "linocut_print", "name": "Linocut / woodblock print",
-     "description": "bold carved shapes, 2-4 flat ink colors, visible print grain and registration"},
-    {"id": "flat_modern", "name": "Flat modern illustration",
-     "description": "clean vector shapes, simple geometry, limited palette, subtle grain"},
-    {"id": "mid_century_retro", "name": "Mid-century retro poster",
-     "description": "1950s-60s travel-poster look, stylized shapes, screen-print texture"},
-    {"id": "papercut_collage", "name": "Layered papercut / collage",
-     "description": "cut paper layers with soft drop shadows, tactile paper textures"},
-    {"id": "folk_art", "name": "Folk art pattern illustration",
-     "description": "decorative symmetrical motifs, flat bright colors, hand-painted pattern borders"},
-    {"id": "line_and_spot", "name": "Ink line art with spot color",
-     "description": "confident ink outlines, lots of white space, 1-2 accent colors"},
-    {"id": "stained_glass", "name": "Stained glass / mosaic",
-     "description": "jewel-toned glass panes separated by dark leading lines, luminous backlit color"},
-    {"id": "natural_history", "name": "Vintage natural-history plate",
-     "description": "scientific specimen illustration, precise detail, museum-plate composition"},
-    {"id": "colored_pencil_storybook", "name": "Colored pencil storybook",
-     "description": "visible pencil strokes, cozy whimsical characters, picture-book warmth"},
     {"id": "styled_photography", "name": "Styled photography",
-     "description": "photorealistic styled scenes with natural light, shallow depth of field, no people's faces"}
+     "description": "photorealistic editorial still lifes or environments with believable materials and natural light; no illustrated or painterly treatment"},
+    {"id": "papercut_collage", "name": "Layered papercut",
+     "description": "clearly cut paper layers, tactile edges and controlled cast shadows; contemporary dimensional collage"},
+    {"id": "mid_century_retro", "name": "Mid-century poster",
+     "description": "bold 1950s-60s poster geometry, simplified silhouettes and restrained screenprint texture"}
   ]
 }

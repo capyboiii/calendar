@@ -16,10 +16,12 @@ import os
 import re
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from PIL import Image
 
+from .. import layout
 from ..core import dates
 
 API = "https://api.printify.com/v1"
@@ -148,8 +150,12 @@ def _jpeg_b64(png: Path) -> str:
 def create_product(concept_dir: Path, cfg: dict, publish: bool = False, on_event=print) -> dict:
     pcfg = cfg.get("printify") or {}
     client = Client(token_from(cfg))
-    state_file = concept_dir / "printify.json"
+    state_file = layout.tech(concept_dir, "printify.json")   # xem calforge/layout.py
+    state_file.parent.mkdir(parents=True, exist_ok=True)
     state = json.loads(state_file.read_text(encoding="utf-8")) if state_file.exists() else {"uploads": {}}
+    if state.get("product_id") and (not publish or state.get("published")):
+        on_event("Printify đã hoàn tất, bỏ qua upload/tạo sản phẩm")
+        return state
 
     shop_id = pcfg.get("shop_id")
     if not shop_id:
@@ -161,21 +167,29 @@ def create_product(concept_dir: Path, cfg: dict, publish: bool = False, on_event
     catalog = discover(client, pcfg)
     mapping = map_positions(catalog["positions"])
 
-    pages_dir = concept_dir / "render" / "printify"
-    for pos, page in mapping.items():  # upload: sổ tiến độ trong printify.json, lỗi giữa chừng chạy lại tiếp
-        if page in state["uploads"]:
-            continue
-        png = pages_dir / f"{page}.png"
+    pages_dir = layout.print_dir(concept_dir)
+    pending = [(page, pages_dir / f"{page}.png") for page in mapping.values() if page not in state["uploads"]]
+    for page, png in pending:
         if not png.exists():
             raise PrintifyError(f"Thiếu trang {png.name} - chạy render trước")
+
+    def upload(item):
+        page, png = item
         res = client.post("/uploads/images.json", {"file_name": f"{concept_dir.name}_{page}.jpg",
                                                    "contents": _jpeg_b64(png)})
-        state["uploads"][page] = res["id"]
-        state_file.write_text(json.dumps(state, indent=2), encoding="utf-8")
-        on_event(f"upload {page} -> {res['id']}")
+        return page, res["id"]
+
+    workers = max(1, min(4, int(pcfg.get("upload_workers", 4))))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = [pool.submit(upload, item) for item in pending]
+        for future in as_completed(futures):
+            page, upload_id = future.result()
+            state["uploads"][page] = upload_id
+            state_file.write_text(json.dumps(state, indent=2), encoding="utf-8")
+            on_event(f"upload {page} -> {upload_id}")
 
     if not state.get("product_id"):
-        listing = json.loads((concept_dir / "listing.json").read_text(encoding="utf-8"))
+        listing = json.loads(layout.listing_file(concept_dir).read_text(encoding="utf-8"))
         body = {
             "title": listing["title"], "description": listing["description"], "tags": listing["tags"],
             "blueprint_id": catalog["blueprint_id"], "print_provider_id": catalog["print_provider_id"],

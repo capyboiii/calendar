@@ -23,8 +23,12 @@ TURNS_JS = """() => {
   const pick = (sel) => Array.from(document.querySelectorAll(sel));
   let a = pick('[data-message-author-role="assistant"]');
   if (!a.length) a = pick('article[data-turn="assistant"], [data-turn="assistant"]');
+  // Giao diện mới (acc2/acc5, 09/2026): không còn data-message-author-role, mỗi tin nhắn mang
+  // data-chatgpt-search-unit-key="...:user" hoặc "...:assistant".
+  if (!a.length) a = pick('[data-chatgpt-search-unit-key$=":assistant"]');
   let u = pick('[data-message-author-role="user"]');
   if (!u.length) u = pick('article[data-turn="user"], [data-turn="user"]');
+  if (!u.length) u = pick('[data-chatgpt-search-unit-key$=":user"]');
   const vis = (el) => el && el.getBoundingClientRect().width > 0;
   let busy = false;
   for (const s of ['button[data-testid="stop-button"]', 'button[data-testid*="stop" i]',
@@ -68,7 +72,19 @@ class _WebChat:
         raise RuntimeError(f"Không thấy phần tử nào khớp {selectors} (ChatGPT đổi giao diện?)")
 
     def _state(self) -> dict:
-        return self.page.evaluate(TURNS_JS)
+        from ..imagegen.driver import _eval
+
+        return _eval(self.page, TURNS_JS)
+
+    def _wait_sent(self, before: dict, seconds: float) -> bool:
+        deadline = time.monotonic() + seconds
+        while True:
+            st = self._state()
+            if st["user"] > before["user"] or st["assistant"] > before["assistant"] or st.get("busy"):
+                return True
+            if time.monotonic() > deadline:
+                return False
+            self.page.wait_for_timeout(400)
 
     def ask(self, prompt: str, label: str) -> str:
         print(f"   [chat] gửi yêu cầu ({label})...", flush=True)
@@ -90,11 +106,14 @@ class _WebChat:
         if not sent:
             box.press("Enter")
 
-        deadline = time.monotonic() + 15
-        while self._state()["user"] <= before["user"]:
-            if time.monotonic() > deadline:
-                raise RuntimeError(f"[{label}] Không gửi được tin nhắn")
-            self.page.wait_for_timeout(400)
+        if not self._wait_sent(before, 15):
+            print(f"   [chat] tin nhắn chưa đi sau 15s, bấm gửi lại...", flush=True)
+            try:
+                box.press("Enter")
+            except Exception:  # noqa: BLE001 - khung nhập bị popup che: để bước dưới báo lỗi
+                pass
+            if not self._wait_sent(before, 15):
+                raise SendFailed(f"[{label}] Không gửi được tin nhắn")
 
         # Chờ trả lời xong: có lượt trả lời mới, hết nút Stop, và chữ đứng yên settle_s giây
         started = time.monotonic()
@@ -130,6 +149,10 @@ class _WebChat:
 
 class QuotaExceeded(RuntimeError):
     """Tài khoản hết lượt chat -> chuyển sang tài khoản kế tiếp."""
+
+
+class SendFailed(RuntimeError):
+    """Tin nhắn không gửi đi được (popup che, nút gửi không bật...) -> thử tài khoản kế tiếp."""
 
 
 class _RotatingChat:
@@ -174,6 +197,9 @@ class _RotatingChat:
                 return self.chat.ask(prompt, label)
             except QuotaExceeded as e:
                 print(f"[chat] {self.profile} hết lượt ({str(e)[:80]}) - chuyển tài khoản")
+                self.close()
+            except SendFailed as e:
+                print(f"[chat] {self.profile} không gửi được tin nhắn ({str(e)[:80]}) - chuyển tài khoản")
                 self.close()
 
     def close(self) -> None:

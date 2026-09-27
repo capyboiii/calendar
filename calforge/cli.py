@@ -6,7 +6,7 @@
   angles  "keyword"                      liệt kê các góc đã sinh cho keyword
   check   <thư mục concept>              kiểm tra lại concept.json
   plan    <thư mục concept>              jobs.json + CSV cho chatgpt-automation
-  import  <thư mục concept>              nhận ảnh chatgpt-automation đã gen về art/raw/
+  import  <thư mục concept>              nhận ảnh chatgpt-automation đã gen về _he_thong/anh_ai/
   render  <thư mục concept> [--months 1,3] [--placeholder-art ảnh.png]
                                          dựng bìa + trang ảnh + trang lưới + PDF printable
   gen     <thư mục concept>              gen ảnh qua ChatGPT web (song song nhiều tài khoản)
@@ -39,18 +39,19 @@ if sys.stderr and hasattr(sys.stderr, "reconfigure"):
 
 from . import config
 from .core import dates
-from .ideation.pipeline import run_ideation, slugify
+from .ideation.pipeline import run_ideation_batched, slugify
 from .ideation.validate import validate_concept
+from . import layout
 from .imagegen import plan
 from .llm.base import AwaitingResponse
 
 
 def _concept_dir(arg: str) -> Path:
     p = Path(arg)
-    if p.name == "concept.json":
-        p = p.parent
-    if not (p / "concept.json").exists():
-        sys.exit(f"Không thấy concept.json trong {p}")
+    if p.name == "concept.json":                 # cho phép trỏ thẳng tới <cuốn>/_he_thong/concept.json
+        p = p.parent.parent if p.parent.name == layout.SYSTEM else p.parent
+    if not layout.is_book(p):
+        sys.exit(f"Không thấy cuốn lịch ({layout.SYSTEM}/concept.json) trong {p}")
     return p
 
 
@@ -63,13 +64,13 @@ def cmd_ideate(args, cfg):
         cfg["llm"]["backend"] = "manual"
     backend = config.make_backend(cfg)
     try:
-        res = run_ideation(
+        res = run_ideation_batched(
             args.keyword, backend, Path(cfg["projects_dir"]),
             year=args.year or cfg["year"], market=args.market or cfg["market"],
             n_angles=cfg["angles_per_keyword"], more=args.more,
             pick=args.pick.split(",") if args.pick else None,
             auto_pick=args.auto or cfg["auto_pick"], style=args.style, max_repairs=cfg["max_repairs"],
-            family=args.family)
+            family=args.family, grid_preset=args.grid_preset)
     except AwaitingResponse as w:
         print("Đang chờ câu trả lời của ChatGPT (chế độ thủ công):")
         print(f"  1. Mở và copy prompt:  {w.prompt_path}")
@@ -86,7 +87,8 @@ def cmd_ideate(args, cfg):
 
 
 def cmd_angles(args, cfg):
-    f = Path(cfg["projects_dir"]) / slugify(args.keyword) / "angles.json"
+    from . import layout
+    f = layout.angles_file(Path(cfg["projects_dir"]) / slugify(args.keyword))
     if not f.exists():
         sys.exit("Chưa có góc nào cho keyword này - chạy ideate trước.")
     for a in json.loads(f.read_text(encoding="utf-8")):
@@ -116,7 +118,7 @@ def cmd_import_angles(args, cfg):
 
 def cmd_check(args, cfg):
     d = _concept_dir(args.concept)
-    c = json.loads((d / "concept.json").read_text(encoding="utf-8"))
+    c = json.loads(layout.concept_file(d).read_text(encoding="utf-8"))
     errors, warnings = validate_concept(c, c.get("year", cfg["year"]), c.get("market", cfg["market"]))
     for e in errors:
         print("LỖI    ", e)
@@ -131,7 +133,7 @@ def cmd_plan(args, cfg):
     csv_path = plan.export_csv(d)
     pending = [j["id"] for j in jobs if j["status"] == "pending"]
     print(f"{len(jobs)} job, còn {len(pending)}: {', '.join(pending) or '-'}")
-    print(f"jobs.json: {d / 'jobs.json'}")
+    print(f"jobs.json: {layout.tech(d, 'jobs.json')}")
     print(f"CSV cho chatgpt-automation (trang /csv): {csv_path}")
 
 
@@ -147,8 +149,7 @@ def cmd_render(args, cfg):
 
     d = _concept_dir(args.concept)
     months = [int(x) for x in args.months.split(",")] if args.months else None
-    res = render_concept(d, months, Path(args.placeholder_art) if args.placeholder_art else None,
-                         Path(args.placeholder_ornament) if args.placeholder_ornament else None)
+    res = render_concept(d, months, Path(args.placeholder_art) if args.placeholder_art else None)
     print(f"{len(res['pages'])} trang -> {res['out']}")
     for n in res["art"]:
         print("  ảnh:", n)
@@ -175,7 +176,8 @@ def cmd_run(args, cfg):
         cfg["imagegen"]["profiles"] = args.profiles.split(",")
 
     rows = run(args.keyword, cfg, pick=args.pick.split(",") if args.pick else None, auto_pick=args.auto,
-               printify=not args.no_printify, publish=args.publish)
+               printify=not args.no_printify, publish=args.publish, grid_preset=args.grid_preset,
+               family=args.family)
     _print_status(rows)
 
 
@@ -200,7 +202,7 @@ def cmd_gen(args, cfg):
                            headless=ig.get("headless", False), timeout_s=ig.get("timeout_s", 420),
                            max_attempts=ig.get("max_attempts", 3))
     print("Thiếu:", ", ".join(res["missing"]) or "không")
-    print("Lệch màu cần xem:", ", ".join(res["drift_flags"]) or "không", f"(chi tiết: {d / 'art' / 'qc.md'})")
+    print("Lệch màu cần xem:", ", ".join(res["drift_flags"]) or "không", f"(chi tiết: {layout.tech(d, 'qc.md')})")
 
 
 def cmd_upscale(args, cfg):
@@ -285,7 +287,10 @@ def main(argv=None):
     p.add_argument("--auto", type=int, help="tự chọn N góc tốt nhất (mặc định theo config)")
     p.add_argument("--more", action="store_true", help="sinh thêm lượt góc mới, không trùng góc cũ")
     p.add_argument("--style", help="ép phong cách, bỏ qua gợi ý của ChatGPT")
-    p.add_argument("--family", help="ép họ style (xem data/style_families.json), vd linocut_print")
+    p.add_argument("--family", help="ép style đã duyệt: styled_photography, papercut_collage hoặc mid_century_retro")
+    p.add_argument("--grid-preset", default="auto",
+                   choices=("auto", "bento_planner", "quiet_luxury", "soft_tech", "fresh_monochrome", "organic_capsules", "playful_editorial"),
+                   help="tự chọn grid theo concept hoặc ép một preset")
     p.add_argument("--manual", action="store_true", help="dán prompt tay thay vì điều khiển Chrome")
     p.add_argument("--year", type=int)
     p.add_argument("--market")
@@ -310,7 +315,6 @@ def main(argv=None):
     p.add_argument("concept", help="thư mục chứa concept.json")
     p.add_argument("--months", help="vd 1,3 (mặc định cả 12 tháng)")
     p.add_argument("--placeholder-art", help="ảnh tạm dùng khi tháng chưa có ảnh gen")
-    p.add_argument("--placeholder-ornament", help="họa tiết tạm dùng khi chưa gen ornament")
     p.set_defaults(func=cmd_render)
 
     p = sub.add_parser("run", help="keyword -> sản phẩm (trọn gói)")
@@ -318,6 +322,10 @@ def main(argv=None):
     p.add_argument("keyword")
     p.add_argument("--pick")
     p.add_argument("--auto", type=int)
+    p.add_argument("--family", choices=("styled_photography", "papercut_collage", "mid_century_retro"),
+                   help="ép medium sản xuất cho toàn bộ dự án")
+    p.add_argument("--grid-preset", default="auto",
+                   choices=("auto", "bento_planner", "quiet_luxury", "soft_tech", "fresh_monochrome", "organic_capsules", "playful_editorial"))
     p.add_argument("--no-printify", action="store_true", help="dừng ở file in + listing")
     p.add_argument("--publish", action="store_true", help="publish sang cửa hàng (mặc định chỉ tạo NHÁP)")
     p.set_defaults(func=cmd_run)

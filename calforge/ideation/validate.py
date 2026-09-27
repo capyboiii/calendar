@@ -1,8 +1,8 @@
 """Kiểm tra output của ChatGPT trước khi nhận.
 
 Mỗi hàm trả về (errors, warnings):
-- errors: phải sửa -> gửi nguyên văn vào prompt P3 (viết tiếng Anh để ChatGPT hiểu).
-- warnings: chỉ ghi nhận cho người duyệt, không chặn.
+- errors: lỗi khách quan có thể kiểm chắc bằng code -> phải sửa qua P3.
+- warnings: đánh giá ngữ nghĩa/thẩm mỹ gần đúng -> ghi nhận, không chặn.
 """
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ import re
 from pathlib import Path
 
 from ..core import dates, kjv
+from ..render.grid_compositions import COMPOSITIONS
 from . import catalog
 from .templates import load_fonts
 
@@ -21,6 +22,12 @@ GRID_FUNCTIONS = {"standard", "notes_column", "family_columns", "prayer_list", "
 IP_RISKS = {"none", "low", "high"}
 MONTH_ABBR = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 HEX = re.compile(r"^#[0-9A-Fa-f]{6}$")
+
+
+def _relative_luminance(value: str) -> float:
+    rgb = [int(value[i:i + 2], 16) / 255 for i in (1, 3, 5)]
+    linear = [c / 12.92 if c <= .04045 else ((c + .055) / 1.055) ** 2.4 for c in rgb]
+    return .2126 * linear[0] + .7152 * linear[1] + .0722 * linear[2]
 
 
 def banned_terms() -> list[str]:
@@ -100,7 +107,7 @@ def validate_angles(data: dict) -> tuple[list[str], list[str]]:
     for i, a in enumerate(angles):
         p = f"angles[{i}]"
         for key in ("id", "title", "hook", "buyer", "frame_type", "months_sketch", "recurring_motif",
-                    "content_type", "grid_function", "suggested_styles", "ai_feasibility", "ip_risk"):
+                    "content_type", "grid_function", "ai_feasibility", "ip_risk"):
             if key not in a:
                 errors.append(f"{p} is missing \"{key}\"")
         if a.get("id") in ids:
@@ -124,19 +131,17 @@ def validate_angles(data: dict) -> tuple[list[str], list[str]]:
         score = (a.get("ai_feasibility") or {}).get("score")
         if not isinstance(score, int) or not 1 <= score <= 5:
             errors.append(f"{p}.ai_feasibility.score must be an integer 1-5")
-        if not a.get("suggested_styles"):
-            errors.append(f"{p}.suggested_styles must list at least one style")
+        # art_direction là schema mới; suggested_styles được giữ làm fallback để resume
+        # các ledger/project cũ mà không bắt người dùng tạo lại từ đầu.
+        direction = a.get("art_direction")
+        legacy_direction = next(iter(a.get("suggested_styles") or []), "")
+        if direction and _words(str(direction)) < 12:
+            errors.append(f"{p}.art_direction must specifically describe medium, palette, composition and surface")
+        elif not direction and not legacy_direction:
+            errors.append(f"{p}.art_direction is required")
         if a.get("style_family") not in catalog.family_ids():
             errors.append(f'{p}.style_family must be one of: {", ".join(sorted(catalog.family_ids()))}')
 
-    # đa dạng họ style: không để cả lượt toàn watercolor
-    fams = [a.get("style_family") for a in angles]
-    need = min(len(angles), 4)
-    if len(set(fams)) < need:
-        errors.append(f"the angles use only {len(set(fams))} different style_family values; use at least {need} "
-                      f"different families")
-    if fams.count("watercolor_gouache") > 1:
-        errors.append('at most ONE angle may use style_family "watercolor_gouache"')
     errors += _banned_hits(data)
     return errors, warnings
 
@@ -154,14 +159,20 @@ def usable_angles(data: dict, min_feasibility: int = 3) -> list[dict]:
 def validate_concept(c: dict, year: int, market: str = "US") -> tuple[list[str], list[str]]:
     errors, warnings = [], []
 
-    for key in ("title", "style", "cover", "months", "back_cover", "ornament", "listing", "content_type"):
+    for key in ("title", "style", "cover", "months", "back_cover", "listing", "content_type"):
         if key not in c:
             errors.append(f'missing top-level key "{key}"')
+    fp = c.get("fingerprint")
+    if not isinstance(fp, dict) or len(fp.get("months") or []) != 12:
+        warnings.append('fingerprint missing or without 12 month labels - portfolio falls back to focal subjects')
     if errors:
         return errors, warnings
 
     # --- style ---
     st = c["style"]
+    composition = st.get("grid_composition")
+    if composition not in COMPOSITIONS:
+        errors.append(f'style.grid_composition must be one of: {", ".join(COMPOSITIONS)}')
     pal = st.setdefault("palette", {})
     if "background" in pal and "paper" not in pal:  # prompt gọi là background, code phía sau dùng paper
         pal["paper"] = pal.pop("background")
@@ -172,20 +183,31 @@ def validate_concept(c: dict, year: int, market: str = "US") -> tuple[list[str],
     if _words(story) < 3:
         errors.append("style.color_story must name the 3-4 colors that define this calendar")
     elif _coverage(story, bible) < 0.4:
-        errors.append("style.style_bible must use the color_story colors by name so the artwork follows them")
+        warnings.append("style.style_bible may not clearly use the color_story colors by name")
+    shared_base = st.get("shared_base_color") or {}
+    if not isinstance(shared_base, dict):
+        errors.append("style.shared_base_color must contain name and hex")
+    else:
+        if _words(str(shared_base.get("name", ""))) < 1:
+            errors.append("style.shared_base_color.name is required")
+        if not HEX.match(str(shared_base.get("hex", ""))):
+            errors.append('style.shared_base_color.hex must be a hex color like "#2F6F68"')
+    artwork_composition = str(st.get("artwork_composition_system", "")).strip()
+    if artwork_composition and _words(artwork_composition) < 6:
+        errors.append("style.artwork_composition_system must specifically describe the collection's visual grammar")
+    elif not artwork_composition:
+        errors.append("style.artwork_composition_system is required and must be chosen for this collection")
     paper = str(pal.get("paper", ""))
-    if HEX.match(paper) and not re.search(r"cream|ivory|parchment|vintage|beige|sepia|linen|oat|sand", story.lower()):
-        rgb = [int(paper[i:i + 2], 16) for i in (1, 3, 5)]
-        r, g, b = rgb
-        if max(rgb) - min(rgb) < 26 and r >= g >= b and min(rgb) > 200:
-            errors.append(f"style.palette.background {paper} is a default cream/beige - use a light tint of a "
-                          f"color_story color instead")
+    if HEX.match(paper) and _relative_luminance(paper) < .75:
+        errors.append("style.palette.background must be an extremely light grid surface; use dark title/text instead")
     for k in ("paper", "title", "text", "accent", "grid_line"):
         if not HEX.match(str(pal.get(k, ""))):
             name = "background" if k == "paper" else k
             errors.append(f'style.palette.{name} must be a hex color like "#1F3A68"')
     for k in ("title", "text"):
         if HEX.match(str(pal.get(k, ""))) and HEX.match(str(pal.get("paper", ""))):
+            if _relative_luminance(str(pal[k])) > .30:
+                errors.append(f"style.palette.{k} must be dark because the approved grid background is always light")
             r = contrast_ratio(pal[k], pal["paper"])
             if r < 4.5:
                 errors.append(f"style.palette.{k} {pal[k]} vs background {pal['paper']}: contrast {r:.1f}, "
@@ -233,13 +255,13 @@ def validate_concept(c: dict, year: int, market: str = "US") -> tuple[list[str],
         if not 3 <= _words(focal) <= 25:
             errors.append(f"{p}.focal_subject must be one concrete, recognizable subject or action (3-25 words)")
         elif _coverage(focal, m.get("scene", "")) < 0.5:
-            errors.append(f'{p}.scene does not show its focal_subject "{focal}" — start the scene with the focal subject')
+            warnings.append(f'{p}.scene may not clearly show its focal_subject "{focal}"')
         if tie.lower() != "none":
             sym = m.get("holiday_symbol", "")
             if not sym:
                 errors.append(f'{p}.holiday_symbol is empty but holiday_tie is "{tie}" — add a recognizable symbol of it')
             elif _coverage(sym, m.get("scene", "")) < 0.5:
-                errors.append(f'{p}.scene does not include its holiday_symbol "{sym}"')
+                warnings.append(f'{p}.scene may not clearly include its holiday_symbol "{sym}"')
         sub_n = _words(m.get("subtitle", ""))
         if not 2 <= sub_n <= 5:
             errors.append(f"{p}.subtitle must be 2-5 words (has {sub_n})")
@@ -261,10 +283,10 @@ def validate_concept(c: dict, year: int, market: str = "US") -> tuple[list[str],
         for j in range(i + 1, len(months)):
             s = _similar(months[i].get("scene", ""), months[j].get("scene", ""))
             if s > 0.55:
-                errors.append(f"months[{i}] and months[{j}] scenes are too similar ({s:.0%}) — make them distinct")
+                warnings.append(f"months[{i}] and months[{j}] scenes may be too similar ({s:.0%})")
             f = _similar(months[i].get("focal_subject", ""), months[j].get("focal_subject", ""))
             if f > 0.6:
-                errors.append(f"months[{i}] and months[{j}] have nearly the same focal_subject — each month needs its own")
+                warnings.append(f"months[{i}] and months[{j}] may have nearly the same focal_subject")
 
     # --- cover / listing ---
     cov = c["cover"]
@@ -274,8 +296,6 @@ def validate_concept(c: dict, year: int, market: str = "US") -> tuple[list[str],
         errors.append("cover.subtitle must be at most 8 words")
     if not 20 <= _words(cov.get("scene", "")) <= 55:
         errors.append("cover.scene must be 25-45 words")
-    if not (c.get("ornament") or {}).get("description"):
-        errors.append("ornament.description is empty")
     lst = c["listing"]
     if len(lst.get("seo_title", "")) > 140:
         errors.append(f"listing.seo_title must be at most 140 characters (has {len(lst['seo_title'])})")

@@ -6,3 +6,4 @@ calforge.json
 data/kjv.json
 models/
 .idea/
+.cache/

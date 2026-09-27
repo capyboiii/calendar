@@ -52,7 +52,7 @@ ANGLE = {
     "months_sketch": [f"{m}: scene" for m in ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
                                               "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]],
     "recurring_motif": "a small olive sprig", "content_type": "bible_verse_kjv",
-    "grid_function": "prayer_list", "style_family": "watercolor_gouache",
+    "grid_function": "prayer_list", "style_family": "styled_photography",
     "suggested_styles": ["soft watercolor", "loose gouache"],
     "ai_feasibility": {"score": 4, "risk": "faces may vary slightly"}, "ip_risk": "none",
 }
@@ -60,10 +60,10 @@ ANGLE = {
 
 def angles_payload():
     risky = copy.deepcopy(ANGLE)
-    risky.update(id="a2", title="Risky one", ip_risk="high", style_family="linocut_print")
+    risky.update(id="a2", title="Risky one", ip_risk="high", style_family="papercut_collage")
     weak = copy.deepcopy(ANGLE)
     weak.update(id="a3", title="Hard to draw", ai_feasibility={"score": 2, "risk": "breed details"},
-                style_family="vintage_engraving")
+                style_family="mid_century_retro")
     return {"keyword": "christian", "angles": [copy.deepcopy(ANGLE), risky, weak]}
 
 
@@ -72,8 +72,15 @@ def concept():
         "title": "A Year with Jesus", "angle_id": "a1", "frame_type": "journey",
         "buyer": "Christian mothers", "content_type": "bible_verse_kjv", "grid_function": "prayer_list",
         "style": {
+            "family": "styled_photography",
             "name": "Soft Watercolor", "color_story": "sage green, apricot, warm ivory, antique gold",
+            "shared_base_color": {"name": "soft sage green", "hex": "#A8B7A0"},
             "style_bible": STYLE_BIBLE,
+            "artwork_composition_system": (
+                "Asymmetric edge-led scenes with changing viewpoints, generous active negative space, and focal subjects "
+                "kept inside the print-safe area without defaulting to a centered vignette."
+            ),
+            "grid_composition": "art_right_title_left",
             "palette": {"paper": "#F7F1E4", "title": "#3B2F25", "text": "#2E2A26",
                         "accent": "#9B7253", "grid_line": "#CDBB9D"},
             "fonts": {"title": "Cormorant Garamond", "body": "Montserrat", "numbers": "Lora"},
@@ -91,7 +98,6 @@ def concept():
             for i in range(12)
         ],
         "back_cover": {"line": "Twelve moments from the life of Jesus"},
-        "ornament": {"description": "a watercolor olive branch with small dark olives"},
         "listing": {"seo_title": "2027 Christian Wall Calendar | A Year with Jesus | Watercolor Bible Verse Calendar",
                     "tags": ["christian calendar", "bible calendar", "2027 calendar", "jesus calendar",
                              "faith gift", "scripture calendar", "watercolor art", "wall calendar",

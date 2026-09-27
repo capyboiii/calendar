@@ -5,6 +5,7 @@ import html
 import json
 from pathlib import Path
 
+from .. import layout
 from ..core import dates
 
 GRID_FEATURE = {
@@ -42,7 +43,7 @@ def build_listing(concept: dict) -> dict:
 
 
 def write_listing(concept_dir: Path) -> dict:
-    concept = json.loads((concept_dir / "concept.json").read_text(encoding="utf-8"))
+    concept = json.loads(layout.concept_file(concept_dir).read_text(encoding="utf-8"))
     listing = build_listing(concept)
-    (concept_dir / "listing.json").write_text(json.dumps(listing, ensure_ascii=False, indent=2), encoding="utf-8")
+    layout.listing_file(concept_dir).write_text(json.dumps(listing, ensure_ascii=False, indent=2), encoding="utf-8")
     return listing

@@ -39,12 +39,14 @@ def engine() -> str:
 
 
 def _esrgan_x4(img: Image.Image, tile: int = 384, pad: int = 16) -> Image.Image:
+    """tile=384 là mức nhanh nhất trên 6GB VRAM: ô to hơn tràn sang RAM chung, chậm hơn nhiều."""
     import torch
 
     model = _model()
     arr = np.asarray(img.convert("RGB"), dtype=np.float32) / 255.0
     h, w, _ = arr.shape
-    out = np.zeros((h * 4, w * 4, 3), dtype=np.float32)
+    # Ghi thẳng từng ô ra uint8 (cùng phép làm tròn như trước) thay vì giữ cả ảnh 6144x4096 dạng float32.
+    out = np.empty((h * 4, w * 4, 3), dtype=np.uint8)
     t = torch.from_numpy(arr).permute(2, 0, 1).unsqueeze(0)
     with torch.no_grad():
         for y in range(0, h, tile):
@@ -52,11 +54,12 @@ def _esrgan_x4(img: Image.Image, tile: int = 384, pad: int = 16) -> Image.Image:
                 y0, x0 = max(0, y - pad), max(0, x - pad)
                 y1, x1 = min(h, y + tile + pad), min(w, x + tile + pad)
                 patch = t[:, :, y0:y1, x0:x1].cuda().half()
-                res = model(patch).float().clamp(0, 1).cpu()[0].permute(1, 2, 0).numpy()
+                res = model(patch).float().clamp(0, 1)[0].permute(1, 2, 0)
                 oy, ox = (y - y0) * 4, (x - x0) * 4
                 th, tw = min(tile, h - y) * 4, min(tile, w - x) * 4
-                out[y * 4:y * 4 + th, x * 4:x * 4 + tw] = res[oy:oy + th, ox:ox + tw]
-    return Image.fromarray((out * 255 + 0.5).astype(np.uint8), "RGB")
+                out[y * 4:y * 4 + th, x * 4:x * 4 + tw] = (
+                    (res[oy:oy + th, ox:ox + tw] * 255 + 0.5).to(torch.uint8).cpu().numpy())
+    return Image.fromarray(out, "RGB")
 
 
 def upscale_to(src: Path, dst: Path, min_w: int, min_h: int, texture_mix: float = 0.3) -> dict:
@@ -71,7 +74,10 @@ def upscale_to(src: Path, dst: Path, min_w: int, min_h: int, texture_mix: float 
     scale = max(min_w / img.width, min_h / img.height)
     target = (round(img.width * scale), round(img.height * scale))
     if scale <= 1.0:
-        img.save(dst)
+        if Path(dst).suffix.lower() in (".jpg", ".jpeg"):
+            img.convert("RGB").save(dst, quality=95, subsampling=0)
+        else:
+            img.save(dst)
         return {"engine": "không cần phóng", "scale": 1.0}
     used = engine()
     if _model() is not None and not has_alpha:
@@ -83,5 +89,8 @@ def upscale_to(src: Path, dst: Path, min_w: int, min_h: int, texture_mix: float 
     else:
         big = img.resize(target, Image.LANCZOS).filter(ImageFilter.UnsharpMask(radius=2, percent=70, threshold=3))
         used = "Lanczos" if has_alpha else used
-    big.save(dst)
+    if Path(dst).suffix.lower() in (".jpg", ".jpeg"):   # ảnh in: JPG q95 không lấy mẫu màu thấp, nhẹ ~5 lần PNG
+        big.convert("RGB").save(dst, quality=95, subsampling=0)
+    else:
+        big.save(dst, compress_level=1)  # PNG vẫn không mất dữ liệu, chỉ nén nhanh hơn
     return {"engine": used, "scale": round(scale, 2)}

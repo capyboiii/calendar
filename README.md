@@ -24,7 +24,8 @@ python -m calforge run "christian"          # keyword -> sản phẩm NHÁP trê
 keyword
  ├─ 1. Ý tưởng     P1 góc tiếp cận -> chọn góc -> P2 concept (+ dữ kiện lịch do code tính)
  │                  -> kiểm tra -> P3 sửa lỗi -> concept.json            [ChatGPT web, acc chữ]
- ├─ 2. Gen ảnh     ảnh neo trước -> 12 tháng + họa tiết song song, mỗi job 1 chat, đính ảnh neo
+├─ 2. Gen ảnh     ảnh neo trước -> bìa AI có typography + 12 tháng + họa tiết song song,
+│                  mỗi job 1 chat, đính ảnh neo
  │                  -> kiểm tra tỉ lệ/kích thước, so màu với ảnh neo      [ChatGPT web, mọi acc]
  ├─ 3. Upscale     Real-ESRGAN x4 (GPU) + trộn 30% Lanczos giữ vân giấy -> art/final/
  ├─ 4. Render      bìa trước, 12 × (trang ảnh + trang lưới), bìa sau = 26 PNG 3375×2625 @300DPI
@@ -61,7 +62,7 @@ python -m calforge angles "keyword"                  # xem các góc đã sinh
 python -m calforge check   <concept>                 # kiểm tra lại concept.json
 python -m calforge gen     <concept> [--profiles acc2,acc3]
 python -m calforge upscale <concept>
-python -m calforge render  <concept> [--months 1,3] [--placeholder-art x.png] [--placeholder-ornament y.png]
+python -m calforge render  <concept> [--months 1,3] [--placeholder-art x.png]
 python -m calforge listing <concept>
 python -m calforge printify <concept> [--publish]
 python -m calforge plan / import <concept>           # đường vòng qua trang /csv của chatgpt-automation
@@ -79,12 +80,12 @@ projects/<keyword>/
   <angle-id>-<slug>/
     concept.json               concept đã qua kiểm tra (+ lời câu KJV)
     concept_report.md          cảnh báo cho người duyệt
-    jobs.json                  kế hoạch gen ảnh (anchor, m01..m12, ornament)
+    jobs.json                  kế hoạch gen ảnh (anchor, cover AI, m01..m12, grid)
     art/raw/                   ảnh ChatGPT gen (<job>.png)
     art/final/                 ảnh đã upscale
     art/qc.md                  kích thước + độ lệch màu so với ảnh neo
     render/printify/           26 PNG upload Printify
-    render/proof/              đè template Printify để soát lò xo / lỗ treo / mã vạch
+    render/proof/              tùy chọn; mặc định không tạo để render nhanh
     render/digital/            calendar_11x8_5.pdf (printable 11×8.5")
     render/report.md           preflight, font, ảnh
     listing.json               title / mô tả / tag
@@ -92,19 +93,48 @@ projects/<keyword>/
     status.json                đang ở bước nào, lỗi gì
 ```
 
+Fast path: Real-ESRGAN chỉ chạy cho cover + 12 artwork được in, không upscale anchor/grid.
+Render và listing được bỏ qua nếu artifact còn mới hơn concept/ảnh nguồn; preflight hình học
+vẫn luôn chạy khi cần render. Printify upload tối đa 4 trang song song và tiếp tục từ
+`printify.json` khi chạy lại.
+
 Muốn làm lại một bước: xoá file kết quả của bước đó (vd xoá `art/raw/m05.png` để gen lại tháng 5).
 
 ## Style và màu
 
-- **Họ style** (`data/style_families.json`): màu nước, sơn dầu, khắc gỗ cổ, linocut, phẳng hiện đại,
-  poster retro, cắt giấy, dân gian, nét mực + điểm màu, kính màu, minh họa bảo tàng, chì màu, ảnh chụp.
-  P1 phải trải 5 góc ra ít nhất 4 họ, tối đa 1 góc màu nước. Khi tự chọn góc, tool ưu tiên họ **ít
-  làm nhất trong danh mục** (`projects/*/*/concept.json`), rồi mới tới điểm "AI vẽ được".
-  Ép một họ: `python -m calforge ideate "keyword" --family linocut_print`.
+- **Art direction do AI đề xuất**: P1 nghĩ chủ thể, palette, bố cục và bề mặt từ chính
+  chủ đề, người mua và cách cuốn lịch được sử dụng, sau đó thể hiện bằng đúng một trong ba medium sản xuất
+  đã duyệt: Styled photography, Layered papercut hoặc Mid-century poster. P1 được xem dấu vân
+  tay thị giác của các cuốn gần đây (medium, surface, composition) để tránh đổi tên nhưng lặp lại cùng
+  một gu. Auto-pick giữ các phương án AI-feasibility 4-5 trong nhóm chất lượng cao rồi ưu tiên họ style
+  ít dùng hơn. Vẫn có thể lọc thủ công theo nhãn bằng
+  `python -m calforge ideate "keyword" --family styled_photography`.
+- **Bố cục artwork theo từng cuốn**: P2 tạo `artwork_composition_system` riêng từ buyer và chủ đề;
+  có thể là lệch tâm, toàn cảnh, flat-lay, close crop, chuyển động chéo, pattern hoặc một hệ khác phù
+  hợp. Code chỉ giữ vùng an toàn in 80%, không còn ép mọi chủ thể vào giữa hay bắt phần trên/dưới cùng
+  một kiểu. Ảnh tham chiếu khóa medium, palette và mark-making nhưng không được sao chép viewpoint hay
+  cách đặt vật thể của ảnh neo.
 - **Color story**: P2 chọn 3-4 màu có tên riêng cho niche, style bible phải dùng chúng; cấm nền kem
   mặc định (trừ niche vintage/giấy da).
 - **Màu trang in** (`render/palette.py`): ý đồ màu của concept + sắc độ thật lấy từ ảnh neo; chữ tự
   đậm lên cho đủ tương phản. Ghi vào `palette.json` và `render/report.md`.
+- **Grid do AI thiết kế theo art direction của cuốn (mặc định)**: tool sinh một ảnh `grid` làm
+  nền giấy chung cho cả 12 tháng, bám ảnh neo của collection. Khi render, cùng một bố cục và họa tiết
+  được giữ xuyên suốt; code chỉ thay tên tháng, câu trích, ngày và ngày lễ. Mép họa tiết được hòa dần vào màu giấy;
+  chữ và lịch in trực tiếp lên một mặt giấy liên tục, không có card hay khung phủ lên. AI
+  **không** vẽ ô, thứ, ngày hoặc chữ vì các phần này cần chính xác tuyệt đối. Khi render,
+  AI chọn một trong năm bố cục an toàn cho từng cuốn (trái/phải, hai góc, top-center hoặc góc dưới),
+  rồi cả 12 tháng của cuốn dùng nhất quán lựa chọn đó. Ảnh nền có quá nhiều chi tiết hoặc mảng tối trong
+  vùng đặt lịch sẽ bị từ chối và sinh lại.
+  `render/pages.py` vẽ vector 7 cột và số hàng thật (4/5/6) từ lịch Gregory, đặt toàn bộ chữ/ngày
+  bằng code. Lịch mặc định 2027 lưu đủ 365 ngày trong `core/calendar_2027.py`; preflight đối chiếu
+  độc lập từng ngày với `datetime`, bắt thiếu/trùng/sai ô và chữ lễ tràn. `render/calendar_audit.json`
+  lưu kết quả theo tháng. Chạy `python -m tools.verify_calendar_render <concept-dir>` để kiểm tra
+  tiếp vị trí số ngày trong PDF đã xuất. Nền thiếu thì preflight báo thiếu, không coi cuốn là hoàn tất. Sáu layout đã duyệt
+  (`02`, `04`, `14`, `18`, `22`, `24`) vẫn chọn thủ công bằng `--grid-preset <tên>`; chế độ này
+  không cần 12 trang AI. Studio hiển thị preview của grid AI-designed và một layout thủ công.
+  CSV của `chatgpt-automation` không đính ảnh tham chiếu được, nên CSV chỉ xuất 14 artwork cơ bản;
+  ảnh `grid` được sinh sau đó bằng driver có đính ảnh neo.
 
 ## Kiểm tra tự động
 

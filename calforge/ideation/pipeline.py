@@ -3,11 +3,11 @@
 Thư mục (ổ đĩa là sổ tiến độ, chạy lại thì đi tiếp từ chỗ dừng):
 
     projects/<keyword>/
-      ideation/                 sổ hỏi/đáp với ChatGPT (*.prompt.md, *.response.md)
-      angles.json               tất cả góc tiếp cận đã sinh cho keyword này
-      <angle-id>-<slug>/
-        concept.json            concept đã qua kiểm tra
-        concept_report.md       cảnh báo cho người duyệt
+      _he_thong/ideation/       sổ hỏi/đáp với ChatGPT (*.prompt.md, *.response.md)
+      _he_thong/angles.json     tất cả góc tiếp cận đã sinh cho keyword này
+      <Tên cuốn>/               tên thư mục = tên cuốn; mã góc nằm ở _he_thong/angle_id.txt
+        _he_thong/concept.json  concept đã qua kiểm tra (cấu trúc cuốn: calforge/layout.py)
+        _he_thong/ky_thuat/concept_report.md   cảnh báo cho người duyệt
 """
 from __future__ import annotations
 
@@ -16,11 +16,13 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .. import layout
 from ..core import kjv
 from ..llm.base import Backend, LazyChat, Ledger
 from . import catalog, templates
 from .extract import extract_json
 from .validate import usable_angles, validate_angles, validate_concept
+from ..render.grid_compositions import COMPOSITIONS
 
 
 def slugify(text: str, max_len: int = 40) -> str:
@@ -39,6 +41,7 @@ class IdeationResult:
 def _ask_validated(chat: LazyChat, label: str, prompt: str, validator, max_repairs: int):
     """Hỏi, bóc JSON, kiểm tra; sai thì gửi P3 kèm danh sách lỗi, tối đa max_repairs lần."""
     data, errors, warnings = None, [], []
+    previous_was_cached = False
     for attempt in range(max_repairs + 1):
         this_label = label if attempt == 0 else f"{label}_repair{attempt}"
         if attempt == 0:
@@ -47,8 +50,11 @@ def _ask_validated(chat: LazyChat, label: str, prompt: str, validator, max_repai
             this_prompt = ("Your previous answer did not contain valid JSON. Return ONLY the JSON "
                            "in one ```json code block, following the schema I gave.")
         else:
-            this_prompt = templates.p3_repair(errors, data)
+            # Trong cùng chat, model đã thấy JSON trước nên không lặp lại hàng chục KB.
+            # Khi resume từ ledger/cache, phiên mới cần JSON cũ để sửa đúng dữ liệu.
+            this_prompt = templates.p3_repair(errors, data, include_previous=previous_was_cached)
         answer = chat.ask(this_prompt, this_label)
+        previous_was_cached = chat.last_was_cached
         try:
             data = extract_json(answer)
         except ValueError as e:
@@ -63,28 +69,165 @@ def _ask_validated(chat: LazyChat, label: str, prompt: str, validator, max_repai
     return data, errors, warnings
 
 
+def _made(kdir: Path, angle: dict) -> bool:
+    d = layout.find_book(kdir, angle["id"])
+    return d is not None and layout.is_book(d)
+
+
+def _handled(kdir: Path, angle: dict) -> bool:
+    """Đã viết concept (thành cuốn hoặc hỏng hẳn sau các vòng sửa): lượt đó coi như xong."""
+    return layout.find_book(kdir, angle["id"]) is not None
+
+
+def _load_review(kdir: Path, run_no: int) -> dict | None:
+    f = layout.ideation_dir(kdir) / f"review_run{run_no}.json"
+    try:
+        return json.loads(f.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _review_and_pick(keyword: str, backend: Backend, ledger: Ledger, kdir: Path, projects_root: Path,
+                     pool: list[dict], run_no: int, n: int, max_repairs: int,
+                     quota: dict[str, int] | None = None) -> list[dict]:
+    """Người thẩm định = một cuộc trò chuyện MỚI (không biết ai viết các ý) quyết định ý nào trùng danh mục
+    và chọn n ý khác nhau nhất. Kết quả lưu ở ideation/review_run<N>.json."""
+    if not pool:
+        return []
+    ids = {a["id"] for a in pool}
+
+    def validate(data: dict) -> tuple[list[str], list[str]]:
+        errors = []
+        decisions = data.get("decisions") or []
+        seen = [d.get("id") for d in decisions]
+        missing = ids - set(seen)
+        if missing:
+            errors.append(f"decisions is missing ids: {', '.join(sorted(missing))}")
+        unknown = set(data.get("selected") or []) - ids
+        if unknown:
+            errors.append(f"selected contains unknown ids: {', '.join(sorted(unknown))}")
+        kept = {d.get("id") for d in decisions if d.get("keep")}
+        if set(data.get("selected") or []) - kept:
+            errors.append("selected may only contain ids with keep=true")
+        if len(data.get("selected") or []) > n:
+            errors.append(f"selected must contain at most {n} ids")
+        fam = {a["id"]: a.get("style_family") for a in pool}
+        for fid, k in (quota or {}).items():
+            got = sum(fam.get(i) == fid for i in data.get("selected") or [])
+            if got > k:
+                errors.append(f'selected has {got} ids with style_family "{fid}", the style split allows at most {k}')
+        return errors, []
+
+    print(f"▶ P1b: ChatGPT (cuộc chat riêng) thẩm định trùng lặp {len(pool)} ý với cả danh mục...", flush=True)
+    with LazyChat(backend, ledger) as reviewer:
+        prompt = templates.p1b_review(keyword, n, pool, projects_root, quota)
+        data, errors, _ = _ask_validated(reviewer, f"p1b_review_run{run_no}", prompt, validate, max_repairs)
+    if errors or not data:
+        print(f"  ⚠ Thẩm định lỗi, dùng xếp hạng cũ: {errors[:1]}", flush=True)
+        return []
+    (layout.ideation_dir(kdir) / f"review_run{run_no}.json").write_text(
+        json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    for d in data.get("decisions", []):
+        mark = "✔ giữ" if d.get("keep") else "✘ loại"
+        why = d.get("duplicates") or d.get("reason", "")
+        print(f"  {mark} {d.get('id')}: {why[:110]}", flush=True)
+    by_id = {a["id"]: a for a in pool}
+    chosen = [by_id[i] for i in data.get("selected", []) if i in by_id][:n]
+    if len(chosen) < n:
+        print(f"  ⚠ Chỉ còn {len(chosen)}/{n} ý không trùng - chạy lại để AI nghĩ thêm lượt ý mới", flush=True)
+    return chosen
+
+
+ROUND_SIZE = 3   # số cuốn mỗi lượt P1 -> P1b: câu trả lời của AI giữ độ dài cố định dù batch lớn
+
+
+def run_ideation_batched(keyword: str, backend: Backend, projects_root: Path, *, auto_pick: int = 1,
+                         pick: list[str] | None = None, on_round=None, **kw) -> IdeationResult:
+    """Batch N cuốn = nhiều lượt nhỏ tối đa ROUND_SIZE cuốn, mỗi lượt P1 (3x ý) + P1b riêng.
+    Lượt sau thấy các cuốn lượt trước trong danh mục nên vẫn chống trùng xuyên lượt.
+    on_round(res): gọi sau mỗi lượt (vd sản xuất luôn các cuốn vừa có concept)."""
+    if pick or auto_pick <= ROUND_SIZE:
+        res = run_ideation(keyword, backend, projects_root, auto_pick=auto_pick, pick=pick, **kw)
+        if on_round:
+            on_round(res)
+        return res
+    total: IdeationResult | None = None
+    left, rnd, rounds = auto_pick, 0, -(-auto_pick // ROUND_SIZE)
+    while left > 0:
+        rnd += 1
+        n = min(ROUND_SIZE, left)
+        print(f"▶ Lượt {rnd}/{rounds}: lên ý tưởng cho {n} cuốn", flush=True)
+        res = run_ideation(keyword, backend, projects_root, auto_pick=n, **kw)
+        if total is None:
+            total = res
+        else:
+            total.angles = res.angles
+            total.concepts += [c for c in res.concepts if c not in total.concepts]
+            total.failed += [f for f in res.failed if f not in total.failed]
+        if on_round:
+            on_round(res)
+        left -= n
+        kw["more"] = False   # --more chỉ ép lượt đầu; các lượt sau tự mở lượt ý mới khi lượt trước xong
+    return total
+
+
 def run_ideation(keyword: str, backend: Backend, projects_root: Path, *, year: int, market: str = "US",
-                 n_angles: int = 5, more: bool = False, pick: list[str] | None = None,
+                 n_angles: int = 1, more: bool = False, pick: list[str] | None = None,
                  auto_pick: int = 1, style: str | None = None, max_repairs: int = 2,
-                 family: str | None = None) -> IdeationResult:
+                 family: str | None = None, grid_preset: str | None = None) -> IdeationResult:
     kdir = projects_root / slugify(keyword)
     kdir.mkdir(parents=True, exist_ok=True)
-    ledger = Ledger(kdir / "ideation")
-    angles_file = kdir / "angles.json"
+    layout.ensure_system(kdir)
+    ledger = Ledger(layout.ideation_dir(kdir))
+    angles_file = layout.angles_file(kdir)
     all_angles: list[dict] = json.loads(angles_file.read_text(encoding="utf-8")) if angles_file.exists() else []
 
     with LazyChat(backend, ledger) as chat:
         # ---- P1: góc tiếp cận ----
         last_run = max((a.get("run", 1) for a in all_angles), default=0)
-        need_p1 = more or not all_angles
+        has_requested_family = bool(family and any(
+            a.get("style_family") == family for a in usable_angles({"angles": all_angles})
+        ))
+        need_p1 = more or not all_angles or bool(family and not has_requested_family)
+        if not need_p1 and not pick:
+            # Batch trước của keyword này đã làm thành cuốn hết -> batch mới phải nghĩ lượt ý mới.
+            prev = _load_review(kdir, last_run)
+            if prev and prev.get("selected") and all(
+                    _handled(kdir, a) for a in all_angles if a.get("run") == last_run and a["id"] in prev["selected"]):
+                need_p1 = True
+        n_candidates = max(n_angles, 3 * auto_pick)   # dư ý để người thẩm định có chỗ loại
+        # Chia đều họ style (code quyết định, không để người dùng chọn): mỗi suất 3 ý cùng họ cho P1b chọn.
+        quota = None if (family or pick) else catalog.family_quota(projects_root, auto_pick)
+        cand_quota = {fid: 3 * k for fid, k in quota.items()} if quota else None
+        if cand_quota:
+            n_candidates = sum(cand_quota.values())
         # Lượt mới = số kế tiếp. Nếu lần trước đã có câu trả lời nhưng chưa kịp ghi angles.json
         # thì sổ hỏi/đáp vẫn giữ câu trả lời đó -> dùng lại, không hỏi lại.
         run_no = last_run + 1 if need_p1 else last_run
         if need_p1:
-            print(f"▶ P1: ChatGPT nghĩ {n_angles} góc tiếp cận cho '{keyword}'...", flush=True)
-            existing = [f'{a["title"]} ({a["frame_type"]})' for a in all_angles]
-            prompt = templates.p1_angles(keyword, year, market, n_angles, existing, projects_root)
-            data, errors, _ = _ask_validated(chat, f"p1_angles_run{run_no}", prompt, validate_angles, max_repairs)
+            print(f"▶ P1: ChatGPT nghĩ {n_candidates} góc tiếp cận cho '{keyword}'...", flush=True)
+            # Cuốn đã làm đã có trong danh mục; ở đây chỉ nhắc các ý bị loại của 2 lượt gần nhất (có trần).
+            existing = [f'{a["title"]} ({a["frame_type"]})' for a in all_angles
+                        if a.get("run", 1) > last_run - 2 and not _made(kdir, a)]
+            prompt = templates.p1_angles(keyword, year, market, n_candidates, existing, projects_root, family=family,
+                                         quota=cand_quota)
+
+            def validate_for_run(payload: dict) -> tuple[list[str], list[str]]:
+                errors, warnings = validate_angles(payload)
+                if family:
+                    for i, angle in enumerate(payload.get("angles") or []):
+                        if angle.get("style_family") != family:
+                            errors.append(
+                                f'angles[{i}].style_family must be exactly "{family}" because the user selected it'
+                            )
+                got = [a.get("style_family") for a in payload.get("angles") or []]
+                for fid, k in (cand_quota or {}).items():
+                    if got.count(fid) != k:
+                        errors.append(f'the style split needs exactly {k} angles with style_family "{fid}", '
+                                      f'got {got.count(fid)}')
+                return errors, warnings
+
+            data, errors, _ = _ask_validated(chat, f"p1_angles_run{run_no}", prompt, validate_for_run, max_repairs)
             if errors:
                 raise RuntimeError("P1 vẫn lỗi sau khi sửa:\n- " + "\n- ".join(errors))
             print(f"  ✔ P1: có {len(data['angles'])} góc: "
@@ -108,36 +251,76 @@ def run_ideation(keyword: str, backend: Backend, projects_root: Path, *, year: i
                 pool = [a for a in usable_angles({"angles": all_angles}) if a.get("style_family") == family]
                 if not pool:
                     raise ValueError(f"Chưa có góc nào thuộc họ style '{family}' - chạy thêm --more")
-            # họ style ít dùng trong danh mục được ưu tiên -> danh mục không lặp một kiểu vẽ
-            chosen = catalog.rank_angles(pool, projects_root)[:auto_pick]
+            # AI (lượt chat riêng) soi trùng với cả danh mục và chọn các ý khác nhau nhất - code không chấm điểm.
+            # Playwright không cho mở 2 trình duyệt lồng nhau trong cùng luồng: đóng phiên P1 trước, người
+            # thẩm định mở phiên (cuộc chat) riêng của nó; P2 sau đó tự mở lại phiên khi cần.
+            chat.close()
+            chosen = _review_and_pick(keyword, backend, ledger, kdir, projects_root, pool, run_no, auto_pick,
+                                      max_repairs, quota) or catalog.rank_angles(pool, projects_root)[:auto_pick]
         result = IdeationResult(kdir, all_angles)
+
+        # Tell the art director what the portfolio already uses, so it can make a genuinely
+        # informed composition choice instead of defaulting every book to the same corner.
+        composition_counts = {key: 0 for key in COMPOSITIONS}
+        for existing_file in projects_root.rglob("concept.json"):
+            try:
+                existing = json.loads(existing_file.read_text(encoding="utf-8"))
+                key = (existing.get("style") or {}).get("grid_composition")
+                if key in composition_counts:
+                    composition_counts[key] += 1
+            except Exception:  # noqa: BLE001 - one damaged old concept must not stop ideation
+                pass
 
         # ---- P2: concept cho từng góc đã chọn ----
         for angle in chosen:
-            cdir = kdir / f"{angle['id']}-{slugify(angle['title'], 30)}"
-            if (cdir / "concept.json").exists():
+            cdir = layout.find_book(kdir, angle["id"])
+            if cdir is not None and layout.is_book(cdir):
                 result.concepts.append(cdir)
                 continue
             print(f"▶ P2: viết concept 12 tháng cho \"{angle['title']}\" "
                   f"[{angle.get('style_family')}]...", flush=True)
-            angle_style = style or (angle.get("suggested_styles") or ["soft watercolor"])[0]
+            angle_style = (style or angle.get("art_direction")
+                           or (angle.get("suggested_styles") or ["a distinctive buyer-led visual direction"])[0])
             angle_view = {k: v for k, v in angle.items() if k != "run"}
-            prompt = templates.p2_concept(angle_view, angle_style, year, market)
+            usage = ", ".join(f"{key}={count}" for key, count in composition_counts.items())
+            prompt = templates.p2_concept(angle_view, angle_style, year, market, usage)
+            # Mỗi cuốn một cuộc chat mới (P3 sửa lỗi vẫn trong chat của cuốn đó): batch nhiều cuốn
+            # không dồn hết concept vào một chat dài - chậm, dễ lẫn chi tiết cuốn trước.
+            chat.close()
             concept, errors, warnings = _ask_validated(
                 chat, f"p2_concept_{angle['id']}", prompt,
                 lambda c: validate_concept(c, year, market), max_repairs)
-            cdir.mkdir(parents=True, exist_ok=True)
+            if cdir is None:   # thư mục mang tên cuốn (dễ đọc); mã góc ghi trong _he_thong/angle_id.txt
+                cdir = layout.new_book_dir(kdir, (concept or {}).get("title") or angle["title"], angle["id"])
             if errors:
-                (cdir / "concept_failed.json").write_text(json.dumps(concept, ensure_ascii=False, indent=2), encoding="utf-8")
+                layout.ensure_system(cdir)
+                layout.tech(cdir).mkdir(parents=True, exist_ok=True)
+                layout.tech(cdir, "concept_failed.json").write_text(json.dumps(concept, ensure_ascii=False, indent=2), encoding="utf-8")
                 _report(cdir, angle, errors, warnings)
                 result.failed.append(angle["id"])
                 continue
             concept.update({"year": year, "market": market, "keyword": keyword, "angle_id": angle["id"]})
             concept["style"]["family"] = angle.get("style_family")
+            # Khung hình từng tháng do code chia (cùng thứ tự đã đưa vào prompt P2), lưu lại để
+            # prompt ảnh dùng đúng khung đó kể cả khi AI đổi tên cuốn.
+            from ..imagegen import shots
+            for m, shot in zip(concept["months"], shots.assign(str(angle.get("title", "")), str(angle.get("frame_type", "")))):
+                m["shot"] = shot
+            # Chất liệu giấy nền grid chia đều theo danh mục (không ngẫu nhiên), lưu lại để gen lại vẫn cùng giấy.
+            from ..imagegen.prompts import next_grid_material
+            concept["style"]["grid_material"] = next_grid_material(projects_root)
+            # Grid được chọn theo toàn bộ cuốn (buyer, content, chức năng và art direction),
+            # không còn gắn cứng chỉ theo style family. Người dùng vẫn có thể ghi đè khi tạo dự án.
+            from ..render.grid_select import apply_grid_selection
+            apply_grid_selection(concept, requested=grid_preset or "auto")
+            selected_composition = concept["style"].get("grid_composition")
+            if selected_composition in composition_counts:
+                composition_counts[selected_composition] += 1
             if concept.get("content_type") == "bible_verse_kjv":
                 for m in concept["months"]:  # lời câu lấy từ dữ liệu KJV, không lấy từ ChatGPT
                     m["content"]["text"] = kjv.lookup(m["content"]["value"])
-            (cdir / "concept.json").write_text(json.dumps(concept, ensure_ascii=False, indent=2), encoding="utf-8")
+            layout.ensure_system(cdir)
+            layout.concept_file(cdir).write_text(json.dumps(concept, ensure_ascii=False, indent=2), encoding="utf-8")
             _report(cdir, angle, [], warnings)
             result.concepts.append(cdir)
     return result
@@ -152,7 +335,8 @@ def import_angles(keyword: str, data: dict, projects_root: Path, source: str) ->
         return [], errors, warnings
     kdir = projects_root / slugify(keyword)
     kdir.mkdir(parents=True, exist_ok=True)
-    angles_file = kdir / "angles.json"
+    layout.ensure_system(kdir)
+    angles_file = layout.angles_file(kdir)
     all_angles = json.loads(angles_file.read_text(encoding="utf-8")) if angles_file.exists() else []
     run_no = max((a.get("run", 1) for a in all_angles), default=0) + 1
     new = []
@@ -172,4 +356,5 @@ def _report(cdir: Path, angle: dict, errors: list[str], warnings: list[str]) -> 
         lines += ["## Cảnh báo", *[f"- {w}" for w in warnings], ""]
     if not errors and not warnings:
         lines.append("Không có lỗi hay cảnh báo.")
-    (cdir / "concept_report.md").write_text("\n".join(lines), encoding="utf-8")
+    layout.tech(cdir).mkdir(parents=True, exist_ok=True)
+    layout.tech(cdir, "concept_report.md").write_text("\n".join(lines), encoding="utf-8")

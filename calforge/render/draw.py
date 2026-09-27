@@ -10,9 +10,14 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 
+from reportlab import rl_config
 from reportlab.lib.colors import HexColor
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfgen import canvas
+
+# Nhúng ảnh dạng nhị phân thay vì mã hoá ASCII85: máy không có bản C (_rl_accel) nên ASCII85 chạy bằng
+# Python thuần, tốn ~2 phút mỗi cuốn. PDF ra y hệt về nội dung, chỉ khác cách đóng gói (và nhỏ hơn ~20%).
+rl_config.useA85 = 0
 
 PX_TO_PT = 72 / 300
 
@@ -50,20 +55,23 @@ class Page:
     label: str = ""
     ops: list = field(default_factory=list)
     grid_box: tuple | None = None   # khung lưới ngày, để preflight cấm họa tiết lấn vào
+    calendar: dict | None = None   # year/month/week_start/rows cho kiểm tra ngày độc lập
+    cell_texts: list = field(default_factory=list)  # (Text, row, col): kiểm tra chữ trong đúng ô
 
     def rect(self, x, y, w, h, fill=None, stroke=None, stroke_w=0.0):
         self.ops.append(("rect", x, y, w, h, fill, stroke, stroke_w))
+
+    def round_rect(self, x, y, w, h, radius, fill=None, stroke=None, stroke_w=0.0):
+        self.ops.append(("round_rect", x, y, w, h, radius, fill, stroke, stroke_w))
+
+    def circle(self, cx, cy, r, fill=None, stroke=None, stroke_w=0.0):
+        self.ops.append(("circle", cx, cy, r, fill, stroke, stroke_w))
 
     def line(self, x1, y1, x2, y2, color, width):
         self.ops.append(("line", x1, y1, x2, y2, color, width))
 
     def image(self, path: Path, x, y, w, h, role: str = ""):
         self.ops.append(("image", str(path), x, y, w, h, role))
-
-    def ornaments(self) -> list[tuple]:
-        """[(tên slot, (x0, y0, x1, y1))] của các họa tiết trên trang."""
-        return [(op[6], (op[2], op[3], op[2] + op[4], op[3] + op[5]))
-                for op in self.ops if op[0] == "image" and op[6].startswith("ornament")]
 
     def text(self, *args, **kwargs) -> Text:
         t = Text(*args, **kwargs)
@@ -120,6 +128,18 @@ def wrap(text: str, font: str, size: float, max_w: float) -> list[str]:
     return lines
 
 
+def blend_hex(c1: str, c2: str, t: float) -> str:
+    """Hòa sắc 2 mã màu hex: (1 - t)*c1 + t*c2 với t thuộc [0.0, 1.0]."""
+    c1 = c1.lstrip("#")
+    c2 = c2.lstrip("#")
+    r1, g1, b1 = int(c1[0:2], 16), int(c1[2:4], 16), int(c1[4:6], 16)
+    r2, g2, b2 = int(c2[0:2], 16), int(c2[2:4], 16), int(c2[4:6], 16)
+    r = round(r1 * (1.0 - t) + r2 * t)
+    g = round(g1 * (1.0 - t) + g2 * t)
+    b = round(b1 * (1.0 - t) + b2 * t)
+    return f"#{max(0, min(255, r)):02X}{max(0, min(255, g)):02X}{max(0, min(255, b)):02X}"
+
+
 def write_pdf(pages: list[Page], path: Path) -> None:
     c = canvas.Canvas(str(path))
     for page in pages:
@@ -138,6 +158,23 @@ def write_pdf(pages: list[Page], path: Path) -> None:
                     c.setStrokeColor(HexColor(stroke))
                     c.setLineWidth(sw)
                 c.rect(x, flip(y + h), w, h, fill=int(bool(fill)), stroke=int(bool(stroke)))
+            elif kind == "round_rect":
+                _, x, y, w, h, radius, fill, stroke, sw = op
+                if fill:
+                    c.setFillColor(HexColor(fill))
+                if stroke:
+                    c.setStrokeColor(HexColor(stroke))
+                    c.setLineWidth(sw)
+                c.roundRect(x, flip(y + h), w, h, radius,
+                            fill=int(bool(fill)), stroke=int(bool(stroke)))
+            elif kind == "circle":
+                _, cx, cy, r, fill, stroke, sw = op
+                if fill:
+                    c.setFillColor(HexColor(fill))
+                if stroke:
+                    c.setStrokeColor(HexColor(stroke))
+                    c.setLineWidth(sw)
+                c.circle(cx, flip(cy), r, fill=int(bool(fill)), stroke=int(bool(stroke)))
             elif kind == "line":
                 _, x1, y1, x2, y2, color, width = op
                 c.setStrokeColor(HexColor(color))
@@ -163,10 +200,38 @@ def write_pdf(pages: list[Page], path: Path) -> None:
 
 
 def pdf_to_pngs(pdf: Path, outs: list[Path], dpi: int = 300) -> None:
+    """Rasterize từng trang rồi nén PNG song song: nén PNG (zlib) là phần chậm nhất, cv2 nhả GIL nên
+    chạy nhiều luồng được. Ảnh ra y hệt (PNG không mất dữ liệu), DPI ghi vào file như trước."""
+    from concurrent.futures import ThreadPoolExecutor
+    import os
+
+    import cv2
+    import numpy as np
     import pymupdf
 
-    with pymupdf.open(pdf) as doc:
+    def save(pixels: np.ndarray, out: Path) -> None:
+        ok, buf = cv2.imencode(".png", pixels[:, :, ::-1], [cv2.IMWRITE_PNG_COMPRESSION, 3])
+        if not ok:
+            raise RuntimeError(f"không nén được {out.name}")
+        out.write_bytes(_png_with_dpi(buf.tobytes(), dpi))
+
+    with pymupdf.open(pdf) as doc, ThreadPoolExecutor(max_workers=min(8, os.cpu_count() or 4)) as pool:
+        jobs = []
         for page, out in zip(doc, outs):
             pix = page.get_pixmap(dpi=dpi, alpha=False)
-            pix.set_dpi(dpi, dpi)
-            pix.save(out)
+            arr = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n).copy()
+            jobs.append(pool.submit(save, arr, out))
+        for j in jobs:
+            j.result()
+
+
+def _png_with_dpi(data: bytes, dpi: int) -> bytes:
+    """Chèn chunk pHYs (DPI) ngay sau IHDR - Printify và phần mềm in đọc DPI từ đây."""
+    import struct
+    import zlib
+
+    ppm = round(dpi / 0.0254)
+    body = b"pHYs" + struct.pack(">IIB", ppm, ppm, 1)
+    chunk = struct.pack(">I", 9) + body + struct.pack(">I", zlib.crc32(body) & 0xFFFFFFFF)
+    ihdr_end = 8 + 4 + 4 + 13 + 4
+    return data[:ihdr_end] + chunk + data[ihdr_end:]

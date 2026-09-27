@@ -9,6 +9,8 @@ from __future__ import annotations
 import calendar
 import datetime as dt
 
+from .calendar_2027 import WEEKS as WEEKS_2027, YEAR as DEFAULT_YEAR
+
 MON, TUE, WED, THU, FRI, SAT, SUN = range(7)
 MONTH_NAMES = [calendar.month_name[i] for i in range(1, 13)]
 
@@ -131,16 +133,32 @@ def month_cells(year: int, month: int, week_start: int = SUN, rows_mode: str = "
     """Chia ngày trong tháng vào lưới 7 cột.
 
     rows_mode "split5": luôn 5 hàng; ngày tràn sang hàng 6 ghép vào ô ngay trên (kiểu 24/31)
-    để ô đủ cao cho người mua viết. "fixed6": luôn 6 hàng.
+    để ô đủ cao cho người mua viết. "fixed6": luôn 6 hàng. "natural": số hàng thật (4–6),
+    không ghép ngày; dùng cho grid art-matched do code dựng chuẩn lịch.
     Trả về (số hàng, danh sách ô); mỗi ô là list dt.date (rỗng = ô trống, 2 ngày = ô ghép).
     """
-    first_weekday, ndays = calendar.monthrange(year, month)
+    if year == DEFAULT_YEAR:
+        weeks = WEEKS_2027[month]
+        if week_start == MON and rows_mode == "natural":
+            return len(weeks), [[dt.date(year, month, day)] if day else []
+                                for week in weeks for day in week]
+        first_weekday = weeks[0].index(1)
+        ndays = max(day for week in weeks for day in week)
+    else:
+        first_weekday, ndays = calendar.monthrange(year, month)
     lead = (first_weekday - week_start) % 7
-    rows = 5 if rows_mode == "split5" else 6
+    if rows_mode == "split5":
+        rows = 5
+    elif rows_mode == "fixed6":
+        rows = 6
+    elif rows_mode == "natural":
+        rows = (lead + ndays + 6) // 7
+    else:
+        raise ValueError(f"rows_mode không hợp lệ: {rows_mode}")
     cells: list[list[dt.date]] = [[] for _ in range(rows * 7)]
     for day in range(1, ndays + 1):
         idx = lead + day - 1
-        if idx >= rows * 7:
+        if rows_mode == "split5" and idx >= rows * 7:
             idx -= 7
         cells[idx].append(dt.date(year, month, day))
     return rows, cells

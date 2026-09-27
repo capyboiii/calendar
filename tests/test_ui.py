@@ -1,6 +1,7 @@
 import json
 import unittest
 import urllib.request
+import urllib.parse
 import threading
 from pathlib import Path
 from http.server import ThreadingHTTPServer
@@ -27,6 +28,15 @@ class UiServerTest(unittest.TestCase):
         with urllib.request.urlopen(req, timeout=5) as r:
             return r.status, r.read()
 
+    def _first_concept_path(self):
+        _, data = self._get("/api/projects")
+        projects = json.loads(data.decode("utf-8")).get("projects") or []
+        for project in projects:
+            concepts = project.get("concepts") or []
+            if concepts:
+                return concepts[0]["path"]
+        self.fail("UI test requires at least one concept project")
+
     def test_serve_index_html(self):
         status, data = self._get("/")
         self.assertEqual(status, 200)
@@ -38,18 +48,21 @@ class UiServerTest(unittest.TestCase):
         self.assertEqual(status, 200)
         res = json.loads(data.decode("utf-8"))
         self.assertIn("families", res)
-        self.assertGreaterEqual(len(res["families"]), 10)
+        self.assertEqual(
+            [f["id"] for f in res["families"]],
+            ["styled_photography", "papercut_collage", "mid_century_retro"],
+        )
 
     def test_api_projects(self):
         status, data = self._get("/api/projects")
         self.assertEqual(status, 200)
         res = json.loads(data.decode("utf-8"))
         self.assertIn("projects", res)
-        keywords = [p["keyword"] for p in res["projects"]]
-        self.assertIn("christian", keywords)
+        self.assertGreaterEqual(len(res["projects"]), 1)
 
     def test_api_concept(self):
-        status, data = self._get("/api/concept?path=projects/christian/r1a1-grace-for-every-season")
+        concept_path = urllib.parse.quote(self._first_concept_path(), safe="/")
+        status, data = self._get(f"/api/concept?path={concept_path}")
         self.assertEqual(status, 200)
         res = json.loads(data.decode("utf-8"))
         self.assertIn("concept", res)
@@ -64,7 +77,8 @@ class UiServerTest(unittest.TestCase):
         self.assertIn(ctx.exception.code, (400, 404))
 
     def test_api_file_serves_valid_file(self):
-        status, data = self._get("/api/file?path=projects/christian/r1a1-grace-for-every-season/concept.json")
+        concept_path = urllib.parse.quote(self._first_concept_path() + "/_he_thong/concept.json", safe="/")
+        status, data = self._get(f"/api/file?path={concept_path}")
         self.assertEqual(status, 200)
         res = json.loads(data.decode("utf-8"))
         self.assertIn("cover", res)

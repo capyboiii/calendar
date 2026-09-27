@@ -1,7 +1,7 @@
 import unittest
 from unittest import mock
 
-from calforge.imagegen.driver import classify
+from calforge.imagegen.driver import classify, generating, wants_source
 from calforge.publish import printify
 from calforge.publish.listing import build_listing
 
@@ -57,6 +57,22 @@ class ClassifyTest(unittest.TestCase):
         self.assertEqual(classify("I can't create that image because it violates our content policy"), "refused")
         self.assertEqual(classify("Something went wrong while generating"), "error")
         self.assertEqual(classify("Here is your image"), "")
+
+    def test_edit_mode_replies_are_detected(self):
+        # 2 câu trả lời thật: ChatGPT coi nhầm là việc sửa ảnh và đòi ảnh gốc
+        self.assertTrue(wants_source("I couldn’t generate this image because the image tool incorrectly treated "
+                                     "the request as an edit requiring a source image"))
+        self.assertTrue(wants_source("Please upload the color-and-texture swatch image in this chat. I can’t "
+                                     "access a usable attached image target"))
+        self.assertFalse(wants_source("Creating image"))
+        self.assertFalse(wants_source("Here is your calendar artwork."))
+
+    def test_drawing_placeholders_count_as_generating(self):
+        # Chữ tạm lúc ChatGPT đang vẽ: phải chờ tiếp, không được coi là "trả lời mà không có ảnh".
+        for text in ("Creating image", "Getting started", "Adding details", "Almost done...", "Đang tạo hình ảnh"):
+            self.assertTrue(generating({"tail": text}), text)
+        self.assertTrue(generating({"tail": "", "pending": True}))  # khung chờ / ảnh chưa tải xong
+        self.assertFalse(generating({"tail": "Would you like me to adjust the colors?"}))
 
 
 

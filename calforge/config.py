@@ -4,15 +4,18 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from .core.dates import DEFAULT_YEAR
+
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG_FILE = ROOT / "calforge.json"
 
 DEFAULTS = {
-    "year": 2027,
+    "year": DEFAULT_YEAR,
     "market": "US",
     "projects_dir": "projects",
-    "angles_per_keyword": 5,
+    "angles_per_keyword": 1,
     "auto_pick": 1,
+    "batch_retry_wait_s": 300,   # vòng vét cuối batch: chờ tài khoản ChatGPT hồi lượt rồi làm lại cuốn dở
     "max_repairs": 2,
     "chatgpt_automation_dir": "C:/Users/Admin/Desktop/chatgpt-automation",
     "llm": {
@@ -36,6 +39,7 @@ DEFAULTS = {
         "print_provider_name": "District Photo",
         "variant_title_contains": "11",
         "price_cents": 2999,
+        "upload_workers": 4,
     },
 }
 

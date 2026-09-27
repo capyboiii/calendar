@@ -61,11 +61,14 @@ class LazyChat:
         self.ledger = ledger
         self._cm = None
         self._session: ChatSession | None = None
+        self.last_was_cached = False
 
     def ask(self, prompt: str, label: str) -> str:
         cached = self.ledger.cached(label)
         if cached is not None:
+            self.last_was_cached = True
             return cached
+        self.last_was_cached = False
         self.ledger.record(label, prompt)
         if self._session is None:
             self._cm = self.backend.session(self.ledger.dir)

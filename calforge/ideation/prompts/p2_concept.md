@@ -6,44 +6,54 @@ FIXED FACTS (computed by software — treat as truth, do not change):
 - Holidays and dates this year, by month (season in brackets):
 {{calendar_facts}}
 - Allowed fonts: title = {{fonts_title}}; body = {{fonts_body}}; numbers = {{fonts_numbers}}
+- Shot type assigned to each month (use it, do not change it):
+{{month_shots}}
 
 APPROVED ANGLE:
 {{angle_json}}
 
-STYLE DIRECTION: {{style}}
-STYLE FAMILY: {{family_name}} — {{family_description}}. The whole calendar must clearly read as this family; do not drift into generic watercolor or painterly realism unless that IS the family.
+BUYER-LED ART DIRECTION (the creative source of truth): {{style}}
+STYLE FAMILY: {{family_name}}. Preserve the buyer-led subject, palette and composition while visibly using this approved rendering method.
 
 TASK
 Expand the angle into a complete concept for 12 months (Jan..Dec), a front cover and a back cover.
 
 HOW TO DESIGN EACH MONTH (follow this order — the artwork must SAY what the month is about)
-Step 1. "theme": one sentence — what this month is about for THIS buyer (the month's message, activity or moment).
+Step 1. "theme": one sentence — how THIS month expresses the calendar's central promise (the angle's title and hook) for THIS buyer. Every month is a new facet of that one idea, never just the season or the holiday.
 Step 2. "subtitle" and "content": written for that theme.
-Step 3. "focal_subject": the ONE concrete, recognizable subject or action that carries the theme — a specific thing a viewer can point at, specific to this niche (e.g. "a hen leading three fluffy chicks out of a red coop", "a wooden boat on water that has just gone calm under parting storm clouds", "a gardener's hands pressing tulip bulbs into dark soil"). Glance test: a stranger who sees only the artwork should be able to guess the theme.
-Step 4. "holiday_symbol": if the month has a "holiday_tie", one recognizable, non-trademarked symbol of that holiday that fits this niche and buyer (for faith niches use the religious meaning of the holiday); otherwise "".
-Step 5. "scene": build the picture AROUND the focal subject. Start the scene with the focal subject, then setting, season cues, holiday symbol, time of day, lighting.
+Step 3. "focal_subject": the ONE concrete, recognizable subject or action that carries the theme — a specific thing a viewer can point at, specific to this niche (e.g. "a grandmother and granddaughter rolling cookie dough at a floured table", "a hen leading three fluffy chicks out of a red coop", "two hikers seen from behind reaching a ridge at sunrise", "a wooden boat on water that has just gone calm under parting storm clouds", "a gardener's hands pressing tulip bulbs into dark soil"). Choose the subject TYPE that tells the theme best — anonymous people in a moment, animals, a place, or an object — and mix these types across the 12 months instead of making every month a still life of objects, unless the angle is literally about objects. Glance test: a stranger who sees only the artwork should be able to guess both the month's theme and the calendar's overall idea.
+Step 4. "holiday_symbol": if the month has a "holiday_tie", one small, recognizable, non-trademarked symbol of that holiday that fits this niche and buyer (for faith niches use the religious meaning of the holiday); otherwise "". It is a secondary detail only, never the focal subject.
+Step 5. "scene": build the picture AROUND the focal subject. Start the scene with the focal subject, then setting, season cues, holiday symbol (small, secondary), time of day, lighting.
 
 RULES
-1. Every month is unique and fits its season. If a month is tied to a holiday, place it in the month where that holiday ACTUALLY falls in {{year}} according to FIXED FACTS, and put the holiday name exactly as written in FIXED FACTS into "holiday_tie". Otherwise "holiday_tie" is "none".
-2. Focal subjects must be different from month to month and specific to the niche. Do NOT use a generic landscape or generic flowers as the focal subject unless the angle is literally about that place.
+1. Every month is unique and fits its season. Tie a month to a holiday only when that holiday genuinely serves the calendar's central idea; the calendar is not a holiday calendar. If a month is tied to a holiday, place it in the month where that holiday ACTUALLY falls in {{year}} according to FIXED FACTS, and put the holiday name exactly as written in FIXED FACTS into "holiday_tie". Otherwise "holiday_tie" is "none".
+2. Focal subjects must be different from month to month and specific to the niche. Do NOT use a generic landscape or a generic bouquet as the focal subject. When the angle is literally about that place or that kind of subject (e.g. a flower or botanical calendar), make each month's focal subject a specific, named example of it (a particular flower, plant or view), different every month.
 3. "content" must be about the same thing the artwork shows: a tip about what is pictured, a fact about what is pictured, a verse/quote whose words or story match what is pictured.
 4. Frame type guidance: seasonal = the same niche subject doing this month's seasonal activity; collection = this month's member of the set is the focal subject; journey = this month's moment of the story; one_scene_12_seasons = the same place, and the focal subject is what changes this month (a wreath on the door, a nest in the tree); word_of_month = a concrete visual metaphor of the word, never an abstract mood.
-5. "scene" describes ONLY visual content, 25 to 45 words. No readable text anywhere in the image (no signs, banners, labels, open pages with words). No real people's likeness.
-6. Composition for every scene: focal subject in the central area; calm open sky or space at the top center; calm, simple bottom edge. Use "composition_note" only if a scene needs something extra, otherwise "".
-7. The recurring motif from the angle must appear subtly in every month ("motif_placement") — it is decoration, never the focal subject.
-8. "color_story": the 3-4 named colors that define THIS calendar's look, chosen for this niche and buyer (e.g. "sea-glass teal, sand, driftwood grey, coral" for a coastal niche; "barn red, sage green, oat, sky blue" for a farm niche). Do NOT default to warm golden-hour sepia or cream/beige/ivory unless the niche is truly vintage, parchment or harvest-themed — every calendar should have its own color identity.
-9. "style_bible": one paragraph, 60 to 90 words: medium and rendering technique of the STYLE FAMILY (e.g. brushwork for paintings; line weight and cross-hatching for engravings; carved shapes and ink layers for prints; cut edges and shadows for papercut; lens, light and depth of field for photography), lighting, texture, and the color story colors by name (the artwork must be dominated by them). It must NOT mention any subject — it is reused verbatim in every image prompt.
-10. Palette: 5 hex colors taken from the color story. "background" is the page background of the date-grid pages: a light tint of a color-story color (not plain cream or white unless the color story says so). "title" and "text" must contrast strongly with "background" (WCAG ratio at least 4.5:1).
+5. "scene" describes ONLY visual content, 25 to 45 words. No readable text anywhere in the image (no signs, banners, labels, open pages with words). No identifiable real person (celebrity, public figure or a specific person's likeness); anonymous people are welcome when shown from behind, in silhouette or profile, at small or medium scale, or through hands and gestures — avoid tight close-ups of faces. Do not include copyrighted or trademarked characters, franchise designs, brand mascots or logos.
+6. Shot types are assigned by software (FIXED FACTS) so the 12 artworks clearly differ in camera and framing. Write each month's "scene" and "composition_note" for its assigned shot type: viewpoint, crop and arrangement must visibly match it. Do not carry one framing device (window, porch, railing, sill, doorway, table edge) through the months unless the angle is built on that object (e.g. a calendar about doors); then show that signature object every month in a new form, and let the shot type change how it is seen. For one_scene_12_seasons the same place must stay recognizable every month: the shot type changes distance and angle within that place, never the place itself. `artwork_composition_system` describes only the collection's shared visual rhythm—how color, light, edges and negative space are handled—never a fixed viewpoint, camera setup or framing device. Keep indispensable content inside the central 80% horizontal print-safe area and away from binding hardware; this does not mean centering.
+7. The recurring motif from the angle appears small in every month ("motif_placement"), placed naturally for that month's shot: its position and the object or surface it sits on change from month to month, and it must never require the same object or setting each time. It is decoration, never the focal subject.
+8. "color_story": the 3-4 named colors that define THIS calendar's look, chosen freely for what best fits this subject, buyer and art direction — only color names here, no hex codes or notes.
+   Choose one `shared_base_color` (any value that suits the art) with a specific name and hex value. This is the SAME shared ground/surface hue across the cover and all 12 artworks. It covers roughly one third of every image, not the whole page; the rest belongs to subjects in the other palette colors. Monthly variety comes from subjects, crops, lighting and accent colors—not by rotating the entire background through different palette hues. Do not name conflicting full-page background colors in monthly scenes. The shared grid uses a quieter tint of this exact base hue.
+9. "style_bible": one paragraph, 60 to 90 words that faithfully operationalizes the BUYER-LED ART DIRECTION: medium and rendering technique, mark-making, lighting, texture, the chosen artwork composition system, surface treatment, and the color story colors by name. Require a positive, welcoming result with clear, readable lighting; mid-tones and rich color are welcome, gloomy or murky results are not. For Styled photography explicitly require natural daylight and forbid night scenes, dark rooms and candle-lit low-key setups. Name the shared base color but describe it as covering about one third of the image, never as a dominant or full-bleed base. It must NOT mention any subject — it is reused verbatim in every image prompt.
+   "surface_system" is one concise sentence naming the collection's distinctive full-bleed substrate/background logic. It must follow the buyer-led art direction. This system will also guide the shared grid background.
+10. Palette: 5 hex colors taken from the color story. "background" is the page background of the date-grid pages: an extremely light near-white tint of shared_base_color, so the grid matches the artwork (not plain white). "title" and "text" must both be dark colors and contrast strongly with "background" (WCAG ratio at least 4.5:1). Never choose light text with a dark grid background.
 11. Fonts: only from the allowed lists above.
 12. Monthly content ("content"), following the angle's content_type:
-   - bible_verse_kjv: "value" is the reference ONLY (e.g. "Mark 4:39" or "Psalms 23:1-2"), never the verse text; the verse must directly match the focal subject.
+   - bible_verse_kjv: "value" is the reference ONLY (e.g. "Mark 4:39" or "Psalms 23:1-2"), never the verse text; the verse must match both the focal subject and the calendar's central idea.
    - practical_tip / fun_fact / affirmation: one sentence, max 20 words, factually safe and general.
    - public_domain_quote: quote published before 1929 with its author, max 25 words.
    - none: "value" is "".
    Always add "subtitle": 2 to 5 words in the spirit of the month.
-13. Cover: title max 5 words, subtitle max 8 words, plus one cover scene (same rules as months). Back cover: one short line.
-14. "ornament": one single decorative element that fits the style, to be generated as a transparent PNG.
-15. Listing: seo_title max 140 characters; exactly 13 tags, each max 20 characters, lowercase, no trademarks.
+13. Cover: title max 5 words, subtitle max 8 words, neither containing the year (software prints it once), plus one cover scene (same rules as months). Back cover: one short line.
+14. Listing: seo_title max 140 characters; exactly 13 tags, each max 20 characters, lowercase, no trademarks.
+15. Choose one `grid_composition`: where the month title and copy sit on the date-grid pages. The grid background has no decorative motifs; this only sets text placement, reused for all 12 grid pages (code supplies exact calendar geometry). Pick what suits the buyer and wall setting, and vary it across concepts. Current portfolio usage is: {{grid_composition_usage}}; when two options suit equally well, prefer the less-used one. Allowed values:
+   - `art_right_title_left`: title and copy left-aligned.
+   - `art_left_title_right`: title and copy right-aligned.
+   - `art_corner_pair_title_center`: centered title and copy.
+   - `art_top_center_title_center`: centered title and copy set a little lower.
+   - `art_bottom_corners_title_center`: centered title and copy with a quiet header.
+16. `fingerprint`: a very short summary the shop uses to avoid future duplicates. "promise" = the book's emotional promise in at most 8 words; "subject_world" = the kind of subjects/places it shows in at most 6 words (e.g. "shoreline edges, lakes and marshes"); "months" = exactly 12 labels of 2–4 words naming each month's focal subject (e.g. "tide pool shells").
 
 OUTPUT
 Return ONLY one ```json code block and no other text, following exactly this schema:
@@ -53,12 +63,17 @@ Return ONLY one ```json code block and no other text, following exactly this sch
   "angle_id": "",
   "frame_type": "",
   "buyer": "",
+  "fingerprint": {"promise": "", "subject_world": "", "months": ["", "", "", "", "", "", "", "", "", "", "", ""]},
   "content_type": "",
   "grid_function": "",
   "style": {
     "name": "",
     "color_story": "",
+    "shared_base_color": {"name": "", "hex": "#000000"},
     "style_bible": "",
+    "surface_system": "",
+    "artwork_composition_system": "",
+    "grid_composition": "",
     "palette": {"background": "#FFFFFF", "title": "#000000", "text": "#000000", "accent": "#000000", "grid_line": "#000000"},
     "fonts": {"title": "", "body": "", "numbers": ""},
     "recurring_motif": ""
@@ -80,7 +95,6 @@ Return ONLY one ```json code block and no other text, following exactly this sch
     }
   ],
   "back_cover": {"line": ""},
-  "ornament": {"description": ""},
   "listing": {"seo_title": "", "tags": []}
 }
 ```

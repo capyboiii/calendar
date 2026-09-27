@@ -41,8 +41,12 @@ STATE_JS = """() => {
   const pick = (s) => Array.from(document.querySelectorAll(s));
   let a = pick('[data-message-author-role="assistant"]');
   if (!a.length) a = pick('article[data-turn="assistant"], [data-turn="assistant"]');
+  // Giao diện mới (acc2/acc5, 09/2026): không còn data-message-author-role, mỗi tin nhắn mang
+  // data-chatgpt-search-unit-key="...:user" hoặc "...:assistant".
+  if (!a.length) a = pick('[data-chatgpt-search-unit-key$=":assistant"]');
   let u = pick('[data-message-author-role="user"]');
   if (!u.length) u = pick('article[data-turn="user"], [data-turn="user"]');
+  if (!u.length) u = pick('[data-chatgpt-search-unit-key$=":user"]');
   const vis = (el) => el && el.getBoundingClientRect().width > 0;
   let busy = false;
   for (const s of ['button[data-testid="stop-button"]', 'button[data-testid*="stop" i]',
@@ -55,9 +59,22 @@ STATE_JS = """() => {
     const src = im.currentSrc || im.src || '';
     if (src) imgs.push({src, w: im.naturalWidth, h: im.naturalHeight, done: im.complete});
   }
+  // Ảnh đang vẽ: ảnh chưa tải xong, hoặc khung chờ (shimmer/skeleton/aria-busy/progress) trong lượt cuối.
+  let pending = imgs.some((im) => !im.done);
+  if (last && !pending)
+    pending = !!last.querySelector('[aria-busy="true"], [role="progressbar"], [class*="shimmer" i], ' +
+                                   '[class*="skeleton" i], [class*="loading" i], [class*="placeholder" i]');
+  const skip = 'form, nav, aside, header, [contenteditable="true"], [data-user-message-bubble], ' +
+    '[data-message-author-role="user"], [data-turn="user"], [data-chatgpt-search-unit-key$=":user"]';
+  const pageImgs = [];
+  for (const im of document.querySelectorAll('img')) {
+    if (im.closest(skip)) continue;
+    const src = im.currentSrc || im.src || '';
+    if (src) pageImgs.push({src, w: im.naturalWidth, h: im.naturalHeight, done: im.complete});
+  }
   const tail = (last ? last.innerText : '') + ' ' +
     pick('[role="dialog"], [role="alert"], .toast-root').map((e) => e.innerText).join(' ');
-  return {assistant: a.length, user: u.length, busy, imgs, tail: tail.slice(-1500)};
+  return {assistant: a.length, user: u.length, busy, pending, imgs, pageImgs, tail: tail.slice(-1500)};
 }"""
 
 ATTACH_JS = """() => {
@@ -92,6 +109,46 @@ class Refused(RuntimeError): ...
 
 
 class TempError(RuntimeError): ...
+
+
+class WantsSourceImage(TempError):
+    """ChatGPT coi nhầm là việc sửa ảnh và đòi ảnh gốc thay vì tự vẽ."""
+
+
+# Chữ tạm ChatGPT hiện TRONG LÚC vẽ ảnh (chưa có ảnh, không có nút Stop). Thấy các chữ này nghĩa là
+# ảnh đang được tạo, phải chờ tiếp - trước đây driver tưởng "trả lời xong mà không có ảnh" và bỏ ngang.
+GEN_PAT = ("creating image", "generating image", "generating your image", "making your image", "getting started",
+           "adding details", "adding final", "almost done", "almost there", "finishing up", "final touches",
+           "image is being", "working on your image", "đang tạo", "đang vẽ", "sắp xong", "thêm chi tiết")
+
+
+# ChatGPT trả lời đòi ảnh gốc / bảo là việc sửa ảnh (công cụ vẽ chọn nhầm chế độ sửa).
+SOURCE_PAT = ("upload the", "upload a", "upload an", "source image", "reference image", "image to edit",
+              "treated the request as an edit", "treated this as an edit", "as an edit", "edit request",
+              "attach the image", "attach an image", "provide the image", "provide an image", "image target")
+NUDGE_NEW = ("Please generate it now as a completely new image from the text description above. "
+             "This is text-to-image generation, not an edit, so no other image is needed.")
+
+
+def wants_source(text: str) -> bool:
+    low = " ".join((text or "").lower().replace("\u2019", "'").split())
+    return any(p in low for p in SOURCE_PAT)
+
+
+def generating(st: dict) -> bool:
+    """Trang cho thấy ảnh đang được vẽ (khung chờ trong DOM hoặc chữ tạm kiểu "Creating image")."""
+    low = " ".join((st.get("tail") or "").lower().split())
+    return bool(st.get("pending")) or any(p in low for p in GEN_PAT)
+
+
+def _sent(st: dict, before: dict) -> bool:
+    """Tin nhắn đã đi: có thêm tin người dùng, có lượt trả lời mới, hoặc ChatGPT đang làm (nút Stop)."""
+    return st["user"] > before["user"] or st["assistant"] > before["assistant"] or bool(st.get("busy"))
+
+
+def _new_images(st: dict, before: dict) -> list[dict]:
+    """Ảnh lớn đã tải xong trong khung trả lời cuối."""
+    return [im for im in st["imgs"] if max(im["w"], im["h"]) >= MIN_SIDE and im["done"]]
 
 
 def classify(text: str) -> str:
@@ -189,8 +246,8 @@ class _Worker:
                 continue
         else:
             box.press("Enter")
-        deadline = time.monotonic() + 15
-        while _eval(page, STATE_JS)["user"] <= before["user"]:
+        deadline = time.monotonic() + 30
+        while not _sent(_eval(page, STATE_JS), before):
             if time.monotonic() > deadline:
                 raise TempError("gửi tin nhắn không đi")
             page.wait_for_timeout(400)
@@ -200,34 +257,43 @@ class _Worker:
         """Chờ đến khi có ảnh lớn trong lượt trả lời mới và ảnh đứng yên settle_s giây."""
         start = time.monotonic()
         deadline = start + self.timeout_s
-        # Bỏ SỚM nếu tab kẹt: ChatGPT chưa mở nổi lượt trả lời (đang gen thì bubble hiện sau vài
-        # giây) -> đừng chờ hết 420s rồi mới chuyển tài khoản.
-        no_progress = min(120.0, self.timeout_s / 3)
+        hard_deadline = start + self.timeout_s * 1.5  # hết giờ mà vẫn đang vẽ thì cho thêm, không cắt ngang
+        # Chỉ bỏ sớm khi trang THẬT SỰ không có gì xảy ra. Gen ảnh không hiện nút Stop và lượt trả lời
+        # có khi chỉ hiện lúc ảnh gần xong, nên mọi dấu hiệu "đang vẽ" đều tính là có tiến triển.
+        no_progress = min(240.0, self.timeout_s * .6)
         chosen, since, quiet_since, progressed = None, 0.0, None, False
-        while time.monotonic() < deadline:
+        old_srcs = {im["src"] for im in before.get("pageImgs", []) + before.get("imgs", [])}
+        drawing = False
+        while time.monotonic() < deadline or (drawing and time.monotonic() < hard_deadline):
             st = _eval(page, STATE_JS)
             new_turn = st["assistant"] > before["assistant"]
-            if new_turn or st.get("busy"):
+            drawing = generating(st) if new_turn else bool(st.get("pending"))
+            big = _new_images(st, before) if new_turn else []
+            if not big:
+                big = [im for im in st.get("pageImgs", []) if im["src"] not in old_srcs
+                       and max(im["w"], im["h"]) >= MIN_SIDE and im["done"]]
+                new_turn = new_turn or bool(big)
+            if new_turn or st.get("busy") or drawing:
                 progressed = True
             elif not progressed and time.monotonic() - start > no_progress:
                 raise TempError(f"tab kẹt: ChatGPT chưa phản hồi sau {no_progress:.0f}s")
-            big = [im for im in st["imgs"] if max(im["w"], im["h"]) >= MIN_SIDE and im["done"]] if new_turn else []
             if big:
                 best = max(big, key=lambda im: im["w"] * im["h"])["src"]
                 if best != chosen:
                     chosen, since = best, time.monotonic()
                 elif not st["busy"] and time.monotonic() - since >= self.settle_s:
                     return chosen
-            elif new_turn and not st["busy"] and st["tail"].strip():
-                # Chỉ kết luận khi lượt trả lời ĐÃ CÓ CHỮ mà không có ảnh. Lượt trả lời còn trống
-                # thường là ảnh đang vẽ (giao diện gen ảnh không hiện nút Stop) -> chờ tiếp.
+            elif new_turn and not st["busy"] and not drawing and st["tail"].strip():
+                # Chỉ kết luận khi lượt trả lời ĐÃ CÓ CHỮ, không còn dấu hiệu đang vẽ, mà vẫn không có ảnh.
                 kind = classify(st["tail"])
                 quiet_since = quiet_since or time.monotonic()
                 if kind == "quota":
                     raise QuotaExceeded(st["tail"][-200:])
+                if wants_source(st["tail"]):
+                    raise WantsSourceImage(st["tail"][-200:])
                 if kind == "refused":
                     raise Refused(st["tail"][-200:])
-                if kind == "error" or time.monotonic() - quiet_since > 20:
+                if kind == "error" or time.monotonic() - quiet_since > 45:
                     raise TempError(f"trả lời xong mà không có ảnh: {st['tail'][-160:]!r}")
             else:
                 quiet_since = None
@@ -239,7 +305,12 @@ class _Worker:
         self._find(page, SEL_PROMPT, 60_000)
         self._attach(page, job.attach)
         before = self._send(page, job.prompt)
-        src = self._wait_image(page, before)
+        try:
+            src = self._wait_image(page, before)
+        except WantsSourceImage:
+            # nhắc lại ngay trong chat này thay vì mở chat mới gửi lại cả prompt
+            before = self._send(page, NUDGE_NEW)
+            src = self._wait_image(page, before)
         data = base64.b64decode(_eval(page, FETCH_JS, src))
         ext = ".webp" if data[8:12] == b"WEBP" else ".jpg" if data[:2] == b"\xff\xd8" else ".png"
         dst = job.out.with_suffix(ext)
@@ -248,7 +319,9 @@ class _Worker:
         tmp.write_bytes(data)
         reason = job.accept(tmp) if job.accept else None
         if reason:
-            tmp.unlink(missing_ok=True)
+            rejected = job.out.parent.parent / "ky_thuat" / "anh_bi_loai"   # _he_thong/ky_thuat/, xem calforge/layout.py
+            rejected.mkdir(parents=True, exist_ok=True)
+            tmp.replace(rejected / f"{job.id}-attempt{job.attempts}{ext}")
             raise TempError(f"ảnh không đạt: {reason}")
         tmp.replace(dst)
         return dst
@@ -306,6 +379,25 @@ def run_jobs(jobs: list[GenJob], profiles_dir: Path, profiles: list[str], *, hea
                             job.error = f"bị từ chối: {str(e)[:200]}"
                             on_event(f"[{profile}] {job.id}: {job.error}")
                             finish(job)
+                        except TempError as e:
+                            job.error = str(e)[:300]
+                            if job.attempts < max_attempts:
+                                if job.id == "grid" and "vùng đặt lịch" in job.error:
+                                    job.prompt += (
+                                        f"\n\nRETRY CORRECTION {job.attempts}: The previous result was rejected because "
+                                        "the calendar writing area was too busy or lacked contrast with the specified "
+                                        "software text colors. Preserve the chosen surface system, but remove illustrated "
+                                        "objects and strong high-frequency marks from x=8–92%, y=30–88%, and adjust its "
+                                        "tone until the supplied title and body colors are clearly readable. Do not turn "
+                                        "it into generic pale paper. Keep decorative motifs solely above y=27%. "
+                                        "Do not solve this by adding or moving a character, animal, focal object, "
+                                        "still life or miniature scene to the margins; decorative motifs only."
+                                    )
+                                q.put(job)
+                                on_event(f"[{profile}] {job.id}: QC không đạt ({job.error[:120]}) - sửa prompt và thử lại")
+                            else:
+                                on_event(f"[{profile}] {job.id}: bỏ sau {job.attempts} lần: {job.error[:160]}")
+                                finish(job)
                         except Exception as e:  # noqa: BLE001 - lỗi tạm: thử lại nếu còn lượt
                             job.error = str(e)[:300]
                             if job.attempts < max_attempts:
