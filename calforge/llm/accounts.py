@@ -125,6 +125,8 @@ def delete_account(name: str, cfg: dict | None = None) -> bool:
 
     # Xóa vĩnh viễn thư mục profile trên ổ đĩa
     shutil.rmtree(acc_dir)
+    from .bulk_login import forget_email
+    forget_email(name)
 
     # Dọn dẹp trong .llm_rotation.json nếu có
     if cfg is None:

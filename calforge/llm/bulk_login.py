@@ -70,6 +70,14 @@ def _save_email(name: str, email: str) -> None:
         EMAILS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
 
 
+def forget_email(name: str) -> None:
+    """Bỏ email của profile đã xoá."""
+    with _LOCK:
+        data = _emails()
+        if data.pop(name, None) is not None:
+            EMAILS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+
+
 def _next_name(taken: set[str]) -> str:
     i = 1
     while f"acc{i}" in taken:
@@ -209,8 +217,9 @@ def start(raw: str, cfg: dict | None = None, parallel: int = 0, stagger: float =
     if BULK["active"]:
         raise RuntimeError("Đang chạy một lượt đăng nhập hàng loạt khác.")
     pdir = get_profiles_dir(cfg)
-    by_email = {e.lower(): n for n, e in _emails().items()}
     taken = {d.name for d in pdir.iterdir() if d.is_dir()} if pdir.exists() else set()
+    # chỉ tính email của profile CÒN trên ổ đĩa (tài khoản đã xoá thì được đăng nhập lại)
+    by_email = {e.lower(): n for n, e in _emails().items() if n in taken}
     jobs, items, seen, bad = [], [], {}, []
     for lineno, line in enumerate((raw or "").splitlines(), 1):
         if not line.strip():

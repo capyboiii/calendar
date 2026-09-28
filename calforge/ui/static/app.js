@@ -9,8 +9,7 @@ const STEPS = [                    // các bước người dùng nhìn thấy (
   { key: 2, label: 'Vẽ tranh (lâu nhất)', weight: 0.55 },
   { key: 3, label: 'Làm nét ảnh', weight: 0.05 },
   { key: 4, label: 'Dàn trang in', weight: 0.15 },
-  { key: 5, label: 'Ảnh quảng cáo & mô tả', weight: 0.10 },
-  { key: 6, label: 'Đưa lên Printify', weight: 0.05 },
+  { key: 5, label: 'Ảnh quảng cáo & mô tả', weight: 0.15 },
 ];
 
 const S = {
@@ -368,14 +367,6 @@ function renderBook(c, keyword) {
   if (state !== 'done') {
     a.appendChild(button('Làm tiếp', 'btn-accent', () => continueBook(c)));
   }
-  const st = c.status || {};
-  if (st.printify_skipped) {
-    const note = document.createElement('span');
-    note.className = 'hint';
-    note.textContent = 'Chưa đưa lên Printify (máy chưa có mã Printify).';
-    a.appendChild(note);
-  }
-
   const L = c.listing || {};
   const lb = $('bookListing');
   if (!L.title) {

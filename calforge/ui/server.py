@@ -233,7 +233,7 @@ class StudioHandler(SimpleHTTPRequestHandler):
                 keyword = params.get("keyword", "").strip()
                 if not keyword:
                     return self._send_json({"error": "Keyword is required"}, status=HTTPStatus.BAD_REQUEST)
-                cmd_args = ["run", keyword]
+                cmd_args = ["run", keyword, "--no-printify"]
                 if params.get("pick"):
                     cmd_args += ["--pick", params["pick"]]
                 batch = int(params.get("batch_size") or 1)
@@ -301,7 +301,7 @@ class StudioHandler(SimpleHTTPRequestHandler):
             elif action == "produce":
                 if not concept_path:
                     return self._send_json({"error": "Concept path is required"}, status=HTTPStatus.BAD_REQUEST)
-                cmd_args = ["produce", concept_path]
+                cmd_args = ["produce", concept_path, "--no-printify"]
                 if params.get("publish"):
                     cmd_args += ["--publish"]
                 desc = f"Sản xuất từ concept: {Path(concept_path).name}"
