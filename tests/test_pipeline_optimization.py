@@ -48,10 +48,10 @@ class PipelineOptimizationTest(unittest.TestCase):
             (root / "11x8.5" / "in_tai_nha_11x8.5.pdf").write_bytes(b"pdf")
             (root / "_he_thong" / "ky_thuat" / "render_11x8.5_validation.json").write_text(
                 json.dumps({"complete": True, "issues": []}), encoding="utf-8")
-            self.assertTrue(_render_is_current(root))
+            self.assertTrue(_render_is_current(root, "printify_wall_11x8_5"))
             future = time.time() + 2
             os.utime(root / "_he_thong" / "anh_ai" / "m06.png", (future, future))
-            self.assertFalse(_render_is_current(root))
+            self.assertFalse(_render_is_current(root, "printify_wall_11x8_5"))
 
     def test_listing_cache_tracks_concept(self):
         with tempfile.TemporaryDirectory() as tmp:

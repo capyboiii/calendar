@@ -71,6 +71,17 @@ class _WebChat:
                 continue
         raise RuntimeError(f"Không thấy phần tử nào khớp {selectors} (ChatGPT đổi giao diện?)")
 
+    def _limited(self, since: float) -> str | None:
+        """Bị giới hạn (429/503 hoặc hộp thoại/banner báo hết lượt/quá tải) kể từ mốc since."""
+        from .limits import classify, page_notice
+
+        watch = getattr(self, "rate", None)
+        hit = watch.recent(since) if watch else None
+        if hit:
+            return hit
+        notice = page_notice(self.page)
+        return notice[-200:] if notice and classify(notice) == "quota" else None
+
     def _state(self) -> dict:
         from ..imagegen.driver import _eval
 
@@ -106,13 +117,18 @@ class _WebChat:
         if not sent:
             box.press("Enter")
 
+        sent_at = time.monotonic()
         if not self._wait_sent(before, 15):
+            if self._limited(sent_at):
+                raise QuotaExceeded(f"chặn lúc gửi: {self._limited(sent_at)}")
             print(f"   [chat] tin nhắn chưa đi sau 15s, bấm gửi lại...", flush=True)
             try:
                 box.press("Enter")
             except Exception:  # noqa: BLE001 - khung nhập bị popup che: để bước dưới báo lỗi
                 pass
             if not self._wait_sent(before, 15):
+                if self._limited(sent_at):
+                    raise QuotaExceeded(f"chặn lúc gửi: {self._limited(sent_at)}")
                 raise SendFailed(f"[{label}] Không gửi được tin nhắn")
 
         # Chờ trả lời xong: có lượt trả lời mới, hết nút Stop, và chữ đứng yên settle_s giây
@@ -127,6 +143,10 @@ class _WebChat:
                     last_text, stable_since = st["text"], time.monotonic()
                 elif time.monotonic() - stable_since >= self.settle_s and last_text.strip():
                     break
+            if not (st["assistant"] > before["assistant"] and st["text"].strip()) and not st["busy"]:
+                limited = self._limited(started)
+                if limited:
+                    raise QuotaExceeded(limited)
             now = time.monotonic()
             if now >= next_beat:  # nhịp báo mỗi 15s để biết còn đang chờ, không phải treo
                 state = "ChatGPT đang soạn" if st.get("busy") else "chờ ChatGPT phản hồi"
@@ -138,9 +158,9 @@ class _WebChat:
         print(f"   [chat] nhận trả lời sau {time.monotonic() - started:.0f}s", flush=True)
 
         if not st["codes"]:
-            from ..imagegen.driver import classify
+            from .limits import classify, page_notice
 
-            if classify(st["text"]) == "quota":
+            if classify(st["text"] + " " + page_notice(self.page)) == "quota":
                 raise QuotaExceeded(st["text"][-160:])
         # innerText không còn dấu ``` của markdown -> dựng lại khối code để bộ bóc JSON nhận ra
         blocks = "".join(f"\n```json\n{code.strip()}\n```\n" for code in st["codes"])
@@ -153,6 +173,10 @@ class QuotaExceeded(RuntimeError):
 
 class SendFailed(RuntimeError):
     """Tin nhắn không gửi đi được (popup che, nút gửi không bật...) -> thử tài khoản kế tiếp."""
+
+
+class NoAccountLeft(RuntimeError):
+    """Mọi tài khoản đều hết lượt / không mở được: batch nên CHỜ rồi thử lại, không coi là hỏng."""
 
 
 class _RotatingChat:
@@ -173,12 +197,18 @@ class _RotatingChat:
             name = self.order.pop(0)
             udir = self.backend.profiles_dir / name
             try:
+                from .browser import launch_options
                 self.ctx = self.pw.chromium.launch_persistent_context(
-                    user_data_dir=str(udir), headless=self.backend.headless, channel="chrome",
-                    viewport={"width": 1400, "height": 950}, args=["--disable-blink-features=AutomationControlled"])
+                    user_data_dir=str(udir), channel="chrome", viewport={"width": 1400, "height": 950},
+                    **launch_options(self.backend.headless))
                 page = self.ctx.pages[0] if self.ctx.pages else self.ctx.new_page()
+                if self.backend.headless in ("hidden", None):
+                    from .browser import hide_offscreen_from_taskbar
+                    hide_offscreen_from_taskbar()            # Chrome ngầm: không hiện biểu tượng dưới thanh tác vụ
                 page.goto(URL, wait_until="domcontentloaded", timeout=90_000)
                 self.chat = _WebChat(page, self.backend.timeout_s)
+                from .limits import RateWatch
+                self.chat.rate = RateWatch(page)            # 429/503 từ máy chủ ChatGPT -> hết lượt
                 self.chat._find(SEL_PROMPT, 60_000)
                 self.profile = name
                 self.backend.mark_used(name)
@@ -187,7 +217,7 @@ class _RotatingChat:
             except Exception as e:  # noqa: BLE001 - profile đang mở ở nơi khác / chưa đăng nhập
                 print(f"[chat] bỏ qua {name}: {str(e)[:120]}")
                 self.close()
-        raise RuntimeError("Không còn tài khoản ChatGPT nào dùng được cho bước chat")
+        raise NoAccountLeft("Không còn tài khoản ChatGPT nào dùng được cho bước chat (hết lượt)")
 
     def ask(self, prompt: str, label: str) -> str:
         while True:

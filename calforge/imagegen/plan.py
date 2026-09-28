@@ -40,7 +40,10 @@ def build_jobs(concept: dict, with_reference: bool = True) -> list[dict]:
                      "prompt": prompts.month_prompt(concept, m, with_reference),
                      "attach": [SWATCH] if with_reference else [],
                      "expect": {"aspect": "3:2", "alpha": False}})
-    if resolve_grid_preset(concept) == "art_matched":
+    from .. import products
+
+    # Lịch grid in sẵn: không gen nền grid (trang grid do người dùng thiết kế).
+    if products.ai_grid(concept) and resolve_grid_preset(concept) == "art_matched":
         jobs.append({"id": "grid", "kind": "grid_background",
                      "prompt": prompts.grid_background_prompt(concept, None, with_reference),
                      "attach": [ANCHOR] if with_reference else [],

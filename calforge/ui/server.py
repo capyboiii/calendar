@@ -15,7 +15,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
-from .. import config, layout
+from .. import config, layout, products
 from ..render.pages import PRESET_NAMES, resolve_grid_preset
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -152,6 +152,8 @@ class StudioHandler(SimpleHTTPRequestHandler):
             return self._handle_api_get(path, query)
 
         # Serve static assets or index.html for root
+        if path == "/huong-dan":               # hướng dẫn sử dụng (HUONG_DAN.html ở gốc repo)
+            return self._serve_file(ROOT / "HUONG_DAN.html", "text/html; charset=utf-8")
         if path == "/" or path == "/index.html":
             return self._serve_file(STATIC_DIR / "index.html", "text/html; charset=utf-8")
         
@@ -177,6 +179,9 @@ class StudioHandler(SimpleHTTPRequestHandler):
         if path == "/api/file":
             rel_path = query.get("path", [""])[0]
             return self._api_get_file(rel_path)
+        if path == "/api/products":
+            return self._send_json({"products": [{"id": k, "name": v["name"]} for k, v in products.PRODUCTS.items()],
+                                    "default": products.DEFAULT})
         if path == "/api/styles":
             return self._api_get_styles()
         if path == "/api/thumb":
@@ -187,6 +192,18 @@ class StudioHandler(SimpleHTTPRequestHandler):
             return self._api_get_task(task_id, since)
         if path == "/api/tasks":
             return self._send_json({"tasks": TASK_MANAGER.list_tasks()})
+        if path == "/api/r2":
+            cfg = config.load()
+            r2 = cfg.get("r2") or {}
+            sec = str(r2.get("secret_access_key") or "")
+            return self._send_json({
+                "account_id": r2.get("account_id", ""), "access_key_id": r2.get("access_key_id", ""),
+                "bucket": r2.get("bucket", ""), "public_url": r2.get("public_url", ""),
+                "prefix": r2.get("prefix", "calendars"),
+                "secret_set": bool(sec), "secret_hint": ("…" + sec[-4:]) if len(sec) > 8 else ""})
+        if path == "/api/accounts/bulk-login/status":
+            from ..llm import bulk_login
+            return self._send_json(bulk_login.status())
         if path == "/api/accounts":
             from ..llm import accounts
             cfg = config.load()
@@ -226,6 +243,8 @@ class StudioHandler(SimpleHTTPRequestHandler):
                     cmd_args += ["--grid-preset", params["grid_preset"]]
                 if params.get("family"):
                     cmd_args += ["--family", params["family"]]
+                if params.get("product") in products.PRODUCTS:
+                    cmd_args += ["--product", params["product"]]
                 if params.get("publish"):
                     cmd_args += ["--publish"]
                 desc = f"Chạy trọn gói {batch} cuốn cho keyword: {keyword}" if batch > 1 else f"Chạy trọn gói cho keyword: {keyword}"
@@ -287,6 +306,10 @@ class StudioHandler(SimpleHTTPRequestHandler):
                     cmd_args += ["--publish"]
                 desc = f"Sản xuất từ concept: {Path(concept_path).name}"
 
+            elif action == "shop":
+                cmd_args = ["shop"]
+                desc = "Đẩy lên R2 + xuất CSV"
+
             elif action == "login":
                 profile_name = params.get("profile", "").strip()
                 if not profile_name:
@@ -317,6 +340,38 @@ class StudioHandler(SimpleHTTPRequestHandler):
                 return self._send_json({"error": "Không tìm thấy thư mục"}, status=HTTPStatus.NOT_FOUND)
             _open_in_explorer(target)
             return self._send_json({"ok": True})
+
+        if path == "/api/r2":
+            # Khoá R2 lưu vào calforge.json (gitignore). Secret để trống = giữ secret cũ; không bao giờ trả lại secret.
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(length).decode("utf-8")) if length > 0 else {}
+            except Exception:
+                return self._send_json({"error": "Dữ liệu không hợp lệ"}, status=HTTPStatus.BAD_REQUEST)
+            keep = ("account_id", "access_key_id", "secret_access_key", "bucket", "public_url", "prefix")
+            data = {k: str(body[k]).strip() for k in keep if k in body and str(body[k]).strip()}
+            config.save_section("r2", data)
+            return self._send_json({"ok": True})
+
+        if path == "/api/accounts/bulk-login":
+            # Mật khẩu chỉ đi qua RAM của máy chủ tới cửa sổ Chrome: không ghi log, không trả về, không lưu đĩa.
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(length).decode("utf-8")) if length > 0 else {}
+            except Exception:
+                return self._send_json({"error": "Dữ liệu không hợp lệ"}, status=HTTPStatus.BAD_REQUEST)
+            busy = TASK_MANAGER.running()
+            if busy and busy.action != "login":
+                return self._send_json({"error": f"Đang chạy: {busy.description}. Chờ xong rồi đăng nhập."},
+                                       status=HTTPStatus.CONFLICT)
+            from ..llm import bulk_login
+            try:
+                res = bulk_login.start(str(body.pop("creds", "")), config.load())
+            except (ValueError, RuntimeError) as e:
+                return self._send_json({"error": str(e)}, status=HTTPStatus.BAD_REQUEST)
+            finally:
+                body.clear()
+            return self._send_json(res)
 
         if path == "/api/accounts/create":
             try:
@@ -351,9 +406,18 @@ class StudioHandler(SimpleHTTPRequestHandler):
             return self._send_json({"projects": []})
 
         results = []
-        for kw_dir in sorted(projects_dir.iterdir()):
-            if not kw_dir.is_dir() or kw_dir.name.startswith((".", "_")):
+        # projects/<loại lịch>/<chủ đề>/<cuốn>; thư mục chủ đề cũ nằm thẳng dưới projects/ vẫn đọc được
+        folders = {v["folder"]: k for k, v in products.PRODUCTS.items()}
+        kw_dirs = []
+        for top in sorted(projects_dir.iterdir()):
+            if not top.is_dir() or top.name.startswith((".", "_")):
                 continue
+            if top.name in folders:
+                kw_dirs += [(d, top.name, folders[top.name]) for d in sorted(top.iterdir())
+                            if d.is_dir() and not d.name.startswith((".", "_"))]
+            else:
+                kw_dirs.append((top, "", None))
+        for kw_dir, group, group_product in kw_dirs:
 
             angles_file = layout.angles_file(kw_dir)
             angles = []
@@ -383,7 +447,7 @@ class StudioHandler(SimpleHTTPRequestHandler):
 
                 # Grid mặc định có một nền AI dùng chung cho cả 12 tháng.
                 required_art = {"anchor", "cover", *[f"m{i:02d}" for i in range(1, 13)]}
-                if resolve_grid_preset(concept_data) == "art_matched":
+                if products.ai_grid(concept_data) and resolve_grid_preset(concept_data) == "art_matched":
                     required_art.add("grid")
                 def _required_count(directory: Path) -> int:
                     return len({f.stem for f in directory.glob("*.*") if f.is_file() and f.stem in required_art}) \
@@ -398,6 +462,8 @@ class StudioHandler(SimpleHTTPRequestHandler):
                     "path": str(c_dir.relative_to(ROOT)).replace("\\", "/"),
                     "title": (concept_data.get("cover") or {}).get("title") or c_dir.name,
                     "subtitle": (concept_data.get("cover") or {}).get("subtitle", ""),
+                    "product": products.product_id(concept_data),
+                    "product_name": products.get(concept_data)["name"],
                     "year": concept_data.get("year", cfg.get("year", 2027)),
                     "family": (concept_data.get("style") or {}).get("family", ""),
                     "grid_preset": resolve_grid_preset(concept_data),
@@ -416,6 +482,8 @@ class StudioHandler(SimpleHTTPRequestHandler):
 
             results.append({
                 "keyword": kw_dir.name,
+                "group": group,
+                "product": group_product,
                 "path": str(kw_dir.relative_to(ROOT)).replace("\\", "/"),
                 "total_angles": len(angles),
                 "concepts": concepts,
@@ -517,7 +585,7 @@ class StudioHandler(SimpleHTTPRequestHandler):
             else:
                 mime = "application/octet-stream"
 
-        return self._serve_file(target, mime)
+        return self._serve_file(target, mime, download=target.suffix.lower() == ".csv")
 
     def _api_thumb(self, rel_path: str, width: int):
         """Ảnh thu nhỏ (JPEG) cho lưới kết quả; lưu tạm theo mtime để lần sau trả ngay."""
@@ -549,11 +617,16 @@ class StudioHandler(SimpleHTTPRequestHandler):
             return self._send_json({"error": "Task not found"}, status=HTTPStatus.NOT_FOUND)
         return self._send_json(task)
 
-    def _serve_file(self, file_path: Path, content_type: str):
+    def _serve_file(self, file_path: Path, content_type: str, download: bool = False):
         try:
             data = file_path.read_bytes()
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", content_type)
+            if download:                       # tải về đúng tên file (kể cả tên có dấu) thay vì "file"
+                from urllib.parse import quote
+                self.send_header("Content-Disposition",
+                                 f"attachment; filename=\"{file_path.name.encode('ascii', 'ignore').decode()}\"; "
+                                 f"filename*=UTF-8''{quote(file_path.name)}")
             self.send_header("Content-Length", str(len(data)))
             self.send_header("Cache-Control", "no-cache, must-revalidate")
             self.end_headers()
@@ -570,7 +643,7 @@ class StudioHandler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(payload)
 
-    def log_message(self, format, *args):
+    def log_message(self, format, *args):  # noqa: A002 - tắt log request (không in body/mật khẩu)
         # Tắt log mặc định của SimpleHTTPRequestHandler cho đỡ rác console
         pass
 
@@ -584,7 +657,8 @@ def _book_outputs(c_dir: Path) -> dict:
     previews = sorted(layout.listing(c_dir).glob("*.jpg")) if layout.listing(c_dir).exists() else []
     cover = previews[0] if previews else layout.print_dir(c_dir) / "front_cover.png"
     pdfs = []
-    for fid, label in layout.PRINT.items():
+    for label in dict.fromkeys(layout.PRINT.values()):      # nhiều loại lịch dùng chung thư mục khổ
+        fid = next(k for k, v in layout.PRINT.items() if v == label)
         f = layout.printable_file(c_dir, fid)
         if f.exists():
             pdfs.append({"label": label, "path": _rel(f)})
@@ -615,9 +689,35 @@ def _read_batch(kw_dir: Path) -> dict:
     return {k: b.get(k) for k in ("target", "started", "finished", "report")}
 
 
+def _already_running(url: str) -> bool:
+    import urllib.request
+    try:
+        with urllib.request.urlopen(f"{url}/api/tasks", timeout=2) as r:
+            return r.status == 200
+    except Exception:
+        return False
+
+
+class _Server(ThreadingHTTPServer):
+    # Windows cho 2 tiến trình cùng giữ 1 cổng khi bật reuse -> tắt để không chạy 2 tool chồng nhau
+    allow_reuse_address = False
+
+
 def run_server(host: str = "127.0.0.1", port: int = 8080, open_browser: bool = True):
-    server = ThreadingHTTPServer((host, port), StudioHandler)
+    import webbrowser
+
     url = f"http://{host}:{port}"
+    if _already_running(url):
+        # người dùng bấm biểu tượng lần nữa khi tool đang chạy: chỉ mở lại trang, không chạy tool thứ hai
+        print("CalForge Studio đang chạy sẵn - mở lại trang.")
+        if open_browser:
+            webbrowser.open(url)
+        return
+    try:
+        server = _Server((host, port), StudioHandler)
+    except OSError:
+        print(f"Cổng {port} đang bị chương trình khác dùng. Tắt chương trình đó hoặc khởi động lại máy.")
+        raise SystemExit(1)
     print(f"\n========================================================")
     print(f" ✨ CalForge Studio đang chạy tại: {url}")
     print(f" 📂 Bấm Ctrl+C để dừng máy chủ")

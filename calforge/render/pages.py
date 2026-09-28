@@ -215,6 +215,11 @@ def _grid_art_matched(fmt: dict, concept: dict, month_no: int, label: str,
                       verse_text: str | None, background_art: Path | None) -> Page:
     """One continuous illustrated page with a calm center and exact vector dates."""
     c = _setup(fmt, concept, month_no, label, verse_text)
+    layout = concept["style"].get("grid_layout", "classic")
+    if layout != "classic":                       # bố cục khác (calforge/render/grid_layouts.py)
+        from .grid_layouts import LAYOUTS, grid_layout_page
+        if layout in LAYOUTS:
+            return grid_layout_page(fmt, c, layout, background_art)
     p, L, pal = c["page"], c["layout"], c["pal"]
     W, H = fmt["size_px"]
     editorial = concept["style"].get("grid_page_mode", "editorial_illustration") == "editorial_illustration"
@@ -230,7 +235,7 @@ def _grid_art_matched(fmt: dict, concept: dict, month_no: int, label: str,
             paper = blend_hex("#" + "".join(f"{int(v):02X}" for v in rgb), "#FFFFFF", .40)
     ink = pal["title"]
     accent = pal["accent"]
-    hair = blend_hex(paper, ink, .27)
+    hair = blend_hex(paper, ink, .42)
     if background_art is not None:
         bg = background_art if editorial else _seamless_grid_background(background_art, paper)
         p.image(bg, 0, 0, W, H,
@@ -300,10 +305,10 @@ def _grid_art_matched(fmt: dict, concept: dict, month_no: int, label: str,
                "middle", tracking=4, role="weekday")
     for col in range(1, 7):
         x = gx0 + col * cw
-        p.line(x, grid_top, x, grid_bottom, hair, 1.7)
+        p.line(x, grid_top, x, grid_bottom, hair, 2.4)
     for row in range(rows + 1):
         y = grid_top + row * ch
-        lw = 3.4 if row in (0, rows) else 1.7
+        lw = 3.8 if row in (0, rows) else 2.4
         p.line(gx0, y, gx1, y, blend_hex(paper, ink, .5) if row in (0, rows) else hair, lw)
 
     holidays = {d: names for d, names in dates.holidays_for(c["year"], c["market"]).items()

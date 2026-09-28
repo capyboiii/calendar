@@ -17,7 +17,7 @@ from pathlib import Path
 from PIL import Image
 from reportlab.pdfgen import canvas
 
-from .. import layout
+from .. import layout, products
 from ..core import kjv
 from ..imagegen.plan import IMG_EXT, job_done
 from . import fonts
@@ -32,7 +32,7 @@ ROOT = Path(__file__).resolve().parents[2]
 FORMAT_DIR = ROOT / "formats" / "printify_wall_11x8_5"
 DEFAULT_FORMAT = "printify_wall_11x8_5"
 # Khổ phụ render ra thư mục con của render/ (khổ mặc định giữ nguyên render/ như trước)
-FORMATS = list(layout.PRINT)            # khổ in; thư mục ra xem calforge/layout.py
+FORMATS = products.formats(products.DEFAULT)   # khổ in của lịch thường; mỗi cuốn: products.formats(concept)
 
 
 def load_format(format_id: str = DEFAULT_FORMAT) -> dict:
@@ -91,6 +91,25 @@ def printable_pdfs(pngs: list[Path], fmt: dict, out_pdf: Path, dpi: int = 200) -
     if not any(tmp.iterdir()):
         tmp.rmdir()
     return [out_pdf]
+
+
+def premade_grids(fmt: dict) -> dict[int, Path]:
+    """Trang grid thiết kế sẵn của khổ này (formats/<khổ>/grids/m01..m12.*); chỉ dùng khi có đủ 12."""
+    d = Path(fmt["_dir"]) / fmt.get("premade_grids_dir", "grids")
+    found = {}
+    for mo in range(1, 13):
+        f = next((p for p in sorted(d.glob(f"m{mo:02d}.*")) if p.suffix.lower() in IMG_EXT), None) if d.is_dir() else None
+        if f:
+            found[mo] = f
+    return found if len(found) == 12 else {}
+
+
+def expected_pages(concept: dict, format_id: str) -> int:
+    """Số trang PNG một cuốn phải có ở khổ này: 26, hoặc 14 với lịch grid in sẵn chưa có trang grid."""
+    fmt = load_format(format_id)
+    if "grid" in fmt["pages"] and products.ai_grid(concept):
+        return 26
+    return 26 if premade_grids(fmt) else 14
 
 
 def render_concept(concept_dir: Path, months: list[int] | None = None, placeholder_art: Path | None = None,
@@ -158,7 +177,11 @@ def render_concept(concept_dir: Path, months: list[int] | None = None, placehold
         pngs.append((out / "front_cover.png", "front_cover"))
 
     month_arts = {}
-    art_matched = resolve_grid_preset(concept) == "art_matched"
+    # Lịch grid in sẵn: không có trang grid do máy dựng; trang grid (nếu người dùng đã thêm) chép nguyên file.
+    ai_grid = "grid" in fmt["pages"] and products.ai_grid(concept)
+    premade = premade_grids(fmt) if not ai_grid else {}
+    copies: list[tuple[Path, Path]] = []
+    art_matched = ai_grid and resolve_grid_preset(concept) == "art_matched"
     shared_grid = fitted_art("grid", crop=False) if art_matched else None
     if art_matched and shared_grid is None:
         # Project cũ: lấy nền tháng đầu tiên đang có làm master để vẫn render được.
@@ -184,8 +207,14 @@ def render_concept(concept_dir: Path, months: list[int] | None = None, placehold
             verse = kjv.lookup(m["content"]["value"])
             if not verse:
                 issues.append(f"[{tag}] không tra được lời câu {m['content']['value']} - chỉ in mã câu")
-        pages.append(grid_page(fmt, concept, mo, f"{tag} grid", verse, shared_grid))
-        pngs.append((out / f"{tag}_grid.png", "grid"))
+        if ai_grid:
+            pages.append(grid_page(fmt, concept, mo, f"{tag} grid", verse, shared_grid))
+            pngs.append((out / f"{tag}_grid.png", "grid"))
+        elif mo in premade:
+            copies.append((premade[mo], out / f"{tag}_grid.png"))
+            pngs.append((out / f"{tag}_grid.png", "premade_grid"))
+        else:
+            (out / f"{tag}_grid.png").unlink(missing_ok=True)   # không để sót trang grid cũ
 
     if covers and full:
         pages.append(back_cover(fmt, concept, month_arts, work / "art"))
@@ -228,7 +257,14 @@ def render_concept(concept_dir: Path, months: list[int] | None = None, placehold
     selection_file.write_text(json.dumps(selection, ensure_ascii=False, indent=2), encoding="utf-8")
 
     write_pdf(pages, work / "pages.pdf")          # PDF vector chỉ để xuất PNG, xoá cùng thư mục tạm
-    pdf_to_pngs(work / "pages.pdf", [p for p, _ in pngs], fmt["dpi"])
+    pdf_to_pngs(work / "pages.pdf", [p for p, k in pngs if k != "premade_grid"], fmt["dpi"])
+    for src, dst in copies:
+        with Image.open(src) as im:
+            im = im.convert("RGB")
+            if im.size != tuple(fmt["size_px"]):
+                warnings.append(f"{src.name}: {im.width}x{im.height} khác cỡ trang {fmt['size_px']} - đã co giãn")
+                im = im.resize(tuple(fmt["size_px"]), Image.Resampling.LANCZOS)
+            im.save(dst, dpi=(fmt["dpi"], fmt["dpi"]))
     if proofs:
         proof_dir = layout.tech(concept_dir, f"proof_{layout.SIZE_LABEL[format_id]}")
         proof_dir.mkdir(parents=True, exist_ok=True)
@@ -248,7 +284,9 @@ def render_concept(concept_dir: Path, months: list[int] | None = None, placehold
               f"- Đã chọn: {selection['selected_label']}",
               *[f"- Lý do: {r}" for r in selection.get("reasons", [])],
               "- AI thiết kế một nền grid dùng chung cho 12 tháng; ô, thứ, ngày và nội dung do code dựng chính xác."
-              if art_matched else "- Grid thủ công chỉ dùng typography và shape.", ""]
+              if art_matched else "- Grid thủ công chỉ dùng typography và shape." if ai_grid else
+              f"- Lịch grid in sẵn: không dựng trang grid; {'đã chèn 12 trang grid thiết kế sẵn' if premade else 'chưa có trang grid (14 trang)'}.",
+              ""]
     lines += ["## Preflight", *([f"- {i}" for i in issues] or ["- Không có lỗi."]), ""]
     lines += ["## Kiểm tra ngày", f"- {len(calendar_audit)} tháng / "
               f"{sum(a['date_count'] for a in calendar_audit)} ngày đã kiểm tra vị trí ô, thứ, trùng và thiếu.",

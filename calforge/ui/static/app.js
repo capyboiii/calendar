@@ -46,6 +46,10 @@ function bindEvents() {
   $('btnAccounts').addEventListener('click', openAccounts);
   $('btnNoticeAccounts').addEventListener('click', openAccounts);
   $('btnAccAdd').addEventListener('click', addAccount);
+  $('btnBulkGo').addEventListener('click', startBulkLogin);
+  $('btnR2Settings').addEventListener('click', openR2);
+  $('btnR2Save').addEventListener('click', saveR2);
+  $('btnShop').addEventListener('click', runShop);
   $('inputAccName').addEventListener('keydown', (e) => { if (e.key === 'Enter') addAccount(); });
 
   document.querySelectorAll('.modal').forEach((m) => {
@@ -69,8 +73,7 @@ function setCount(n) {
 
 function updateHint() {
   const n = countValue();
-  $('startHint').textContent = `Khoảng ${fmtMinutes(n * MIN_PER_BOOK)} cho ${n} cuốn. `
-    + 'Có thể để máy tự chạy, không cần ngồi canh.';
+  $('startHint').textContent = `~${fmtMinutes(n * MIN_PER_BOOK)}`;
 }
 
 // --------------------------------------------------------------------------
@@ -130,7 +133,8 @@ async function startBatch() {
     openAccounts();
     return;
   }
-  const params = { keyword, batch_size: countValue() };   // phong cách: máy tự chia đều
+  const product = (document.querySelector('input[name="product"]:checked') || {}).value || 'wall_grid';
+  const params = { keyword, batch_size: countValue(), product };   // phong cách: máy tự chia đều
   $('btnStart').disabled = true;
   try {
     const data = await api('/api/action', { action: 'run', params });
@@ -195,7 +199,7 @@ function finishTask(status) {
     else if (rows.length && ok === rows.length) toast(`Xong! ${ok} cuốn lịch "${kw}" đã sẵn sàng.`, 'success', 10000);
     else if (rows.length) toast(`Xong ${ok}/${rows.length} cuốn. Cuốn lỗi có ghi lý do và nút "Làm tiếp".`, 'info', 12000);
     else if (status === 'success') toast('Đã xong.', 'success');
-    else toast('Có lỗi khi chạy. Mở "Chi tiết kỹ thuật" hoặc thử lại.', 'error', 10000);
+    else toast('Có lỗi khi chạy. Mở "Chi tiết" hoặc thử lại.', 'error', 10000);
   });
   loadAccounts();
 }
@@ -230,6 +234,9 @@ function readProgress(logs, target) {
     }
     if (/▶ Vòng vét/.test(line)) { sweep = true; stepText = 'Đang chờ tài khoản ChatGPT hồi lượt rồi làm lại cuốn bị dở'; }
     if (/hết lượt|limit/i.test(line) && /chuyển tài khoản/.test(line)) stepText = 'Một tài khoản hết lượt, đang đổi sang tài khoản khác';
+    const pause = line.match(/⏸ Tất cả tài khoản hết lượt .*thử lại lúc (\d\d:\d\d)/);
+    if (pause) stepText = `Cả 5 tài khoản ChatGPT tạm hết lượt - máy tự chờ, thử lại lúc ${pause[1]}`;
+    if (/▶ Hết giờ chờ/.test(line)) stepText = '';
   });
   const done = STEPS.filter((s) => s.key < step).reduce((a, s) => a + s.weight, 0);
   const current = Math.max(0, book - 1) + (book ? done : done * 0.5);
@@ -252,8 +259,7 @@ function renderProgress() {
   $('runBar').style.width = `${p.pct}%`;
   const elapsed = (Date.now() / 1000 - (S.task.start_time || Date.now() / 1000)) / 60;
   const left = Math.max(1, target * MIN_PER_BOOK - elapsed);
-  $('runTime').textContent = `Đã chạy ${fmtMinutes(elapsed)} · còn khoảng ${fmtMinutes(left)}. `
-    + 'Có thể đóng trang này, máy vẫn chạy tiếp; mở lại để xem tiến độ.';
+  $('runTime').textContent = `${fmtMinutes(elapsed)} · còn ~${fmtMinutes(left)}`;
   const log = $('runLog');
   log.textContent = S.logs.slice(-400).join('\n');
   if ($('logBox').open) log.scrollTop = log.scrollHeight;
@@ -286,10 +292,11 @@ function renderResults() {
   const books = S.projects.reduce((n, p) => n + (p.concepts || []).length, 0);
   $('bookCount').textContent = books ? `${books} cuốn` : '';
   if (!books) {
-    box.innerHTML = '<p class="empty">Chưa có cuốn nào. Nhập chủ đề ở trên rồi bấm <b>Bắt đầu</b>.</p>';
+    box.innerHTML = '<p class="empty">Chưa có cuốn nào.</p>';
     return;
   }
   const running = S.task ? slug(S.task.params.keyword) : '';
+  const runProd = S.task ? (S.task.params.product || 'wall_grid') : '';
   const groups = [...S.projects]
     .filter((p) => (p.concepts || []).length)
     .sort((a, b) => newest(b) - newest(a));
@@ -300,8 +307,8 @@ function renderResults() {
     sec.className = 'group';
     sec.innerHTML = `
       <div class="group-head">
-        <h3>${esc(proj.keyword)}</h3>
-        <span class="count">${done}/${proj.concepts.length} xong${proj.keyword === running ? ' · đang chạy' : ''}</span>
+        <h3>${esc(proj.keyword)}${proj.group ? ` <small class="muted">· ${esc(proj.group)}</small>` : ''}</h3>
+        <span class="count">${done}/${proj.concepts.length} xong${proj.keyword === running && (!proj.product || proj.product === runProd) ? ' · đang chạy' : ''}</span>
         <button class="btn btn-small btn-ghost" data-open="${esc(proj.path)}">Mở thư mục</button>
       </div>
       <div class="books"></div>`;
@@ -322,6 +329,7 @@ function bookCard(c, keyword) {
       <strong>${esc(c.title)}</strong>
       <span class="pill ${state}">${STATE_LABEL[state]}</span>
     </div>
+    ${c.product === 'wall_premade' ? '<p class="kind-tag">Wall Calendar</p>' : ''}
     ${state === 'error' ? `<p class="why">${esc(friendlyReason(c.status))}</p>` : ''}`;
   el.addEventListener('click', () => { S.openBook = c.path; renderBook(c, keyword); $('bookModal').hidden = false; });
   return el;
@@ -330,7 +338,7 @@ function bookCard(c, keyword) {
 function renderBook(c, keyword) {
   const state = bookState(c);
   $('bookTitle').textContent = c.title;
-  $('bookSub').textContent = [keyword, c.subtitle].filter(Boolean).join(' · ');
+  $('bookSub').textContent = [keyword, c.product === 'wall_premade' ? 'Wall Calendar' : 'Wall Calendar (Blank)', c.subtitle].filter(Boolean).join(' · ');
   $('bookState').textContent = STATE_LABEL[state];
   $('bookState').className = `pill ${state}`;
   const err = $('bookError');
@@ -340,7 +348,7 @@ function renderBook(c, keyword) {
   const g = $('bookGallery');
   g.innerHTML = (c.previews || []).length
     ? c.previews.map((p) => `<img loading="lazy" src="${thumbUrl(p, 400)}" alt="" data-full="${thumbUrl(p, 1600)}">`).join('')
-    : '<p class="empty">Ảnh quảng cáo sẽ có khi cuốn này làm xong.</p>';
+    : `<p class="empty">Ảnh quảng cáo sẽ có khi cuốn này làm xong.</p>`;
   g.querySelectorAll('img').forEach((img) => img.addEventListener('click', () => {
     $('lightboxImg').src = img.dataset.full;
     $('lightbox').hidden = false;
@@ -430,12 +438,120 @@ function renderAccounts() {
     li.innerHTML = `
       <span class="dot ${state[1]}"></span>
       <strong>${esc(acc.name)}</strong>
-      <span class="muted">${state[0]}</span>
+      <span class="muted">${state[0]}${acc.email ? ` · ${esc(acc.email)}` : ''}</span>
       <span class="grow"></span>`;
     li.appendChild(button(acc.has_session ? 'Đăng nhập lại' : 'Đăng nhập', 'btn-small', () => loginAccount(acc.name)));
     li.appendChild(button('Xoá', 'btn-small btn-danger-ghost', () => deleteAccount(acc.name)));
     ul.appendChild(li);
   });
+}
+
+// Đăng nhập hàng loạt: mỗi dòng email|mật khẩu|mã 2FA; máy chủ mở mỗi tài khoản một Chrome, tự điền form.
+const BULK_LABEL = {
+  pending: 'Chờ', running: 'Đang đăng nhập', done: 'Xong', failed: 'Lỗi', needs_human: 'Cần bạn xác minh',
+};
+let bulkPoll = null;
+let bulkSkipped = [];                                  // dòng bị bỏ qua (email đã có, trùng, sai định dạng...)
+
+async function startBulkLogin() {
+  const box = $('bulkCreds');
+  const creds = box.value.trim();
+  if (!creds) return;
+  $('btnBulkGo').disabled = true;
+  try {
+    const res = await api('/api/accounts/bulk-login', { creds });
+    box.value = '';                                   // xoá mật khẩu khỏi màn hình ngay
+    bulkSkipped = res.skipped || [];
+    renderBulk(res.items || []);
+    clearInterval(bulkPoll);
+    bulkPoll = setInterval(pollBulk, 2000);
+  } catch (err) {
+    toast(err.message, 'error');
+    $('btnBulkGo').disabled = false;
+  }
+}
+
+async function pollBulk() {
+  const d = await api('/api/accounts/bulk-login/status').catch(() => null);
+  if (!d) return;
+  renderBulk(d.items || []);
+  if (!d.active) {
+    clearInterval(bulkPoll);
+    $('btnBulkGo').disabled = false;
+    const ok = (d.items || []).filter((i) => i.status === 'done').length;
+    toast(`Đăng nhập xong ${ok}/${(d.items || []).length} tài khoản.`, ok ? 'success' : 'error', 8000);
+    loadAccounts();
+  }
+}
+
+function renderBulk(items) {
+  $('bulkList').innerHTML = items.map((it) => {
+    const st = it.needs_human ? 'needs_human' : it.status;
+    const cls = st === 'done' ? 'ok' : st === 'failed' ? 'bad' : 'warn';
+    return `<li><span class="dot ${cls}"></span><strong>${esc(it.profile)}</strong>
+      <span class="muted grow">${esc(it.email)}</span>
+      <span class="pill ${st === 'done' ? 'done' : st === 'failed' ? 'error' : 'pending'}">${BULK_LABEL[st] || st}</span>
+      ${it.error && st !== 'done' ? `<span class="why">${esc(it.error)}</span>` : ''}</li>`;
+  }).join('') + bulkSkipped.map((why) =>
+    `<li><span class="dot"></span><span class="muted grow">${esc(why)}</span><span class="pill">Bỏ qua</span></li>`).join('');
+}
+
+// ---- Cloudflare R2 + CSV sản phẩm -------------------------------------------------------------
+async function openR2() {
+  const d = await api('/api/r2').catch(() => ({}));
+  $('r2Account').value = d.account_id || '';
+  $('r2Key').value = d.access_key_id || '';
+  $('r2Secret').value = '';
+  $('r2Secret').placeholder = d.secret_set ? `Đã lưu (${d.secret_hint || '••••'}) - để trống để giữ` : '';
+  $('r2Bucket').value = d.bucket || '';
+  $('r2Public').value = d.public_url || '';
+  $('r2Modal').hidden = false;
+}
+
+async function saveR2() {
+  try {
+    await api('/api/r2', {
+      account_id: $('r2Account').value, access_key_id: $('r2Key').value, secret_access_key: $('r2Secret').value,
+      bucket: $('r2Bucket').value, public_url: $('r2Public').value,
+    });
+    $('r2Secret').value = '';
+    $('r2Modal').hidden = true;
+    toast('Đã lưu khoá R2.', 'success');
+  } catch (err) {
+    toast(err.message, 'error');
+  }
+}
+
+async function runShop() {
+  const btn = $('btnShop');
+  btn.disabled = true;
+  const box = $('shopResult');
+  box.hidden = false;
+  box.textContent = 'Đang đẩy lên R2…';
+  try {
+    const data = await api('/api/action', { action: 'shop', params: {} });
+    const poll = setInterval(async () => {
+      const t = await api(`/api/task?id=${data.task_id}`).catch(() => null);
+      if (!t) return;
+      const logs = t.logs || [];
+      const up = logs.filter((l) => l.includes('↑')).length;
+      if (t.status === 'running') { box.textContent = `Đang đẩy lên R2… ${up} file`; return; }
+      clearInterval(poll);
+      btn.disabled = false;
+      const err = logs.find((l) => l.startsWith('✘'));
+      const summary = logs.find((l) => l.startsWith('Đã đẩy lên R2')) || '';
+      const csvLine = logs.find((l) => l.startsWith('CSV: ')) || '';
+      const csvPath = csvLine.slice(5).trim();
+      const rel = csvPath.includes('projects') ? csvPath.slice(csvPath.indexOf('projects')).split(String.fromCharCode(92)).join('/') : '';
+      box.innerHTML = t.status === 'success'
+        ? `${esc(summary)}${rel ? ` · <a href="${fileUrl(rel)}" download="${esc(rel.split('/').pop())}">Tải CSV</a>` : ` · ${esc(csvPath)}`}`
+        : `<span class="why">${esc(err || 'Có lỗi, xem Chi tiết.')}</span>`;
+      if (t.status !== 'success' && /khoá R2/.test(err || '')) openR2();
+    }, 2000);
+  } catch (err) {
+    btn.disabled = false;
+    box.textContent = err.message;
+  }
 }
 
 async function addAccount() {

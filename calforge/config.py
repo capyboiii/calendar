@@ -15,19 +15,22 @@ DEFAULTS = {
     "projects_dir": "projects",
     "angles_per_keyword": 1,
     "auto_pick": 1,
-    "batch_retry_wait_s": 300,   # vòng vét cuối batch: chờ tài khoản ChatGPT hồi lượt rồi làm lại cuốn dở
+    "batch_retry_wait_s": 300,
+    "quota_wait_s": 1800,        # cả 5 tài khoản hết lượt: tạm dừng batch, cứ bấy nhiêu giây thử lại một lần
+    "quota_max_wait_h": 24,      # chờ tối đa bấy nhiêu giờ cho một chỗ kẹt rồi mới coi là hỏng   # vòng vét cuối batch: chờ tài khoản ChatGPT hồi lượt rồi làm lại cuốn dở
     "max_repairs": 2,
-    "chatgpt_automation_dir": "C:/Users/Admin/Desktop/chatgpt-automation",
+    "profiles_dir": None,        # thư mục Chrome profile ChatGPT RIÊNG của calforge; None = <repo>/.chrome-profiles
+    "chatgpt_automation_dir": "",  # chỉ dùng cho lệnh plan/import (đường vòng CSV); KHÔNG dùng chung tài khoản
     "llm": {
         "backend": "chatgpt_web",
         "profile": None,           # đặt tên để cố định 1 tài khoản; None = xoay vòng "profiles"
-        "profiles": ["acc2", "acc3", "acc4", "acc5", "acc1"],
-        "headless": False,
+        "profiles": None,          # None = mọi profile (acc1 cuối) -> tài khoản mới đăng nhập hàng loạt tự được dùng
+        "headless": "hidden",      # "hidden" = Chrome chạy ngầm ngoài màn hình; False = hiện cửa sổ; True = headless
         "timeout_s": 600,
     },
     "imagegen": {
-        "profiles": None,          # None = mọi profile trong chatgpt-automation/.chrome-profiles
-        "headless": False,
+        "profiles": None,          # None = mọi profile trong profiles_dir
+        "headless": "hidden",      # "hidden" = Chrome chạy ngầm ngoài màn hình; False = hiện cửa sổ; True = headless
         "timeout_s": 420,
         "max_attempts": 3,
     },
@@ -55,6 +58,25 @@ def load() -> dict:
     return cfg
 
 
+def save_section(name: str, data: dict) -> None:
+    """Ghi (gộp) một mục vào calforge.json - vd khoá R2 nhập từ UI. File này đã gitignore."""
+    user = json.loads(CONFIG_FILE.read_text(encoding="utf-8")) if CONFIG_FILE.exists() else {}
+    user[name] = {**(user.get(name) or {}), **data}
+    CONFIG_FILE.write_text(json.dumps(user, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def get_profiles_dir(cfg: dict | None = None) -> Path:
+    """Thư mục Chrome profile (tài khoản ChatGPT) của calforge - mọi bước lấy ở đây, tách riêng khỏi
+    chatgpt-automation để hai tool chạy song song không khoá profile / không ăn hạn mức của nhau."""
+    cfg = cfg if cfg is not None else load()
+    raw = cfg.get("profiles_dir") or (cfg.get("llm") or {}).get("profiles_dir")
+    d = Path(raw) if raw else ROOT / ".chrome-profiles"
+    if not d.is_absolute():
+        d = ROOT / d
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
 def make_backend(cfg: dict):
     llm = cfg["llm"]
     if llm["backend"] == "manual":
@@ -62,7 +84,7 @@ def make_backend(cfg: dict):
         return ManualBackend()
     if llm["backend"] == "chatgpt_web":
         from .llm.chatgpt_web import ChatGPTWebBackend
-        profiles_dir = llm.get("profiles_dir") or str(Path(cfg["chatgpt_automation_dir"]) / ".chrome-profiles")
+        profiles_dir = str(get_profiles_dir(cfg))
         # "profiles": danh sách xoay vòng; "profile" (cũ) = một tài khoản cố định
         profiles = llm.get("profiles") or ([llm["profile"]] if llm.get("profile") else None)
         return ChatGPTWebBackend(profiles_dir, profiles, llm.get("headless", False), llm.get("timeout_s", 600),

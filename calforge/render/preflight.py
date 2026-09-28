@@ -35,7 +35,7 @@ def check_page(page: Page, fmt: dict) -> list[str]:
         if pt < fmt["min_text_pt"] - 0.05:
             issues.append(f"{tag} cỡ {pt:.1f}pt < {fmt['min_text_pt']}pt")
     # chữ đè chữ (vd tên lễ dài chạm số ngày)
-    texts = page.texts()
+    texts = [t for t in page.texts() if t.role != "month numeral"]   # số tháng mờ cố ý nằm SAU tên tháng
     for i in range(len(texts)):
         for j in range(i + 1, len(texts)):
             a, b = texts[i].bbox(), texts[j].bbox()

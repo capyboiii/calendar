@@ -14,24 +14,8 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def get_profiles_dir(cfg: dict | None = None) -> Path:
-    """Xác định thư mục chứa các Chrome profile."""
-    if cfg is None:
-        cfg = config.load()
-    llm = cfg.get("llm") or {}
-    pdir = llm.get("profiles_dir")
-    if pdir and Path(pdir).exists():
-        return Path(pdir)
-
-    auto_dir = cfg.get("chatgpt_automation_dir")
-    if auto_dir:
-        p = Path(auto_dir) / ".chrome-profiles"
-        if p.exists():
-            return p
-
-    # Mặc định tạo thư mục .chrome-profiles ở gốc workspace
-    local = ROOT / ".chrome-profiles"
-    local.mkdir(parents=True, exist_ok=True)
-    return local
+    """Thư mục Chrome profile của calforge (riêng, không dùng chung chatgpt-automation): config.get_profiles_dir."""
+    return config.get_profiles_dir(cfg)
 
 
 def is_profile_locked(profile_dir: Path) -> bool:
@@ -78,6 +62,8 @@ def list_accounts(cfg: dict | None = None) -> list[dict[str, Any]]:
     last_used = rot_data.get("last")
     counts = rot_data.get("count", {})
 
+    from .bulk_login import _emails
+    emails = _emails()
     accounts = []
     for d in sorted(pdir.iterdir()):
         if not d.is_dir() or d.name.startswith("."):
@@ -95,6 +81,7 @@ def list_accounts(cfg: dict | None = None) -> list[dict[str, Any]]:
             "use_count": counts.get(d.name, 0),
             "is_last_used": (d.name == last_used),
             "modified_at": time.strftime("%Y-%m-%d %H:%M", time.localtime(mtime)),
+            "email": emails.get(d.name, ""),
         })
 
     return accounts

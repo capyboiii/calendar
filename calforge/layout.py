@@ -1,6 +1,6 @@
 """Cấu trúc thư mục - mọi module lấy đường dẫn ở đây, không tự ghép tên thư mục.
 
-    projects/<chủ đề>/
+    projects/<Wall Calendar (Blank) | Wall Calendar>/<chủ đề>/
       Plants of Scripture/          một cuốn = tên cuốn lịch (mã góc tiếp cận nằm trong _he_thong/angle_id.txt)
       Walk by Faith/
       Báo cáo batch.md              kết quả batch gần nhất: cuốn nào xong, dừng ở đâu, vì sao
@@ -10,8 +10,8 @@ Mở một cuốn ra, người không rành kỹ thuật chỉ thấy 3 thứ:
 
     <cuốn>/
       preview/      5 ảnh quảng cáo (listing)
-      11x8.5/       26 trang upload Printify + PDF in tại nhà
-      14x11.5/      26 trang upload Printify + PDF in tại nhà
+      11x8.5/       trang upload Printify + PDF in tại nhà (26 trang; lịch grid in sẵn: 14)
+      14x11.5/      như trên, khổ 14x11.5
       _he_thong/    (ẩn) concept/listing/status, ảnh AI gốc, ảnh upscale, báo cáo kỹ thuật...
 
 File trung gian (ảnh cắt tạm, PDF vector để xuất PNG) chỉ nằm trong thư mục tạm lúc render rồi xoá.
@@ -29,7 +29,9 @@ RAW = f"{SYSTEM}/anh_ai"                # ảnh ChatGPT gốc (+ anchor_swatch, 
 FINAL = f"{SYSTEM}/anh_upscale"         # ảnh đã phóng to để in
 TECH = f"{SYSTEM}/ky_thuat"             # jobs, báo cáo render, kiểm tra lịch, palette, QC, ảnh bị loại
 LISTING = "preview"
-PRINT = {"printify_wall_11x8_5": "11x8.5", "printify_wall_14x11_5": "14x11.5"}
+PRINT = {"printify_wall_11x8_5": "11x8.5", "printify_wall_14x11_5": "14x11.5",
+         # lịch grid in sẵn (calforge/products.py): cùng khổ, cùng tên thư mục ra
+         "premade_wall_11x8_5": "11x8.5", "premade_wall_14x11_5": "14x11.5"}
 SIZE_LABEL = dict(PRINT)
 
 
@@ -54,8 +56,9 @@ def is_book(c: Path) -> bool:
 
 
 def books(projects_root: Path) -> list[Path]:
-    """Mọi cuốn lịch: projects/<keyword>/<cuốn>/."""
-    return sorted(f.parent.parent for f in projects_root.glob(f"*/*/{SYSTEM}/concept.json"))
+    """Mọi cuốn lịch dưới projects_root (projects/<loại lịch>/<chủ đề>/<cuốn>/ hoặc cấu trúc cũ ít cấp hơn)."""
+    return sorted({f.parent.parent for f in Path(projects_root).rglob("concept.json")
+                   if f.parent.name == SYSTEM and not f.parent.parent.name.startswith((".", "_"))})
 
 
 def raw(c: Path) -> Path:

@@ -63,21 +63,47 @@ MOCKUPS = {
     "wall_spread": dict(file="wall_spread.webp", seam="band", metal=10, metal_thr=32, edges="geo", sheets=[
         dict(month=2, kind="spread", lines=box((528, 197), (872, 197), (872, 735), (528, 735))),
     ]),
-    # lịch để bàn nhìn chéo: chỉ trang tranh (lò xo + móc treo ở mép trên giữ từ mockup)
     # treo tường, tay đang lật trang dưới: tranh T1 trên, lịch T1 trên trang cong, lịch T2 lộ ra phía sau
     "wall_page_turn": dict(file="wall_page_turn.webp", curl=True, month=1,
                            sheets=[dict(kind="curl", month=1)],         # dùng: tranh T1, lịch T1, lịch T2
                            top=[(426, 127), (922, 122), (922, 533), (426, 533)],
                            front=[(426, 533), (923, 533), (923, 946), (410, 946)],
                            back=[(426, 533), (923, 533), (922, 949), (426, 930)]),
-    "desk_page": dict(file="desk_page.webp", edges="geo", sheets=[
-        dict(month=3, kind="page",
-             lines=dict(top=[(361, 231), (1145, 199)], right=[(1145, 199), (1202, 769)],
-                        bottom=[(450, 825), (700, 805), (1000, 789), (1150, 772)],   # đo độ sáng giấy (hơi cong)
-                        left=[(376, 500), (385, 650), (391, 780), (394, 815)]),
-             cutouts=[(767, 222, 20)],                       # khe treo bán nguyệt ở mép trên
-             metal=30,                                       # lò xo sắt đè lên 30px đầu trang: giữ nguyên sắt
-             paper_sides=("bottom", "left")),                # giáp bàn gỗ / cạnh xấp giấy xám: cắt theo giấy thật
+    # ---- lịch grid in sẵn (products.wall_premade): trang grid đã in sẵn trong mockup, chỉ ghép tranh tháng
+    # vào trang trống phía trên lò xo (lò xo ở MÉP DƯỚI trang tranh: metal_edge="bottom"). Mép đo bằng gradient
+    # (mép giấy) + tâm dải lò xo, 28/09/2026.
+    "premade_wall_straight": dict(file="premade_wall_straight.webp", edges="geo", sheets=[
+        dict(month=1, kind="page", lines=box((331.0, 91.7), (943.0, 89.6), (943.0, 581.6), (331.0, 581.3)),
+             metal=16, metal_thr=18, metal_edge="bottom", through=[(631, 100, 11)]),      # đinh treo đồng
+    ]),
+    "premade_wall_angled": dict(file="premade_wall_angled.webp", edges="geo", sheets=[
+        dict(month=9, kind="page", lines=box((372.4, 79.3), (879.5, 140.7), (881.8, 586.0), (371.6, 580.6)),
+             metal=16, metal_thr=18, metal_edge="bottom", through=[(636, 117, 9)]),
+    ]),
+    "premade_three_spreads": dict(file="premade_three_spreads.webp", edges="geo", grow=1.2, sheets=[
+        dict(month=1, kind="page", lines=box((244.8, 177.6), (597.8, 306.7), (493.5, 589.2), (141.3, 460.4)),
+             metal=14, metal_thr=18, metal_edge="bottom"),
+        dict(month=3, kind="page", lines=box((652.1, 188.1), (1015.0, 57.8), (1114.2, 344.8), (751.6, 473.8)),
+             metal=14, metal_thr=18, metal_edge="bottom"),
+        dict(month=2, kind="page", metal=14, metal_thr=18, metal_edge="bottom",          # tờ tháng 2 nằm trên cùng
+             lines=dict(top=[(500, 608), (530, 605), (560, 602), (590, 599), (620, 597), (650, 594), (680, 591),
+                             (710, 588), (740, 585), (770, 583)],                         # đo tay từng cột
+                        right=[(818.7, 582.5), (845.5, 864.2)], bottom=[(478.7, 898.9), (845.5, 864.2)],
+                        left=[(456.7, 610.3), (478.7, 898.9)])),
+    ]),
+    # 2 cuốn gập (bìa trước + trang grid tháng 1), lò xo mép trên: mép trên = hàng lỗ đột (dời lên 5px cho phủ
+    # kín giấy). Mép "geo": nền sáng gần bằng giấy, cắt theo màu giấy sẽ để lại viền trắng.
+    # Mép trên = mép giấy thật (vạch sáng ngay trên hàng lỗ đột, dò theo bước nhảy độ sáng từng cột): tranh in tới sát
+    # mép; mỗi vòng dây = 1 cột từ mép giấy xuống đáy lỗ đột, giữ nguyên mockup (metal_mode="loops"); khe giữa các
+    # vòng in tranh; nền phía trên mép không bị phủ.
+    "premade_two_closed": dict(file="premade_two_closed.webp", edges="geo", grow=0.6, metal=14, metal_mode="loops",
+                               sheets=[
+        dict(source="front_cover", kind="page",
+             lines=dict(top=[(121.0, 222.8), (658.8, 139.0)], right=[(658.8, 148.1), (729.7, 574.1)],
+                        bottom=[(192.5, 660.4), (729.7, 574.1)], left=[(121.0, 232.2), (192.5, 660.4)])),
+        dict(source="m01_grid", kind="page",
+             lines=dict(top=[(575.1, 640.9), (1124.9, 667.1)], right=[(1124.9, 664.1), (1107.5, 1099.8)],
+                        bottom=[(553.8, 1069.0), (1107.5, 1099.8)], left=[(575.1, 650.9), (553.8, 1069.0)])),
     ]),
 }
 
@@ -104,6 +130,35 @@ def poly_mask(q, shape, erode=0):
     return cv2.erode(m, np.ones((erode, erode), np.uint8)) if erode else m
 
 
+def _loop_columns(g0: np.ndarray, quad: np.ndarray, bottom: bool, depth: float, shape) -> np.ndarray:
+    """Mặt nạ các vòng lò xo nằm trên mặt giấy (ở độ phân giải SCALE). Mỗi lỗ đột (đốm tối gần mép lò xo) sinh 1 cột:
+    từ mép giấy tới đáy lỗ, rộng bằng lỗ (+1px). Trong cột giữ nguyên mockup (dây kim loại đặc + lỗ); ngoài cột là
+    giấy -> in tranh. Tránh cắt theo ngưỡng màu, vốn để lại cục giấy trắng giữa các vòng dây."""
+    a0, a1, inner = (quad[3], quad[2], quad[0]) if bottom else (quad[0], quad[1], quad[3])
+    d = (a1 - a0) / np.linalg.norm(a1 - a0)
+    n = np.float32([-d[1], d[0]])
+    if np.dot(inner - a0, n) < 0:
+        n = -n
+    ys, xs = np.mgrid[0:g0.shape[0], 0:g0.shape[1]]
+    along = (xs - a0[0]) * d[0] + (ys - a0[1]) * d[1]
+    inward = (xs - a0[0]) * n[0] + (ys - a0[1]) * n[1]
+    L = float(np.linalg.norm(a1 - a0))
+    band = (inward > -2) & (inward < depth) & (along > -4) & (along < L + 4)
+    local = cv2.medianBlur(g0, 21).astype(np.float32)
+    dark = ((local - g0.astype(np.float32) > 60) & band).astype(np.uint8)
+    cnt, lab, stats, _ = cv2.connectedComponentsWithStats(dark, connectivity=8)
+    mask = np.zeros(shape, np.uint8)
+    for i in range(1, cnt):
+        if not 4 <= stats[i, cv2.CC_STAT_AREA] <= 200:
+            continue
+        k = lab == i
+        u, v = along[k], inward[k]
+        u0, u1, v1 = float(u.min()) - 1.0, float(u.max()) + 1.0, float(v.max()) + 0.8
+        corners = [a0 + d * u0 + n * -1.5, a0 + d * u1 + n * -1.5, a0 + d * u1 + n * v1, a0 + d * u0 + n * v1]
+        cv2.fillPoly(mask, [np.round(np.float32(corners) * SCALE + (SCALE - 1) / 2).astype(np.int32)], 255)
+    return cv2.GaussianBlur(mask.astype(np.float32) / 255, (0, 0), 0.8)
+
+
 def render(name: str, pages: Path, out_path: Path, debug: bool = False) -> None:
     cfg = MOCKUPS[name]
     if cfg.get("curl"):
@@ -114,6 +169,15 @@ def render(name: str, pages: Path, out_path: Path, debug: bool = False) -> None:
     H0, W0 = g0.shape
     n = len(sheets)
     lines = [{s: fit(v) for s, v in sh["lines"].items()} for sh in sheets]
+    if cfg.get("grow"):                                    # nới mép ra ngoài vài px: hết vệt giấy mảnh ở mép
+        for sh, L in zip(sheets, lines):
+            pts = np.float32([p for v in sh["lines"].values() for p in v])
+            center = pts.mean(axis=0)
+            for side, (p0, d0) in L.items():
+                nrm = np.float32([-d0[1], d0[0]])
+                if np.dot(center - p0, nrm) > 0:
+                    nrm = -nrm
+                L[side] = (p0 + nrm * cfg["grow"], d0)
     quads = [np.float32([cross(L["left"], L["top"]), cross(L["top"], L["right"]),
                          cross(L["right"], L["bottom"]), cross(L["bottom"], L["left"])]) for L in lines]
 
@@ -271,22 +335,36 @@ def render(name: str, pages: Path, out_path: Path, debug: bool = False) -> None:
             hole = np.clip((paper - sh.get("cutout_thr", 50) - cv2.GaussianBlur(gray, (0, 0), 0.8)) / 15, 0, 1)                 * (ring > 0)
             alpha = alpha * (1 - hole)
         # lò xo sắt nằm ĐÈ lên giấy: trong dải lò xo, chỗ mockup khác hẳn màu giấy là sắt/lỗ -> giữ nguyên
+        highlight = None
         if sh.get("metal") or cfg.get("metal"):
             depth = (sh.get("metal") or cfg.get("metal")) * SCALE
             if sh["kind"] == "spread":
                 sp, sdir = up([seams[k][0]])[0], seams[k][1]
                 near = np.abs((xx - sp[0]) * -sdir[1] + (yy - sp[1]) * sdir[0]) < depth
             else:
-                a0, a1 = np.float32(outline[0]), np.float32(outline[1])
+                # lò xo ở mép trên trang (mặc định) hoặc mép dưới (trang tranh của tờ lịch mở, metal_edge="bottom")
+                e0, e1, inward = (3, 2, 0) if sh.get("metal_edge") == "bottom" else (0, 1, 3)
+                a0, a1 = np.float32(outline[e0]), np.float32(outline[e1])
                 d = (a1 - a0) / np.linalg.norm(a1 - a0)
                 below = (xx - a0[0]) * -d[1] + (yy - a0[1]) * d[0]
-                below = below * np.sign(np.dot(np.float32(outline[3]) - a0, np.float32([-d[1], d[0]])))
+                below = below * np.sign(np.dot(np.float32(outline[inward]) - a0, np.float32([-d[1], d[0]])))
                 near = (below > -4 * SCALE) & (below < depth)
             local_paper = cv2.medianBlur(np.clip(gray, 0, 255).astype(np.uint8), 31).astype(np.float32)
             # chỉ chỗ TỐI hơn giấy (sắt, lỗ); vệt sáng quanh lỗ đột là giấy -> vẫn phủ tranh
             darker = np.maximum(local_paper, paper - 6) - cv2.GaussianBlur(gray, (0, 0), 0.8)
             thr = sh.get("metal_thr", cfg.get("metal_thr", 6))    # bóng nhạt của dây < thr: vẫn phủ tranh
-            metal = cv2.GaussianBlur(np.clip((darker - thr) / 12, 0, 1) * near, (0, 0), 0.6)
+            if (sh.get("metal_mode") or cfg.get("metal_mode")) == "loops":
+                cols = _loop_columns(g0, np.float32(outline) / SCALE, sh.get("metal_edge") == "bottom",
+                                     (sh.get("metal") or cfg.get("metal")), (H, W))
+                # trong cột: sợi dây = viền xám TỐI hơn giấy (lấp lõi trắng giữa 2 viền bằng đóng hình thái), lỗ = tối
+                # hẳn. Giấy sáng quanh lỗ / giữa 2 sợi -> in tranh (giấy thật in tràn tới mép lỗ).
+                g_bl = cv2.GaussianBlur(gray, (0, 0), 0.6)
+                wire = np.clip((paper - g_bl - 35) / 12, 0, 1)                 # bóng dây (tối <35) vẫn in tranh
+                wire = cv2.morphologyEx(wire, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)))
+                wire = wire * np.clip((paper + 2 - g_bl) / 6, 0, 1)            # viền sáng quanh lỗ = giấy -> in tranh
+                metal = cols * cv2.GaussianBlur(wire, (0, 0), 0.5)
+            else:
+                metal = cv2.GaussianBlur(np.clip((darker - thr) / 12, 0, 1) * near, (0, 0), 0.6)
             alpha = alpha * (1 - metal)
         for cx, cy, r in sh.get("through", ()):                  # lỗ thủng khai báo tay: bỏ tranh cả vòng tròn
             ring = np.zeros((H, W), np.float32)
@@ -301,7 +379,10 @@ def render(name: str, pages: Path, out_path: Path, debug: bool = False) -> None:
         blur = cv2.GaussianBlur(layer, (0, 0), 1.0)
         layer = np.clip(layer * 1.45 - blur * 0.45, 0, 255)
         shade = np.clip(g_sharp / paper, 0, 1.0)[..., None]
-        out = out * (1 - alpha) + layer * shade * alpha
+        printed = layer * shade
+        if highlight is not None:
+            printed = printed + (255 - printed) * highlight
+        out = out * (1 - alpha) + printed * alpha
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     _save(out_path, out)
@@ -395,6 +476,9 @@ def _save(out_path: Path, img) -> None:
 
 # 5 ảnh preview cho listing, theo thứ tự hiển thị: bìa, tờ mở, 3 tờ trên bàn, treo tường, để bàn
 PREVIEWS = ["front_cover_spiral", "open_spread_flat", "three_open_spreads", "wall_spread", "wall_page_turn"]
+# lịch grid in sẵn: bìa (dùng lại), treo tường thẳng, treo tường chéo, 3 tờ trên bàn, 2 cuốn gập
+PREMADE_PREVIEWS = ["front_cover_spiral", "premade_wall_straight", "premade_wall_angled", "premade_three_spreads",
+                    "premade_two_closed"]
 
 
 def sheet_pages(sheet: dict) -> list[str]:
@@ -422,10 +506,18 @@ def previews(concept_dir: Path, on_event=print) -> list[Path]:
     """Tạo 5 ảnh preview từ 11x8.5/ -> preview/NN_<mockup>.jpg. Ảnh nào còn mới thì bỏ qua."""
     from .. import layout
 
+    import json
+    from .. import products
+
     pages = layout.print_dir(concept_dir)
     out_dir = layout.listing(concept_dir)
+    try:
+        concept = json.loads(layout.concept_file(concept_dir).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        concept = {}                                   # không đọc được concept: coi là lịch thường
+    names = PREVIEWS if products.ai_grid(concept) else PREMADE_PREVIEWS
     made = []
-    for i, name in enumerate(PREVIEWS, 1):
+    for i, name in enumerate(names, 1):
         out = out_dir / f"{i:02d}_{name}.jpg"
         deps = _dependencies(name, pages)
         missing = [p for p in deps if not p.is_file()]

@@ -5,3 +5,7 @@ pillow>=9
 numpy
 scipy
 fonttools
+opencv-python-headless
+boto3
+pyotp
+# torch + spandrel (upscale on NVIDIA GPU) are installed by CAI_DAT.bat only when the machine has an NVIDIA card

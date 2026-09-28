@@ -1,163 +1,113 @@
 # calendar (calforge)
 
-Tool sản xuất lịch treo tường 11×8.5" (Printify "Wall Calendars (Blank)", District Photo) + bản
-printable PDF. **Người dùng chỉ đưa keyword.** ChatGPT nghĩ ý tưởng và vẽ ảnh; code lo mọi thứ phải
-ĐÚNG (ngày, ngày lễ, lời Kinh Thánh, bố cục in, kiểm tra).
+Tool sản xuất hàng loạt lịch treo tường 11×8.5" và 14×11.5" (Printify, nhà in District Photo) kèm PDF in
+tại nhà, để bán trên Etsy/Shopify cho người mua Mỹ. **Người dùng chỉ đưa chủ đề và số cuốn.** ChatGPT nghĩ
+ý tưởng và vẽ tranh; code lo mọi thứ phải ĐÚNG (ngày, ngày lễ, lời Kinh Thánh, bố cục in, kiểm tra).
+
+Hướng dẫn cho người dùng (không cần biết kỹ thuật): **[HUONG_DAN.html](HUONG_DAN.html)** (mở bằng trình duyệt, hoặc nút *Hướng dẫn* trên UI).
+
+## Chạy nhanh
+
+Máy mới: bấm đúp **`CAI_DAT.bat`** (tự cài Python/Chrome nếu thiếu, môi trường `.venv`, thư viện, torch khi có GPU
+NVIDIA, font/KJV/mô hình, biểu tượng ngoài màn hình), sau đó mở bằng **`start_ui.bat`**. Đóng gói gửi người khác:
+`python tools/package.py` -> `dist/CalForge_Studio_<ngày>.zip` (không kèm dữ liệu riêng).
+
+Cài tay (dev):
 
 ```bash
-python -m calforge run "christian"          # keyword -> sản phẩm NHÁP trên Printify
+pip install -r requirements.txt
+python tools/fetch_assets.py          # font Google Fonts (OFL), KJV, trọng số Real-ESRGAN
+python -m calforge ui                 # mở CalForge Studio trên trình duyệt
 ```
 
-## Nguyên tắc
+Trong Studio: thêm tài khoản ChatGPT (từng cái hoặc **Đăng nhập hàng loạt**), chọn **loại lịch**, nhập
+**chủ đề** + **số cuốn**, bấm **Bắt đầu**. Có thể đóng trang, máy vẫn chạy; mở lại để xem tiến độ.
 
-1. **AI lo phần đẹp, code lo phần đúng.** Lưới ngày, ngày lễ, lời câu Kinh Thánh, kích thước in
-   không bao giờ để ChatGPT tự viết.
-2. **Mọi output của ChatGPT đều qua kiểm tra.** Concept sai thì tool gửi danh sách lỗi cho ChatGPT
-   sửa (P3); ảnh sai tỉ lệ/kích thước thì gen lại; trang in phải qua preflight mới được xuất.
-3. **Ổ đĩa là sổ tiến độ.** Mỗi câu hỏi/đáp, mỗi ảnh, mỗi lần upload là một file; chạy lại thì đi
-   tiếp từ chỗ dừng, không hỏi lại, không tốn lượt.
-4. **Không tự làm việc không đảo ngược được.** Printify chỉ tạo sản phẩm NHÁP; publish phải có `--publish`.
+## Hai loại lịch (`calforge/products.py`)
+
+| Loại | Máy làm | Trang in mỗi khổ | Preview |
+|---|---|---|---|
+| `wall_grid` (mặc định) | ý tưởng, tranh, **nền grid AI** + lịch ngày do code dựng | 26 | 5 mockup |
+| `wall_premade` | ý tưởng, tranh; trang grid lấy mẫu có sẵn `formats/premade_wall_*/grids/` | 26 (14 nếu chưa có grid) | 5 mockup riêng |
+
+Trang grid in sẵn năm khác: `python tools/make_premade_grids.py 2028`.
 
 ## Dây chuyền
 
 ```
-keyword
- ├─ 1. Ý tưởng     P1 góc tiếp cận -> chọn góc -> P2 concept (+ dữ kiện lịch do code tính)
- │                  -> kiểm tra -> P3 sửa lỗi -> concept.json            [ChatGPT web, acc chữ]
-├─ 2. Gen ảnh     ảnh neo trước -> bìa AI có typography + 12 tháng + họa tiết song song,
-│                  mỗi job 1 chat, đính ảnh neo
- │                  -> kiểm tra tỉ lệ/kích thước, so màu với ảnh neo      [ChatGPT web, mọi acc]
- ├─ 3. Upscale     Real-ESRGAN x4 (GPU) + trộn 30% Lanczos giữ vân giấy -> art/final/
- ├─ 4. Render      bìa trước, 12 × (trang ảnh + trang lưới), bìa sau = 26 PNG 3375×2625 @300DPI
- │                  + preflight + proof đè template + PDF printable 11×8.5"
- ├─ 5. Listing     title, mô tả HTML, 13 tag (từ concept)
- └─ 6. Printify    upload 26 trang -> tạo sản phẩm NHÁP (publish chỉ khi --publish)
+chủ đề + N cuốn  (batch chia lượt tối đa 3 cuốn)
+ ├─ 1. Ý tưởng   P1 nghĩ 3×n ý (chia đều 3 style) -> P1b duyệt trùng với cả danh mục (chat riêng)
+ │               -> P2 concept 12 tháng (mỗi cuốn 1 chat) -> kiểm tra -> P3 sửa lỗi
+ ├─ 2. Gen ảnh   ảnh neo -> bìa + 12 tranh song song trên mọi tài khoản (+ nền grid AI)
+ │               upscale Real-ESRGAN chạy song song trong lúc chờ ChatGPT vẽ
+ ├─ 3. Hậu kỳ    render 2 khổ + PDF in tại nhà, 5 ảnh preview, listing, Printify (nháp)
+ │               -> chạy nền trong lúc cuốn sau gen ảnh
+ └─ Cuối batch   vòng vét cuốn dở + "Báo cáo batch.md"
 ```
 
-## Cài đặt
+- **Chống trùng** do AI làm: P1/P1b đọc "dấu vân tay" của mọi cuốn đã làm (lời hứa, thế giới cảnh, 12 cảnh).
+- **Chia đều**: style tranh (ảnh chụp / giấy cắt / poster) theo lượt; chất liệu nền grid (màu nước /
+  thủ công / laid) và 5 bố cục trang lịch (`render/grid_layouts.py`) theo danh mục, tránh khoá cặp.
+- **Cô lập lỗi**: một cuốn hỏng chỉ ghi lý do + traceback vào `status.json` của nó, batch đi tiếp.
+- **Hết lượt ChatGPT**: nhận ra qua mã HTTP 429/503 và câu thông báo (`llm/limits.py`); cả 5 tài khoản
+  hết lượt thì batch tạm dừng, thử lại mỗi `quota_wait_s` (mặc định 30 phút), tối đa `quota_max_wait_h`.
+- **Chạy lại** cùng chủ đề khi batch dở: làm nốt đúng phần còn thiếu (`_he_thong/batch.json`).
 
-```bash
-pip install -r requirements.txt
-python tools/fetch_assets.py      # font Google Fonts (OFL), KJV (31,102 câu), trọng số Real-ESRGAN
-```
+## Cấu hình
 
-Copy `calforge.example.json` thành `calforge.json` để đổi cấu hình. Các mục chính:
-- `llm.profiles`: danh sách tài khoản ChatGPT cho bước ý tưởng, **xoay vòng**: mỗi lần chạy bắt đầu
-  từ tài khoản sau tài khoản dùng lần trước; hết lượt thì tự chuyển. Cố định 1 tài khoản: `llm.profile`.
-- `imagegen.profiles`: danh sách tài khoản gen ảnh (mặc định: mọi profile trong
-  `chatgpt-automation/.chrome-profiles`). Một profile chỉ mở được ở một nơi - đừng chạy song song
-  với chatgpt-automation trên cùng tài khoản.
+Copy `calforge.example.json` thành `calforge.json` (đã gitignore). Mục chính:
+- `profiles_dir`: thư mục Chrome profile (tài khoản ChatGPT) **riêng của calforge**, mặc định `.chrome-profiles/`
+  trong repo (đã gitignore - chứa phiên đăng nhập). Không dùng chung với chatgpt-automation, nên hai tool chạy
+  song song được. `chatgpt_automation_dir` chỉ cần cho lệnh `plan`/`import` (đường vòng CSV).
+- `llm.profiles` / `imagegen.profiles`: `null` = mọi tài khoản, xoay vòng; hết lượt tự đổi.
+- `llm.headless` / `imagegen.headless`: `"hidden"` = Chrome chạy ngầm ngoài màn hình (mặc định), `false` = hiện.
+- `quota_wait_s`, `quota_max_wait_h`, `batch_retry_wait_s`: chờ khi hết lượt.
 - `printify.token` (hoặc biến môi trường `PRINTIFY_API_TOKEN`), `printify.shop_id`, `printify.price_cents`.
+
+**Tài khoản**: đăng nhập hàng loạt dán mỗi dòng `email | mật khẩu | mã 2FA`; mật khẩu chỉ nằm trong RAM,
+không ghi đĩa/log. Email đã có tài khoản thì bỏ qua. Gặp captcha thì dừng để người dùng tự xác minh.
 
 ## Lệnh
 
 ```bash
-python -m calforge run "keyword" [--pick r1a2] [--no-printify] [--publish]   # trọn gói
-python -m calforge produce <concept>                 # concept có sẵn -> sản phẩm
-
-# từng bước
-python -m calforge facts --year 2027                 # dữ kiện ngày lễ bơm vào prompt
-python -m calforge ideate "keyword" [--pick ..] [--more] [--manual]
-python -m calforge angles "keyword"                  # xem các góc đã sinh
-python -m calforge check   <concept>                 # kiểm tra lại concept.json
-python -m calforge gen     <concept> [--profiles acc2,acc3]
-python -m calforge upscale <concept>
-python -m calforge render  <concept> [--months 1,3] [--placeholder-art x.png]
-python -m calforge listing <concept>
-python -m calforge printify <concept> [--publish]
-python -m calforge plan / import <concept>           # đường vòng qua trang /csv của chatgpt-automation
-python -m calforge ui [--port 8080]                  # mở giao diện web CalForge Studio
+python -m calforge run "keyword" --auto 6 [--product wall_premade] [--no-printify] [--publish]
+python -m calforge produce <cuốn>                    # concept có sẵn -> sản phẩm
+python -m calforge ideate "keyword" [--auto N] [--more] [--manual]
+python -m calforge gen | upscale | render | listing | printify <cuốn>
+python -m calforge ui [--port 8080]
+python -m tools.verify_calendar_render <cuốn>        # đối chiếu ngày trong PDF đã xuất
 ```
 
-`<concept>` là thư mục `projects/<keyword>/<angle-id>-<slug>/`.
-
-## Thư mục project
+## Thư mục
 
 ```
-projects/<keyword>/
-  ideation/                    sổ hỏi/đáp ChatGPT: <label>.prompt.md / .response.md
-  angles.json                  mọi góc tiếp cận đã sinh
-  <angle-id>-<slug>/
-    concept.json               concept đã qua kiểm tra (+ lời câu KJV)
-    concept_report.md          cảnh báo cho người duyệt
-    jobs.json                  kế hoạch gen ảnh (anchor, cover AI, m01..m12, grid)
-    art/raw/                   ảnh ChatGPT gen (<job>.png)
-    art/final/                 ảnh đã upscale
-    art/qc.md                  kích thước + độ lệch màu so với ảnh neo
-    render/printify/           26 PNG upload Printify
-    render/proof/              tùy chọn; mặc định không tạo để render nhanh
-    render/digital/            calendar_11x8_5.pdf (printable 11×8.5")
-    render/report.md           preflight, font, ảnh
-    listing.json               title / mô tả / tag
-    printify.json              id ảnh đã upload + product_id (sổ tiến độ Printify)
-    status.json                đang ở bước nào, lỗi gì
+projects/
+ Wall Calendar (Blank)/ | Wall Calendar/   loại lịch (máy tự vẽ grid | grid in sẵn)
+ <chủ đề>/
+  <Tên cuốn>/
+    preview/        5 ảnh quảng cáo
+    11x8.5/         trang PNG upload Printify + in_tai_nha_11x8.5.pdf
+    14x11.5/        như trên
+    _he_thong/      (ẩn) concept/listing/status.json, anh_ai/, anh_upscale/, ky_thuat/
+  Báo cáo batch.md  cuốn nào xong, dừng ở bước nào, vì sao
+  _he_thong/        (ẩn) angles.json, batch.json, ideation/ (sổ hỏi/đáp ChatGPT)
 ```
 
-Fast path: Real-ESRGAN chỉ chạy cho cover + 12 artwork được in, không upscale anchor/grid.
-Render và listing được bỏ qua nếu artifact còn mới hơn concept/ảnh nguồn; preflight hình học
-vẫn luôn chạy khi cần render. Printify upload tối đa 4 trang song song và tiếp tục từ
-`printify.json` khi chạy lại.
-
-Muốn làm lại một bước: xoá file kết quả của bước đó (vd xoá `art/raw/m05.png` để gen lại tháng 5).
-
-## Style và màu
-
-- **Art direction do AI đề xuất**: P1 nghĩ chủ thể, palette, bố cục và bề mặt từ chính
-  chủ đề, người mua và cách cuốn lịch được sử dụng, sau đó thể hiện bằng đúng một trong ba medium sản xuất
-  đã duyệt: Styled photography, Layered papercut hoặc Mid-century poster. P1 được xem dấu vân
-  tay thị giác của các cuốn gần đây (medium, surface, composition) để tránh đổi tên nhưng lặp lại cùng
-  một gu. Auto-pick giữ các phương án AI-feasibility 4-5 trong nhóm chất lượng cao rồi ưu tiên họ style
-  ít dùng hơn. Vẫn có thể lọc thủ công theo nhãn bằng
-  `python -m calforge ideate "keyword" --family styled_photography`.
-- **Bố cục artwork theo từng cuốn**: P2 tạo `artwork_composition_system` riêng từ buyer và chủ đề;
-  có thể là lệch tâm, toàn cảnh, flat-lay, close crop, chuyển động chéo, pattern hoặc một hệ khác phù
-  hợp. Code chỉ giữ vùng an toàn in 80%, không còn ép mọi chủ thể vào giữa hay bắt phần trên/dưới cùng
-  một kiểu. Ảnh tham chiếu khóa medium, palette và mark-making nhưng không được sao chép viewpoint hay
-  cách đặt vật thể của ảnh neo.
-- **Color story**: P2 chọn 3-4 màu có tên riêng cho niche, style bible phải dùng chúng; cấm nền kem
-  mặc định (trừ niche vintage/giấy da).
-- **Màu trang in** (`render/palette.py`): ý đồ màu của concept + sắc độ thật lấy từ ảnh neo; chữ tự
-  đậm lên cho đủ tương phản. Ghi vào `palette.json` và `render/report.md`.
-- **Grid do AI thiết kế theo art direction của cuốn (mặc định)**: tool sinh một ảnh `grid` làm
-  nền giấy chung cho cả 12 tháng, bám ảnh neo của collection. Khi render, cùng một bố cục và họa tiết
-  được giữ xuyên suốt; code chỉ thay tên tháng, câu trích, ngày và ngày lễ. Mép họa tiết được hòa dần vào màu giấy;
-  chữ và lịch in trực tiếp lên một mặt giấy liên tục, không có card hay khung phủ lên. AI
-  **không** vẽ ô, thứ, ngày hoặc chữ vì các phần này cần chính xác tuyệt đối. Khi render,
-  AI chọn một trong năm bố cục an toàn cho từng cuốn (trái/phải, hai góc, top-center hoặc góc dưới),
-  rồi cả 12 tháng của cuốn dùng nhất quán lựa chọn đó. Ảnh nền có quá nhiều chi tiết hoặc mảng tối trong
-  vùng đặt lịch sẽ bị từ chối và sinh lại.
-  `render/pages.py` vẽ vector 7 cột và số hàng thật (4/5/6) từ lịch Gregory, đặt toàn bộ chữ/ngày
-  bằng code. Lịch mặc định 2027 lưu đủ 365 ngày trong `core/calendar_2027.py`; preflight đối chiếu
-  độc lập từng ngày với `datetime`, bắt thiếu/trùng/sai ô và chữ lễ tràn. `render/calendar_audit.json`
-  lưu kết quả theo tháng. Chạy `python -m tools.verify_calendar_render <concept-dir>` để kiểm tra
-  tiếp vị trí số ngày trong PDF đã xuất. Nền thiếu thì preflight báo thiếu, không coi cuốn là hoàn tất. Sáu layout đã duyệt
-  (`02`, `04`, `14`, `18`, `22`, `24`) vẫn chọn thủ công bằng `--grid-preset <tên>`; chế độ này
-  không cần 12 trang AI. Studio hiển thị preview của grid AI-designed và một layout thủ công.
-  CSV của `chatgpt-automation` không đính ảnh tham chiếu được, nên CSV chỉ xuất 14 artwork cơ bản;
-  ảnh `grid` được sinh sau đó bằng driver có đính ảnh neo.
+Đường dẫn lấy từ `calforge/layout.py`. Muốn làm lại một bước: xoá file kết quả của bước đó
+(vd `_he_thong/anh_ai/m05.png` để gen lại tháng 5) rồi chạy lại.
 
 ## Kiểm tra tự động
 
-- **Concept** (`ideation/validate.py`): đúng schema, 12 tháng không trùng cảnh; `holiday_tie` đúng
-  tháng theo lịch thật; mã câu KJV có thật; font trong danh sách OFL; tương phản chữ ≥ 4.5:1;
-  không chứa từ cấm (`data/banned_terms.txt`); giới hạn độ dài.
-- **Ảnh** (`imagegen/generate.py`): ngang 3:2, cạnh dài ≥ 1024; ảnh lỗi thì gen lại (tối đa 3 lần);
-  so màu với ảnh neo để gắn cờ ảnh lệch style.
-- **Trang in** (`render/preflight.py`): chữ trong lề, không chạm lò xo/lỗ treo/ô mã vạch, cỡ ≥ 6pt,
-  chữ không chồng nhau (đo theo nét thật của font), họa tiết không đè chữ, không lấn ô lưới.
+- **Concept** (`ideation/validate.py`): schema, ngày lễ đúng tháng theo lịch thật, mã câu KJV có thật,
+  font OFL, tương phản chữ ≥ 4.5:1, từ cấm (`data/banned_terms.txt`).
+- **Ảnh** (`imagegen/generate.py`): tỉ lệ/kích thước, so màu với ảnh neo, nền grid đủ sạch ở vùng đặt lịch.
+- **Trang in** (`render/preflight.py`): chữ trong lề, không chạm lò xo/lỗ treo/mã vạch, cỡ ≥ 6pt, không
+  chồng chữ; đối chiếu độc lập từng ngày với `datetime` (thiếu/trùng/sai ô).
 
-Số đo template: `formats/printify_wall_11x8_5/format.json`. Vị trí vùng in trên Printify: tool tự
-khớp theo tên; không chắc thì dừng và ghi `printify_positions.json` để điền tay.
+Số đo template: `formats/<khổ>/format.json`. Mockup preview: `render/mockups.py` + `data/mockups/`.
 
 ## Test
 
 ```bash
 python -m unittest discover -s tests -t .
 ```
-
-## Còn lại
-
-- [x] Giao diện web CalForge Studio (quản lý project, chọn/duyệt ảnh, soát proof, listing, task console)
-- [ ] Kiểm tra chữ lẫn trong ảnh (OCR)
-- [ ] Kiểm chứng tên vùng in thật của Printify (cần token) và đặt 1 cuốn in mẫu
-- [ ] Lưới cho `family_columns`, `moon_phases`, `tracker` (hiện dùng lưới chuẩn)

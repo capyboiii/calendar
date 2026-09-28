@@ -26,6 +26,8 @@ import json
 import sys
 from pathlib import Path
 
+from . import products
+
 if sys.stdout and hasattr(sys.stdout, "reconfigure"):
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -70,7 +72,8 @@ def cmd_ideate(args, cfg):
             n_angles=cfg["angles_per_keyword"], more=args.more,
             pick=args.pick.split(",") if args.pick else None,
             auto_pick=args.auto or cfg["auto_pick"], style=args.style, max_repairs=cfg["max_repairs"],
-            family=args.family, grid_preset=args.grid_preset)
+            family=args.family, grid_preset=args.grid_preset,
+            keyword_root=products.root(cfg["projects_dir"]))
     except AwaitingResponse as w:
         print("Đang chờ câu trả lời của ChatGPT (chế độ thủ công):")
         print(f"  1. Mở và copy prompt:  {w.prompt_path}")
@@ -88,7 +91,7 @@ def cmd_ideate(args, cfg):
 
 def cmd_angles(args, cfg):
     from . import layout
-    f = layout.angles_file(Path(cfg["projects_dir"]) / slugify(args.keyword))
+    f = layout.angles_file(products.root(cfg["projects_dir"]) / slugify(args.keyword))
     if not f.exists():
         sys.exit("Chưa có góc nào cho keyword này - chạy ideate trước.")
     for a in json.loads(f.read_text(encoding="utf-8")):
@@ -103,7 +106,8 @@ def cmd_import_angles(args, cfg):
     from .ideation.pipeline import import_angles
 
     data = extract_json(Path(args.file).read_text(encoding="utf-8"))
-    new, errors, warnings = import_angles(args.keyword, data, Path(cfg["projects_dir"]), args.source)
+    new, errors, warnings = import_angles(args.keyword, data, Path(cfg["projects_dir"]), args.source,
+                                         keyword_root=products.root(cfg["projects_dir"]))
     for e in errors:
         print("LỖI    ", e)
     for w in warnings:
@@ -139,6 +143,8 @@ def cmd_plan(args, cfg):
 
 def cmd_import(args, cfg):
     d = _concept_dir(args.concept)
+    if not cfg.get("chatgpt_automation_dir"):
+        sys.exit('Lệnh import cần "chatgpt_automation_dir" trong calforge.json (thư mục chatgpt-automation).')
     got = plan.import_from_automation(d, Path(cfg["chatgpt_automation_dir"]))
     print(f"Nhận {len(got)} ảnh: {', '.join(got) or '-'}")
     plan.write_plan(d)
@@ -177,7 +183,7 @@ def cmd_run(args, cfg):
 
     rows = run(args.keyword, cfg, pick=args.pick.split(",") if args.pick else None, auto_pick=args.auto,
                printify=not args.no_printify, publish=args.publish, grid_preset=args.grid_preset,
-               family=args.family)
+               family=args.family, product=args.product)
     _print_status(rows)
 
 
@@ -197,7 +203,7 @@ def cmd_gen(args, cfg):
     d = _concept_dir(args.concept)
     plan.write_plan(d)
     ig = cfg["imagegen"]
-    res = generate_concept(d, Path(ig.get("profiles_dir") or Path(cfg["chatgpt_automation_dir"]) / ".chrome-profiles"),
+    res = generate_concept(d, config.get_profiles_dir(cfg),
                            args.profiles.split(",") if args.profiles else ig.get("profiles"),
                            headless=ig.get("headless", False), timeout_s=ig.get("timeout_s", 420),
                            max_attempts=ig.get("max_attempts", 3))
@@ -225,6 +231,21 @@ def cmd_printify(args, cfg):
 
     st = create_product(_concept_dir(args.concept), cfg, publish=args.publish)
     print("product:", st.get("product_id"), "(đã publish)" if st.get("published") else "(NHÁP)")
+
+
+def cmd_shop(args, cfg):
+    from .publish.r2 import R2Error
+    from .publish.shop_csv import publish_all
+
+    try:
+        res = publish_all(cfg)
+    except R2Error as e:
+        sys.exit(f"✘ {e}")
+    print(f"Đã đẩy lên R2: {len(res['pushed'])} cuốn · xuất CSV: {len(res['exported'])} cuốn "
+          f"(trong {res['books']} cuốn đã xong)")
+    for f in res["failed"]:
+        print(f"✘ {f}")
+    print(f"CSV: {res['csv']}" if res["csv"] else "CSV: không có cuốn mới cần xuất")
 
 
 def cmd_ui(args, cfg):
@@ -326,6 +347,8 @@ def main(argv=None):
                    help="ép medium sản xuất cho toàn bộ dự án")
     p.add_argument("--grid-preset", default="auto",
                    choices=("auto", "bento_planner", "quiet_luxury", "soft_tech", "fresh_monochrome", "organic_capsules", "playful_editorial"))
+    p.add_argument("--product", default="wall_grid", choices=("wall_grid", "wall_premade"),
+                   help="loại lịch: wall_grid (máy thiết kế grid) hoặc wall_premade (grid in sẵn, không gen grid)")
     p.add_argument("--no-printify", action="store_true", help="dừng ở file in + listing")
     p.add_argument("--publish", action="store_true", help="publish sang cửa hàng (mặc định chỉ tạo NHÁP)")
     p.set_defaults(func=cmd_run)
@@ -351,6 +374,9 @@ def main(argv=None):
     p.add_argument("concept")
     p.add_argument("--publish", action="store_true")
     p.set_defaults(func=cmd_printify)
+
+    p = sub.add_parser("shop", help="đẩy các cuốn đã xong lên R2 + xuất CSV sản phẩm cho cuốn chưa xuất")
+    p.set_defaults(func=cmd_shop)
 
     p = sub.add_parser("ui", help="mở giao diện web CalForge Studio")
     p.add_argument("--port", type=int, default=8080, help="cổng mạng (mặc định 8080)")

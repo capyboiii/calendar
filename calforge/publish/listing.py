@@ -21,6 +21,9 @@ def build_listing(concept: dict) -> dict:
     e = html.escape
     months = concept["months"]
     kjv = concept.get("content_type") == "bible_verse_kjv"
+    from .. import products
+    premade = not products.ai_grid(concept)   # grid in sẵn: không có câu Kinh Thánh / chức năng grid riêng
+    kjv = kjv and not premade
     items = []
     for i, m in enumerate(months):
         extra = f" — {e(m['content']['value'])} (KJV)" if kjv else ""
@@ -32,6 +35,7 @@ def build_listing(concept: dict) -> dict:
         f"for every month.</p>",
         "<p><strong>What's inside</strong></p><ul>",
         "<li>12 full-page original artworks, one for each month</li>",
+        "<li>A monthly date grid for every month</li>" if premade else
         f"<li>Monthly grid with US holidays and {feature}</li>",
         "<li>King James Version scripture for each month</li>" if kjv else "",
         "<li>Front cover and a back cover with all 12 artworks</li></ul>",

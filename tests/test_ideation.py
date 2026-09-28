@@ -628,3 +628,25 @@ class StyleSplitTest(unittest.TestCase):
         self.assertIn("STYLE SPLIT", fake.prompts[2][1])
         self.assertIn("allows at most 1", fake.prompts[3][1])                # P1b chọn lệch -> bắt sửa
         self.assertEqual(sorted(fams), sorted(ids))                           # 3 cuốn = 3 style khác nhau
+
+
+class GridLayoutRotationTest(unittest.TestCase):
+    def test_layouts_spread_evenly_and_avoid_bad_pairs(self):
+        from calforge.imagegen import prompts
+        from calforge.render import grid_layouts as gl
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            picks = []
+            for i in range(15):
+                mat = prompts.next_grid_material(root)
+                lay = gl.next_grid_layout(root, mat)
+                picks.append((mat, lay))
+                c = fixtures.concept()
+                c["style"].update(grid_material=mat, grid_layout=lay)
+                d = root / "kw" / f"b{i}" / "_he_thong"
+                d.mkdir(parents=True)
+                (d / "concept.json").write_text(json.dumps(c), encoding="utf-8")
+        counts = {k: sum(l == k for _, l in picks) for k in gl.ROTATION}
+        self.assertLessEqual(max(counts.values()) - min(counts.values()), 1)       # 15 cuốn -> mỗi bố cục ~3
+        self.assertFalse([p for p in picks if p[1] in gl.AVOID.get(p[0], ())])     # không có cặp hợp kém
+        self.assertGreater(len(set(picks)), 5)                                       # không khoá cặp chất liệu-bố cục

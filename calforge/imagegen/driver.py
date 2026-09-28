@@ -28,14 +28,7 @@ SEL_SEND = ['button[data-testid="send-button"]', 'button[aria-label*="Send" i]']
 # tưởng chưa có ảnh và gen lại nhiều lần dù ChatGPT đã gen xong.
 MIN_SIDE = 768  # ảnh gen thật cạnh dài >= 1024; icon/nền giao diện <= 512 -> loại
 
-QUOTA_PAT = ("reached your limit", "reached the limit", "hit your limit", "limit for image",
-             "image generation limit", "you can create more images", "able to create images again",
-             "out of image generation", "out of image", "please try again in", "try again in ",
-             "usage limit", "rate limit", "too many requests", "đã đạt giới hạn", "hết lượt")
-REFUSE_PAT = ("i can't help with that", "i cannot help with that", "i'm unable to create", "i can't create",
-              "i cannot create", "i'm not able to generate", "content policy", "usage policies", "violates")
-TEMP_PAT = ("something went wrong", "an error occurred", "error generating", "network error",
-            "please try again", "try again later", "unable to generate", "wasn't able to generate")
+from ..llm.limits import QUOTA_PAT, REFUSE_PAT, TEMP_PAT, RateWatch, classify, page_notice  # noqa: E402,F401
 
 STATE_JS = """() => {
   const pick = (s) => Array.from(document.querySelectorAll(s));
@@ -73,7 +66,8 @@ STATE_JS = """() => {
     if (src) pageImgs.push({src, w: im.naturalWidth, h: im.naturalHeight, done: im.complete});
   }
   const tail = (last ? last.innerText : '') + ' ' +
-    pick('[role="dialog"], [role="alert"], .toast-root').map((e) => e.innerText).join(' ');
+    pick('[role="dialog"], [role="alert"], [role="status"], .toast-root, [data-testid*="toast" i], [class*="toast" i]')
+      .filter((e) => e.getBoundingClientRect().width > 0).map((e) => e.innerText).join(' ');
   return {assistant: a.length, user: u.length, busy, pending, imgs, pageImgs, tail: tail.slice(-1500)};
 }"""
 
@@ -149,14 +143,6 @@ def _sent(st: dict, before: dict) -> bool:
 def _new_images(st: dict, before: dict) -> list[dict]:
     """Ảnh lớn đã tải xong trong khung trả lời cuối."""
     return [im for im in st["imgs"] if max(im["w"], im["h"]) >= MIN_SIDE and im["done"]]
-
-
-def classify(text: str) -> str:
-    low = " ".join((text or "").lower().split())
-    for pats, kind in ((QUOTA_PAT, "quota"), (REFUSE_PAT, "refused"), (TEMP_PAT, "error")):
-        if any(p in low for p in pats):
-            return kind
-    return ""
 
 
 @dataclass
@@ -246,12 +232,25 @@ class _Worker:
                 continue
         else:
             box.press("Enter")
-        deadline = time.monotonic() + 30
+        sent_at = time.monotonic()
+        deadline = sent_at + 30
         while not _sent(_eval(page, STATE_JS), before):
+            limited = self._limited(page, sent_at)
+            if limited:
+                raise QuotaExceeded(f"chặn lúc gửi: {limited}")
             if time.monotonic() > deadline:
                 raise TempError("gửi tin nhắn không đi")
             page.wait_for_timeout(400)
         return before
+
+    def _limited(self, page, since: float) -> str | None:
+        """Bị giới hạn (mạng 429/503 hoặc hộp thoại/banner báo hết lượt/quá tải) kể từ mốc since."""
+        watch = getattr(page, "_calforge_rate", None)
+        hit = watch.recent(since) if watch else None
+        if hit:
+            return hit
+        notice = page_notice(page)
+        return notice[-200:] if notice and classify(notice) == "quota" else None
 
     def _wait_image(self, page, before: dict) -> str:
         """Chờ đến khi có ảnh lớn trong lượt trả lời mới và ảnh đứng yên settle_s giây."""
@@ -273,6 +272,10 @@ class _Worker:
                 big = [im for im in st.get("pageImgs", []) if im["src"] not in old_srcs
                        and max(im["w"], im["h"]) >= MIN_SIDE and im["done"]]
                 new_turn = new_turn or bool(big)
+            if not big:                      # banner/hộp thoại/429 báo giới hạn giữa chừng -> nghỉ tài khoản
+                limited = self._limited(page, start)
+                if limited and not drawing:
+                    raise QuotaExceeded(limited)
             if new_turn or st.get("busy") or drawing:
                 progressed = True
             elif not progressed and time.monotonic() - start > no_progress:
@@ -301,6 +304,8 @@ class _Worker:
         raise TempError(f"quá {self.timeout_s:.0f}s chưa ra ảnh")
 
     def run_job(self, page, job: GenJob) -> Path:
+        if not hasattr(page, "_calforge_rate"):
+            page._calforge_rate = RateWatch(page)          # theo dõi 429/503 của trang (gắn 1 lần)
         page.goto(URL, wait_until="domcontentloaded", timeout=90_000)
         self._find(page, SEL_PROMPT, 60_000)
         self._attach(page, job.attach)
@@ -348,11 +353,14 @@ def run_jobs(jobs: list[GenJob], profiles_dir: Path, profiles: list[str], *, hea
         w = _Worker(udir, headless, timeout_s)
         try:
             with sync_playwright() as pw:
+                from ..llm.browser import launch_options
                 ctx = pw.chromium.launch_persistent_context(
-                    str(udir), headless=headless, channel="chrome", viewport={"width": 1400, "height": 950},
-                    args=["--disable-blink-features=AutomationControlled",
-                          "--disable-backgrounding-occluded-windows", "--disable-renderer-backgrounding"])
+                    str(udir), channel="chrome", viewport={"width": 1400, "height": 950},
+                    **launch_options(headless))
                 page = ctx.pages[0] if ctx.pages else ctx.new_page()
+                if headless in ("hidden", None):
+                    from ..llm.browser import hide_offscreen_from_taskbar
+                    hide_offscreen_from_taskbar()           # Chrome ngầm: không hiện biểu tượng dưới thanh tác vụ
                 try:
                     while True:
                         with lock:
@@ -447,6 +455,6 @@ def run_jobs(jobs: list[GenJob], profiles_dir: Path, profiles: list[str], *, hea
     left = []
     while not q.empty():
         j = q.get()
-        j.error = j.error or "hết tài khoản còn lượt"
+        j.error = "hết tài khoản còn lượt"      # = generate.QUOTA_MARK: batch sẽ chờ rồi thử lại
         left.append(j)
     return jobs

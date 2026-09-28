@@ -2,7 +2,7 @@
 
 Thư mục (ổ đĩa là sổ tiến độ, chạy lại thì đi tiếp từ chỗ dừng):
 
-    projects/<keyword>/
+    projects/<loại lịch>/<keyword>/
       _he_thong/ideation/       sổ hỏi/đáp với ChatGPT (*.prompt.md, *.response.md)
       _he_thong/angles.json     tất cả góc tiếp cận đã sinh cho keyword này
       <Tên cuốn>/               tên thư mục = tên cuốn; mã góc nằm ở _he_thong/angle_id.txt
@@ -174,8 +174,11 @@ def run_ideation_batched(keyword: str, backend: Backend, projects_root: Path, *,
 def run_ideation(keyword: str, backend: Backend, projects_root: Path, *, year: int, market: str = "US",
                  n_angles: int = 1, more: bool = False, pick: list[str] | None = None,
                  auto_pick: int = 1, style: str | None = None, max_repairs: int = 2,
-                 family: str | None = None, grid_preset: str | None = None) -> IdeationResult:
-    kdir = projects_root / slugify(keyword)
+                 family: str | None = None, grid_preset: str | None = None,
+                 product: str | None = None, keyword_root: Path | None = None) -> IdeationResult:
+    # keyword_root: thư mục loại lịch (projects/Wall Calendar (Blank)...); danh mục chống trùng, chia đều style/nền/
+    # bố cục vẫn tính trên TOÀN BỘ projects_root (mọi loại lịch)
+    kdir = (keyword_root or projects_root) / slugify(keyword)
     kdir.mkdir(parents=True, exist_ok=True)
     layout.ensure_system(kdir)
     ledger = Ledger(layout.ideation_dir(kdir))
@@ -301,6 +304,8 @@ def run_ideation(keyword: str, backend: Backend, projects_root: Path, *, year: i
                 continue
             concept.update({"year": year, "market": market, "keyword": keyword, "angle_id": angle["id"]})
             concept["style"]["family"] = angle.get("style_family")
+            from .. import products
+            concept["product"] = product if product in products.PRODUCTS else products.DEFAULT
             # Khung hình từng tháng do code chia (cùng thứ tự đã đưa vào prompt P2), lưu lại để
             # prompt ảnh dùng đúng khung đó kể cả khi AI đổi tên cuốn.
             from ..imagegen import shots
@@ -309,6 +314,9 @@ def run_ideation(keyword: str, backend: Backend, projects_root: Path, *, year: i
             # Chất liệu giấy nền grid chia đều theo danh mục (không ngẫu nhiên), lưu lại để gen lại vẫn cùng giấy.
             from ..imagegen.prompts import next_grid_material
             concept["style"]["grid_material"] = next_grid_material(projects_root)
+            # Bố cục trang lịch chia đều 5 kiểu (calforge/render/grid_layouts.py), tránh cặp hợp kém với chất liệu.
+            from ..render.grid_layouts import next_grid_layout
+            concept["style"]["grid_layout"] = next_grid_layout(projects_root, concept["style"]["grid_material"])
             # Grid được chọn theo toàn bộ cuốn (buyer, content, chức năng và art direction),
             # không còn gắn cứng chỉ theo style family. Người dùng vẫn có thể ghi đè khi tạo dự án.
             from ..render.grid_select import apply_grid_selection
@@ -326,14 +334,15 @@ def run_ideation(keyword: str, backend: Backend, projects_root: Path, *, year: i
     return result
 
 
-def import_angles(keyword: str, data: dict, projects_root: Path, source: str) -> tuple[list[dict], list[str], list[str]]:
+def import_angles(keyword: str, data: dict, projects_root: Path, source: str,
+                  keyword_root: Path | None = None) -> tuple[list[dict], list[str], list[str]]:
     """Nhập một lượt góc tiếp cận do nơi khác nghĩ ra (vd Gemini) vào angles.json như một lượt P1.
 
     Chạy đúng bộ kiểm tra của P1; có lỗi thì KHÔNG nhập. Trả về (góc đã nhập, lỗi, cảnh báo)."""
     errors, warnings = validate_angles(data)
     if errors:
         return [], errors, warnings
-    kdir = projects_root / slugify(keyword)
+    kdir = (keyword_root or projects_root) / slugify(keyword)
     kdir.mkdir(parents=True, exist_ok=True)
     layout.ensure_system(kdir)
     angles_file = layout.angles_file(kdir)

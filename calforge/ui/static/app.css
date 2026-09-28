@@ -140,6 +140,14 @@ h3 { font-size: 1.05rem; font-weight: 600; }
 }
 
 /* ---------- form bắt đầu ---------- */
+.kinds { border: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; margin-top: 22px; }
+.kinds legend { font-size: .85rem; font-weight: 600; color: var(--muted); margin-bottom: 6px; }
+.kind { display: flex; gap: 10px; align-items: flex-start; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; cursor: pointer; }
+.kind:has(input:checked) { border-color: var(--primary); background: var(--primary-soft); }
+.kind input { margin-top: 4px; accent-color: var(--primary); }
+.kind strong { display: block; }
+.kind small { color: var(--muted); font-size: .85rem; }
+.kind-tag { padding: 0 14px 12px; font-size: .8rem; color: var(--muted); }
 .start-row { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 22px; align-items: flex-end; }
 .field { display: grid; gap: 6px; }
 .field > span { font-size: .85rem; font-weight: 600; color: var(--muted); }
@@ -322,6 +330,18 @@ input[type="text"], input[type="number"], select {
 .acc-add { display: flex; gap: 10px; }
 .acc-list { list-style: none; display: grid; gap: 8px; }
 .acc-list li { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; }
+
+.bulk { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; }
+.bulk summary { cursor: pointer; font-weight: 600; }
+.bulk[open] { display: grid; gap: 10px; }
+.bulk .hint { margin: 0; }
+.bulk textarea { font: 14px/1.5 Consolas, monospace; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; resize: vertical; width: 100%; }
+.bulk .btn { justify-self: start; }
+.bulk-list { list-style: none; display: grid; gap: 6px; }
+.bulk-list:empty { display: none; }
+.bulk-list li { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: .9rem; }
+.bulk-list .why { flex-basis: 100%; padding: 0 0 0 17px; }
+.acc-list .muted { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 260px; }
 
 /* ---------- toast ---------- */
 .toasts { position: fixed; right: 20px; bottom: 20px; display: grid; gap: 8px; z-index: 30; max-width: min(420px, calc(100vw - 32px)); }

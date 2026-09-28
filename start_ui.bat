@@ -1,8 +1,14 @@
 @echo off
-title CalForge Studio — Xuat Ban Lich Treo Tuong 11x8.5"
+title CalForge Studio - dong cua so nay la tat tool
 cd /d "%~dp0"
+set "PY=python"
+if exist ".venv\Scripts\python.exe" set "PY=.venv\Scripts\python.exe"
 echo ========================================================
-echo   Khoi dong CalForge Studio...
+echo   Dang mo CalForge Studio...  (dong cua so nay = tat tool)
 echo ========================================================
-python -m calforge ui
-pause
+"%PY%" -m calforge ui
+if errorlevel 1 (
+  echo.
+  echo  Loi khi mo tool. Neu chua cai, hay bam dup CAI_DAT.bat truoc.
+  pause
+)

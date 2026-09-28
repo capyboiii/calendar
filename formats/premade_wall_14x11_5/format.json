@@ -1,0 +1,96 @@
+{
+  "id": "premade_wall_14x11_5",
+  "_source": "Template Printify 'Wall Calendars' 14x11.5in (District Photo) - lịch có trang grid in sẵn: chỉ có bìa trước, 12 trang tranh, bìa sau. Cùng kích thước, vùng lò xo và lỗ treo với bản Blank.",
+  "size_px": [
+    4275,
+    3525
+  ],
+  "dpi": 300,
+  "bleed_px": 37.5,
+  "text_margin_px": 140,
+  "min_text_pt": 6,
+  "template_label_box": [
+    1025,
+    1193,
+    3189,
+    2243
+  ],
+  "pages": {
+    "month": {
+      "template": "month.png",
+      "keep_out": [
+        {
+          "name": "vùng lò xo (mép dưới)",
+          "rect": [
+            0,
+            3342,
+            4275,
+            3525
+          ]
+        },
+        {
+          "name": "lỗ treo (giữa mép trên)",
+          "circle": [
+            2137,
+            112,
+            70
+          ]
+        }
+      ]
+    },
+    "front_cover": {
+      "template": "front_cover.png",
+      "keep_out": [
+        {
+          "name": "vùng lò xo (mép trên)",
+          "rect": [
+            0,
+            0,
+            4275,
+            192
+          ]
+        },
+        {
+          "name": "lỗ treo (giữa mép dưới)",
+          "circle": [
+            2137,
+            3412,
+            70
+          ]
+        }
+      ]
+    },
+    "back_cover": {
+      "template": "back_cover.png",
+      "keep_out": [
+        {
+          "name": "vùng lò xo (mép trên)",
+          "rect": [
+            0,
+            0,
+            4275,
+            192
+          ]
+        },
+        {
+          "name": "lỗ treo (giữa mép dưới)",
+          "circle": [
+            2137,
+            3412,
+            70
+          ]
+        },
+        {
+          "name": "ô mã vạch nhà in",
+          "rect": [
+            3923,
+            3172,
+            4275,
+            3525
+          ]
+        }
+      ]
+    }
+  },
+  "premade_grids_dir": "grids"
+}

@@ -115,6 +115,9 @@ def rotate_profiles(names: list[str], state: Path) -> list[str]:
     return names[i:] + names[:i]
 
 
+QUOTA_MARK = "hết tài khoản còn lượt"      # driver.run_jobs ghi vào job.error khi mọi tài khoản đã nghỉ
+
+
 def generate_concept(concept_dir: Path, profiles_dir: Path, profiles: list[str] | None = None, *,
                      headless=False, timeout_s=420, max_attempts=3, drift_warn=0.9, on_event=print) -> dict:
     concept = json.loads(layout.concept_file(concept_dir).read_text(encoding="utf-8"))

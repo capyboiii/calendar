@@ -2,25 +2,23 @@
   "year": 2027,
   "market": "US",
   "projects_dir": "projects",
-  "angles_per_keyword": 5,
+  "angles_per_keyword": 1,
   "auto_pick": 1,
   "max_repairs": 2,
-  "chatgpt_automation_dir": "C:/Users/Admin/Desktop/chatgpt-automation",
+  "batch_retry_wait_s": 300,
+  "quota_wait_s": 1800,
+  "quota_max_wait_h": 24,
+  "profiles_dir": null,
+  "chatgpt_automation_dir": "",
   "llm": {
     "backend": "chatgpt_web",
-    "profiles": [
-      "acc2",
-      "acc3",
-      "acc4",
-      "acc5",
-      "acc1"
-    ],
-    "headless": false,
+    "profiles": null,
+    "headless": "hidden",
     "timeout_s": 600
   },
   "imagegen": {
     "profiles": null,
-    "headless": false,
+    "headless": "hidden",
     "timeout_s": 420,
     "max_attempts": 3
   },

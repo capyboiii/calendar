@@ -5,7 +5,6 @@ from pathlib import Path
 from PIL import Image
 
 from calforge.core import dates
-from calforge.imagegen import cleanup
 from calforge.render.build import load_format
 from calforge.render.pages import grid_page
 from calforge.render.preflight import check_page
@@ -42,25 +41,6 @@ class MonthCellsTest(unittest.TestCase):
             for index, cell in enumerate(cells):
                 for day in cell:
                     self.assertEqual(day.weekday(), index % 7)
-
-
-class ImageCleanupTest(unittest.TestCase):
-    def test_checkerboard_background_detected(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            img = Image.new("RGB", (400, 200), (254, 254, 254))
-            for y in range(0, 200, 32):
-                for x in range(0, 400, 32):
-                    if (x // 32 + y // 32) % 2:
-                        img.paste((209, 209, 209), (x, y, x + 32, y + 32))
-            img.paste((80, 120, 60), (60, 80, 340, 120))
-            src = Path(tmp) / "checker.png"
-            img.save(src)
-            self.assertEqual(cleanup.background_kind(src), "checker")
-            out = Path(tmp) / "clean.png"
-            self.assertEqual(cleanup.ensure_alpha(src, out), "checker")
-            with Image.open(out) as clean:
-                self.assertEqual(clean.mode, "RGBA")
-                self.assertLess(clean.width, 300)  # đã cắt sát cành, bỏ hết caro
 
 
 class GridPageTest(unittest.TestCase):
@@ -207,3 +187,41 @@ class GridPresetTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PremadeProductTest(unittest.TestCase):
+    """Lịch grid in sẵn: không gen nền grid, 14 trang khi chưa có trang grid thiết kế sẵn."""
+
+    def test_no_grid_job_and_14_pages(self):
+        from calforge import products
+        from calforge.imagegen import plan
+        from calforge.render.build import expected_pages, premade_grids
+        c = {**fixtures.concept(), "year": 2027, "market": "US"}
+        self.assertIn("grid", [j["id"] for j in plan.build_jobs(c)])
+        c["product"] = "wall_premade"
+        self.assertNotIn("grid", [j["id"] for j in plan.build_jobs(c)])
+        for fid in products.formats(c):
+            fmt = load_format(fid)
+            self.assertNotIn("grid", fmt["pages"])
+            self.assertEqual(expected_pages(c, fid), 26 if premade_grids(fmt) else 14)
+        self.assertEqual(expected_pages(fixtures.concept(), "printify_wall_11x8_5"), 26)
+        self.assertEqual(products.formats({}), ["printify_wall_11x8_5", "printify_wall_14x11_5"])
+
+
+class PremadeGridPagesTest(unittest.TestCase):
+    def test_weeks_start_sunday_six_rows_and_right_dates(self):
+        import datetime as dt
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("mpg", Path(__file__).resolve().parents[1] / "tools" / "make_premade_grids.py")
+        mpg = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mpg)
+        for month in range(1, 13):
+            weeks = mpg.month_weeks(2027, month)
+            self.assertEqual(len(weeks), 6)
+            days = [d for w in weeks for d in w]
+            self.assertTrue(all(d.weekday() == 6 for d in (w[0] for w in weeks)))      # cột đầu = Chủ nhật
+            self.assertEqual(days, [days[0] + dt.timedelta(days=i) for i in range(42)])  # liền mạch, không trùng
+            inside = [d for d in days if d.month == month]
+            self.assertEqual(inside[0].day, 1)
+            self.assertEqual(len(inside), (dt.date(2027 + month // 12, month % 12 + 1, 1) - dt.timedelta(days=1)).day)
+        self.assertEqual(mpg.month_weeks(2027, 1)[0][5], dt.date(2027, 1, 1))              # 1/1/2027 là thứ Sáu

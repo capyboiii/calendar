@@ -52,3 +52,53 @@ class ImageRotationTest(unittest.TestCase):
             state = Path(tmp) / "rot.json"
             firsts = [rotate_profiles(["acc2", "acc3", "acc4"], state)[0] for _ in range(4)]
         self.assertEqual(firsts, ["acc2", "acc3", "acc4", "acc2"])
+
+
+class LimitMessagesTest(unittest.TestCase):
+    def test_classify_known_messages(self):
+        from calforge.llm.limits import classify
+        quota = [
+            "You've reached your limit for image generation. You can create more images in 2 hours.",
+            "You've hit the Plus plan limit for GPT-4o. Responses will use another model until your limit resets.",
+            "Too many requests in 1 hour. Try again later.",
+            "You're sending messages too quickly. Please slow down.",
+            "ChatGPT is at capacity right now",
+            "We're experiencing high demand. Please try again in a few minutes.",
+            "Unusual activity has been detected from your device. Try again later.",
+            "Bạn đã đạt giới hạn tạo ảnh. Vui lòng quay lại sau.",
+            "Quá nhiều yêu cầu. Hãy thử lại sau vài phút.",
+            "Please try again in 15 minutes.",
+        ]
+        for m in quota:
+            self.assertEqual(classify(m), "quota", m)
+        self.assertEqual(classify("I can't create that image because it violates our content policy. "
+                                  "You can try again in a new chat with a different request."), "refused")
+        self.assertEqual(classify("Something went wrong while generating the response."), "error")
+        self.assertEqual(classify("Get Plus - upgrade your plan for more features"), "")      # banner quảng cáo
+        self.assertEqual(classify("Here is your calendar concept."), "")
+
+    def test_rate_watch_only_core_requests(self):
+        from calforge.llm.limits import RateWatch
+
+        class Page:
+            def on(self, _ev, fn):
+                self.fn = fn
+
+        class Resp:
+            def __init__(self, url, status, body=""):
+                self.url, self.status, self._b = url, status, body
+
+            def text(self):
+                return self._b
+        import time as _t
+        page = Page()
+        w = RateWatch(page)
+        t0 = _t.monotonic()
+        page.fn(Resp("https://chatgpt.com/backend-api/lat/r", 503))              # request phụ: bỏ qua
+        self.assertIsNone(w.recent(t0))
+        page.fn(Resp("https://chatgpt.com/backend-api/f/conversation", 429))
+        self.assertIn("429", w.recent(t0))
+        page2 = Page()
+        w2 = RateWatch(page2)
+        page2.fn(Resp("https://chatgpt.com/backend-api/conversation", 403, '{"detail":{"code":"rate_limit_exceeded"}}'))
+        self.assertIsNotNone(w2.recent(t0))

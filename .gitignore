@@ -7,3 +7,9 @@ data/kjv.json
 models/
 .idea/
 .cache/
+data/account_emails.json
+.claude/
+# phiên đăng nhập ChatGPT (cookie) - tuyệt đối không đưa lên git
+.chrome-profiles/
+.venv/
+dist/

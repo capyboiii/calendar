@@ -18,7 +18,7 @@ class MockupPreviewMapTest(unittest.TestCase):
             mockups.PREVIEWS,
             ["front_cover_spiral", "open_spread_flat", "three_open_spreads", "wall_spread", "wall_page_turn"],
         )
-        self.assertTrue(set(mockups.PREVIEWS) <= set(mockups.MOCKUPS))  # mockup dự phòng (desk_page) vẫn giữ
+        self.assertTrue(set(mockups.PREVIEWS) <= set(mockups.MOCKUPS))
         for name in mockups.PREVIEWS:
             cfg = mockups.MOCKUPS[name]
             self.assertTrue((mockups.HERE / cfg["file"]).is_file(), name)
@@ -52,6 +52,32 @@ class MockupPreviewMapTest(unittest.TestCase):
                 os.utime(changed, (future, future))
                 remade = mockups.previews(root, lambda _msg: None)
                 self.assertEqual([p.name for p in remade], ["04_wall_spread.jpg"])
+
+
+    def test_premade_books_use_premade_mockups(self):
+        import json
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            pages = root / "11x8.5"
+            assets = root / "assets"
+            pages.mkdir(parents=True)
+            assets.mkdir()
+            (root / "_he_thong").mkdir()
+            (root / "_he_thong" / "concept.json").write_text(json.dumps({"product": "wall_premade"}), encoding="utf-8")
+            for cfg in mockups.MOCKUPS.values():
+                (assets / cfg["file"]).write_bytes(b"mockup")
+                for sheet in cfg["sheets"]:
+                    for n in mockups.sheet_pages(sheet):
+                        (pages / f"{n}.png").write_bytes(b"page")
+
+            def fake_render(_name, _pages, out, debug=False):
+                out.parent.mkdir(parents=True, exist_ok=True)
+                out.write_bytes(b"preview")
+
+            with patch.object(mockups, "HERE", assets), patch.object(mockups, "render", fake_render):
+                made = mockups.previews(root, lambda _msg: None)
+        self.assertEqual([p.name for p in made], [f"{i:02d}_{n}.jpg" for i, n in enumerate(mockups.PREMADE_PREVIEWS, 1)])
+        self.assertIn("m01_grid", mockups.sheet_pages(mockups.MOCKUPS["premade_two_closed"]["sheets"][1]))
 
 
 if __name__ == "__main__":

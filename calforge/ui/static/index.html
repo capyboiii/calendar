@@ -17,6 +17,7 @@
       </span>
       <span class="brand-name">CalForge <small>STUDIO</small></span>
     </div>
+    <a class="btn btn-ghost" href="/huong-dan" target="_blank" style="margin-left:auto">Hướng dẫn</a>
     <button class="btn btn-ghost" id="btnAccounts">
       <span class="dot" id="accDot"></span> Tài khoản ChatGPT <span id="accSummary"></span>
     </button>
@@ -33,7 +34,17 @@
     <!-- 1. Làm lịch mới -->
     <section class="card start" id="startCard">
       <h1>Làm lịch mới</h1>
-      <p class="lead">Nhập chủ đề, chọn số cuốn rồi bấm <b>Bắt đầu</b>. Máy tự nghĩ ý tưởng, chia đều các phong cách tranh, vẽ tranh, dàn trang in và làm ảnh quảng cáo. Mỗi cuốn mất khoảng 10 phút.</p>
+      <fieldset class="kinds" id="productPicker">
+        <legend>Loại lịch</legend>
+        <label class="kind">
+          <input type="radio" name="product" value="wall_grid" checked>
+          <span><strong>Wall Calendar (Blank)</strong><small>26 trang</small></span>
+        </label>
+        <label class="kind">
+          <input type="radio" name="product" value="wall_premade">
+          <span><strong>Wall Calendar</strong><small>Chỉ làm tranh</small></span>
+        </label>
+      </fieldset>
       <div class="start-row">
         <label class="field grow">
           <span>Chủ đề</span>
@@ -49,7 +60,7 @@
         </label>
         <button class="btn btn-primary btn-big" id="btnStart">Bắt đầu</button>
       </div>
-      <p class="hint" id="startHint">Khoảng 30 phút cho 3 cuốn. Có thể để máy tự chạy, không cần ngồi canh.</p>
+      <p class="hint" id="startHint">~30 phút</p>
     </section>
 
     <!-- 2. Đang chạy -->
@@ -65,7 +76,7 @@
       <div class="bar"><div class="bar-fill" id="runBar"></div></div>
       <p class="hint" id="runTime"></p>
       <details class="advanced" id="logBox">
-        <summary>Chi tiết kỹ thuật (dành cho người sửa lỗi)</summary>
+        <summary>Chi tiết</summary>
         <pre id="runLog"></pre>
       </details>
     </section>
@@ -75,7 +86,11 @@
       <div class="results-head">
         <h2>Lịch đã làm</h2>
         <span class="count" id="bookCount"></span>
+        <span class="grow"></span>
+        <button class="btn btn-small btn-ghost" id="btnR2Settings">Khoá R2</button>
+        <button class="btn btn-small btn-primary" id="btnShop">Đẩy R2 + xuất CSV</button>
       </div>
+      <p class="hint" id="shopResult" hidden></p>
       <div id="results"><p class="empty">Đang tải…</p></div>
     </section>
   </main>
@@ -103,12 +118,34 @@
     <div class="modal-card">
       <button class="modal-x" data-close aria-label="Đóng">✕</button>
       <h2>Tài khoản ChatGPT</h2>
-      <p class="lead">Máy dùng các tài khoản này để nghĩ ý tưởng và vẽ tranh, hết lượt thì tự đổi tài khoản khác. Cách thêm: gõ tên bất kỳ, bấm <b>Thêm</b>, đăng nhập ChatGPT trong cửa sổ Chrome vừa mở, xong thì <b>đóng cửa sổ Chrome</b>.</p>
+      <p class="lead">Bấm <b>Thêm</b>, đăng nhập ChatGPT rồi đóng Chrome.</p>
       <div class="acc-add">
         <input id="inputAccName" type="text" placeholder="Tên tài khoản, ví dụ: acc6">
         <button class="btn btn-primary" id="btnAccAdd">Thêm</button>
       </div>
+      <details class="bulk" id="bulkBox">
+        <summary>Đăng nhập hàng loạt</summary>
+        <p class="hint">Mỗi dòng: <code>email | mật khẩu | mã 2FA</code>. Mật khẩu không được lưu.</p>
+        <textarea id="bulkCreds" rows="5" spellcheck="false" autocomplete="off"
+                  placeholder="a@gmail.com|MatKhau1|SEED2FA&#10;b@gmail.com|MatKhau2|SEED2FA"></textarea>
+        <button class="btn btn-primary" id="btnBulkGo">Đăng nhập tất cả</button>
+        <ul class="bulk-list" id="bulkList"></ul>
+      </details>
       <ul class="acc-list" id="accList"></ul>
+    </div>
+  </div>
+
+  <!-- Khoá Cloudflare R2 -->
+  <div class="modal" id="r2Modal" hidden>
+    <div class="modal-card">
+      <button class="modal-x" data-close aria-label="Đóng">✕</button>
+      <h2>Cloudflare R2</h2>
+      <label class="field"><span>Account ID</span><input id="r2Account" type="text" autocomplete="off"></label>
+      <label class="field"><span>Access Key ID</span><input id="r2Key" type="text" autocomplete="off"></label>
+      <label class="field"><span>Secret Access Key</span><input id="r2Secret" type="password" autocomplete="new-password"></label>
+      <label class="field"><span>Bucket</span><input id="r2Bucket" type="text" autocomplete="off"></label>
+      <label class="field"><span>Public URL</span><input id="r2Public" type="text" placeholder="https://cdn.example.com" autocomplete="off"></label>
+      <button class="btn btn-primary" id="btnR2Save">Lưu</button>
     </div>
   </div>
 
