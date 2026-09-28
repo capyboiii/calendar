@@ -72,7 +72,7 @@ function setCount(n) {
 
 function updateHint() {
   const n = countValue();
-  $('startHint').textContent = `~${fmtMinutes(n * MIN_PER_BOOK)}`;
+  $('startHint').textContent = `~${fmtMinutes(n * MIN_PER_BOOK)} (tuỳ số tài khoản còn lượt)`;
 }
 
 // --------------------------------------------------------------------------
