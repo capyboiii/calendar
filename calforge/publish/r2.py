@@ -71,9 +71,21 @@ PAGE_ORDER = ["front_cover"] + [f"m{m:02d}_{k}" for m in range(1, 13) for k in (
 
 
 def print_pages(cdir: Path, format_id: str) -> list[Path]:
-    """Trang PNG upload Printify của một khổ, đúng thứ tự cuốn lịch (lịch grid in sẵn chưa có grid: 14 trang)."""
+    """Trang PNG upload Printify của một khổ, đúng thứ tự cuốn lịch. Lịch grid in sẵn chỉ 14 trang tranh: trang
+    grid của nó chỉ để ghép PDF bản digital, không đưa lên in."""
     d = layout.print_dir(cdir, format_id)
-    return [d / f"{n}.png" for n in PAGE_ORDER if (d / f"{n}.png").exists()]
+    names = PAGE_ORDER if ai_grid_book(cdir) else [n for n in PAGE_ORDER if not n.endswith("_grid")]
+    return [d / f"{n}.png" for n in names if (d / f"{n}.png").exists()]
+
+
+def ai_grid_book(cdir: Path) -> bool:
+    """Cuốn có trang grid riêng để in (Wall Calendar (Blank)); grid in sẵn (Wall Calendar) thì không."""
+    import json
+    from .. import products
+    try:
+        return products.ai_grid(json.loads(layout.concept_file(cdir).read_text(encoding="utf-8")))
+    except (OSError, ValueError):
+        return True
 
 
 SIZES = ["printify_wall_11x8_5", "printify_wall_14x11_5"]   # thư mục 11x8.5/ 14x11.5/ (loại grid in sẵn dùng chung)

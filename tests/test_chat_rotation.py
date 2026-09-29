@@ -96,6 +96,14 @@ class LimitMessagesTest(unittest.TestCase):
         t0 = _t.monotonic()
         page.fn(Resp("https://chatgpt.com/backend-api/lat/r", 503))              # request phụ: bỏ qua
         self.assertIsNone(w.recent(t0))
+
+        class Get(Resp):
+            request = type("R", (), {"method": "GET"})()
+        # đọc danh sách chat / tải lại một chat bị 429 khi nhiều tab: KHÔNG phải hết lượt
+        page.fn(Get("https://chatgpt.com/backend-api/conversations?offset=0&limit=28", 429))
+        page.fn(Get("https://chatgpt.com/backend-api/conversation/6abb4487-5ef4-83ec", 429))
+        page.fn(Resp("https://chatgpt.com/backend-api/conversations/6abb44ba-08f0", 429))
+        self.assertIsNone(w.recent(t0))
         page.fn(Resp("https://chatgpt.com/backend-api/f/conversation", 429))
         self.assertIn("429", w.recent(t0))
         page2 = Page()

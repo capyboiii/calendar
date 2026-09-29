@@ -59,6 +59,17 @@ class Task:
             }
 
 
+NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)   # tác vụ con không bật cửa sổ đen
+
+
+def _console_python() -> str:
+    """App mở bằng pythonw.exe (không có cửa sổ) - tác vụ con cần python.exe để đọc được log."""
+    exe = Path(sys.executable)
+    if exe.name.lower() == "pythonw.exe" and (exe.parent / "python.exe").exists():
+        return str(exe.parent / "python.exe")
+    return sys.executable
+
+
 class TaskManager:
     def __init__(self):
         self.tasks: dict[str, Task] = {}
@@ -67,7 +78,7 @@ class TaskManager:
     def start_task(self, args: list[str], description: str, action: str = "", params: dict | None = None) -> str:
         task_id = f"t_{int(time.time() * 1000)}"
         # -u: không đệm stdout, để log chảy trực tiếp lên UI (không dồn về cuối)
-        cmd = [sys.executable, "-u", "-m", "calforge"] + args
+        cmd = [_console_python(), "-u", "-m", "calforge"] + args
         task = Task(task_id, cmd, description, action, params)
         with self.lock:
             self.tasks[task_id] = task
@@ -89,6 +100,7 @@ class TaskManager:
                     errors="replace",
                     bufsize=1,
                     env=env,
+                    creationflags=NO_WINDOW,
                 )
                 task.process = p
                 for line in p.stdout:
@@ -113,9 +125,16 @@ class TaskManager:
             task = self.tasks.get(task_id)
             return task.to_dict(since) if task else None
 
-    def running(self) -> Task | None:
+    def running(self, include_login: bool = False) -> Task | None:
+        """Việc chính đang chạy. Cửa sổ đăng nhập một tài khoản không tính (không được chặn batch)."""
         with self.lock:
-            return next((t for t in self.tasks.values() if t.status == "running"), None)
+            return next((t for t in self.tasks.values() if t.status == "running"
+                         and (include_login or t.action != "login")), None)
+
+    def login_running(self, profile: str) -> Task | None:
+        with self.lock:
+            return next((t for t in self.tasks.values() if t.status == "running" and t.action == "login"
+                         and (t.params or {}).get("profile") == profile), None)
 
     def stop_task(self, task_id: str) -> bool:
         """Dừng tác vụ + mọi tiến trình con (Chrome của Playwright) để lần chạy sau không vướng profile."""
@@ -126,7 +145,8 @@ class TaskManager:
         task.status = "stopped"
         task.append_log("\n⏹ Người dùng bấm Dừng")
         if os.name == "nt":
-            subprocess.run(["taskkill", "/PID", str(task.process.pid), "/T", "/F"], capture_output=True, check=False)
+            subprocess.run(["taskkill", "/PID", str(task.process.pid), "/T", "/F"], capture_output=True, check=False,
+                           creationflags=NO_WINDOW)
         else:
             task.process.kill()
         return True
@@ -137,6 +157,152 @@ class TaskManager:
 
 
 TASK_MANAGER = TaskManager()
+
+
+def _free_profile(name: str) -> str:
+    """Trước khi mở cửa sổ đăng nhập: profile đang bị Chrome giữ thì
+    - Chrome thuộc một batch/tác vụ đang chạy -> không giật tài khoản của batch, trả lời dễ hiểu;
+    - Chrome mồ côi (tool cũ tắt ngang, cửa sổ bị khuất...) -> tự đóng rồi cho đăng nhập.
+    Trả về "" nếu đã sẵn sàng."""
+    from ..llm import accounts
+    udir = accounts.get_profiles_dir(config.load()) / name
+    if not udir.exists() or not accounts.is_profile_locked(udir):
+        return ""
+    with TASK_MANAGER.lock:
+        running = {t.process.pid: t for t in TASK_MANAGER.tasks.values()
+                   if t.status == "running" and t.process and t.action != "login"}
+    owners = accounts.profile_users(udir, set(running)) if running else set()
+    if owners:
+        t = running[next(iter(owners))]
+        return (f"'{name}' đang được dùng trong việc đang chạy ({t.description}). Chờ việc đó xong, "
+                "hoặc bấm Tạm dừng ở Hàng đợi rồi đăng nhập lại.")
+    accounts.close_profile_chrome(udir)
+    if accounts.is_profile_locked(udir):
+        return f"Không đóng được Chrome đang mở '{name}'. Hãy tắt hết cửa sổ Chrome của tài khoản này rồi thử lại."
+    return ""
+
+
+def _unfinished_books() -> list[dict]:
+    """Cuốn đã vẽ đủ tranh nhưng chưa hoàn thiện (bị dừng giữa chừng / thiếu mockup), trừ cuốn đang được xử lý
+    hoặc đã nằm trong hàng đợi."""
+    from ..ideation.pipeline import slugify
+    from ..pipeline import needs_finishing
+    cfg = config.load()
+    root = Path(cfg["projects_dir"])
+    busy_books, busy_kw = set(), set()
+    for it in batch_queue().snapshot()["items"]:
+        if it["status"] not in ("queued", "running"):
+            continue
+        p = it["params"]
+        if p.get("concept"):
+            busy_books.add((ROOT / p["concept"]).resolve())
+        elif p.get("keyword"):
+            busy_kw.add((products.root(root, p.get("product") or products.DEFAULT) / slugify(p["keyword"])).resolve())
+    out = []
+    for b in layout.books(root):
+        if b.resolve() in busy_books or b.parent.resolve() in busy_kw or not needs_finishing(b):
+            continue
+        try:
+            title = json.loads(layout.concept_file(b).read_text(encoding="utf-8")).get("title") or b.name
+        except (OSError, ValueError):
+            title = b.name
+        out.append({"path": _rel(b), "title": title})
+    return out
+
+
+def _shop_books() -> list[dict]:
+    """Các cuốn đã xong (đưa lên web được) + trạng thái R2/CSV, cho hộp chọn cuốn của nút Đẩy R2 + xuất CSV."""
+    from ..publish import r2
+    from ..publish.shop_csv import ready_books
+    cfg = config.load()
+    out = []
+    for b in ready_books(Path(cfg["projects_dir"])):
+        try:
+            concept = json.loads(layout.concept_file(b).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            concept = {}
+        st = r2.read_state(b)
+        previews = sorted(layout.listing(b).glob("*.jpg"))
+        out.append({
+            "path": _rel(b), "title": concept.get("title") or b.name, "keyword": b.parent.name,
+            "product": products.product_id(concept), "cover": _rel(previews[0]) if previews else "",
+            "pushed_at": st.get("pushed_at", ""), "exported_at": st.get("exported_at", ""),
+            "exported_csv": st.get("exported_csv", ""),
+            "done_at": time.strftime("%Y-%m-%d %H:%M", time.localtime(layout.status_file(b).stat().st_mtime)),
+        })
+    out.sort(key=lambda x: x["done_at"], reverse=True)
+    return out
+
+
+def _book_arg(params: dict) -> Path:
+    root = (ROOT / config.load()["projects_dir"]).resolve()
+    target = (ROOT / str(params.get("concept", ""))).resolve()
+    if not str(target).startswith(str(root)) or not layout.is_book(target):
+        raise ValueError("Không tìm thấy cuốn này.")
+    return target
+
+
+def run_args(params: dict) -> tuple[list[str], str]:
+    """Lệnh cho một việc trong hàng đợi: batch mới (mặc định), "produce" = làm tiếp một cuốn, "redo" = vẽ lại trang."""
+    kind = params.get("action") or "run"
+    if kind == "produce":
+        target = _book_arg(params)
+        return ["produce", str(target), "--no-printify"], f"Làm tiếp: {target.name}"
+    if kind == "finish":
+        target = _book_arg(params)
+        args = ["finish", str(target)] + (["--redo-previews"] if params.get("redo_previews") else [])
+        return args, (f"Làm lại ảnh quảng cáo: {target.name}" if params.get("redo_previews")
+                      else f"Hoàn thiện: {target.name}")
+    if kind == "redo":
+        target = _book_arg(params)
+        pages = [p for p in (params.get("pages") or []) if isinstance(p, str)]
+        if not pages:
+            raise ValueError("Chưa chọn trang nào để vẽ lại.")
+        return ["redo", str(target), "--pages", ",".join(pages)], f"Vẽ lại {len(pages)} trang: {target.name}"
+    keyword = str(params.get("keyword", "")).strip()
+    if not keyword:
+        raise ValueError("Nhập chủ đề trước đã.")
+    cmd_args = ["run", keyword, "--no-printify"]
+    if params.get("pick"):
+        cmd_args += ["--pick", params["pick"]]
+    batch = int(params.get("batch_size") or 1)
+    if batch > 1:
+        cmd_args += ["--auto", str(min(batch, 20))]
+    if params.get("grid_preset"):
+        cmd_args += ["--grid-preset", params["grid_preset"]]
+    if params.get("family"):
+        cmd_args += ["--family", params["family"]]
+    if params.get("product") in products.PRODUCTS:
+        cmd_args += ["--product", params["product"]]
+    desc = f"Chạy trọn gói {batch} cuốn cho keyword: {keyword}" if batch > 1 else f"Chạy trọn gói cho keyword: {keyword}"
+    return cmd_args, desc
+
+
+def _batch_result(params: dict) -> tuple[int, int]:
+    """(số cuốn đạt, tổng) theo báo cáo batch gần nhất của chủ đề đó; việc một cuốn thì theo status của cuốn."""
+    if (params.get("action") or "run") != "run":
+        try:
+            st = json.loads(layout.status_file(_book_arg(params)).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return 0, 1
+        return (1 if st.get("ok") and st.get("stage") in ("listing", "printify") else 0), 1
+    from ..ideation.pipeline import slugify
+    cfg = config.load()
+    kdir = products.root(cfg["projects_dir"], params.get("product") or products.DEFAULT) / slugify(params["keyword"])
+    rows = (_read_batch(kdir) or {}).get("report") or []
+    return sum(1 for r in rows if r.get("ok")), len(rows)
+
+
+_QUEUE = None
+
+
+def batch_queue():
+    global _QUEUE
+    if _QUEUE is None:
+        from .batch_queue import BatchQueue
+        cfg = config.load()
+        _QUEUE = BatchQueue(TASK_MANAGER, Path(cfg["projects_dir"]) / ".hang_doi.json", run_args, _batch_result)
+    return _QUEUE
 
 
 class StudioHandler(SimpleHTTPRequestHandler):
@@ -201,6 +367,15 @@ class StudioHandler(SimpleHTTPRequestHandler):
                 "bucket": r2.get("bucket", ""), "public_url": r2.get("public_url", ""),
                 "prefix": r2.get("prefix", "calendars"),
                 "secret_set": bool(sec), "secret_hint": ("…" + sec[-4:]) if len(sec) > 8 else ""})
+        if path == "/api/unfinished":
+            return self._send_json({"books": _unfinished_books()})
+
+        if path == "/api/shop/books":
+            return self._send_json({"books": _shop_books()})
+
+        if path == "/api/queue":
+            return self._send_json(batch_queue().snapshot())
+
         if path == "/api/accounts/bulk-login/status":
             from ..llm import bulk_login
             return self._send_json(bulk_login.status())
@@ -230,24 +405,10 @@ class StudioHandler(SimpleHTTPRequestHandler):
             desc = ""
 
             if action == "run":
-                keyword = params.get("keyword", "").strip()
-                if not keyword:
-                    return self._send_json({"error": "Keyword is required"}, status=HTTPStatus.BAD_REQUEST)
-                cmd_args = ["run", keyword, "--no-printify"]
-                if params.get("pick"):
-                    cmd_args += ["--pick", params["pick"]]
-                batch = int(params.get("batch_size") or 1)
-                if batch > 1:
-                    cmd_args += ["--auto", str(min(batch, 20))]
-                if params.get("grid_preset"):
-                    cmd_args += ["--grid-preset", params["grid_preset"]]
-                if params.get("family"):
-                    cmd_args += ["--family", params["family"]]
-                if params.get("product") in products.PRODUCTS:
-                    cmd_args += ["--product", params["product"]]
-                if params.get("publish"):
-                    cmd_args += ["--publish"]
-                desc = f"Chạy trọn gói {batch} cuốn cho keyword: {keyword}" if batch > 1 else f"Chạy trọn gói cho keyword: {keyword}"
+                try:
+                    cmd_args, desc = run_args(params)
+                except ValueError as e:
+                    return self._send_json({"error": str(e)}, status=HTTPStatus.BAD_REQUEST)
 
             elif action == "ideate":
                 keyword = params.get("keyword", "").strip()
@@ -308,12 +469,32 @@ class StudioHandler(SimpleHTTPRequestHandler):
 
             elif action == "shop":
                 cmd_args = ["shop"]
-                desc = "Đẩy lên R2 + xuất CSV"
+                books = params.get("books")
+                if books is not None:
+                    root = (ROOT / config.load()["projects_dir"]).resolve()
+                    picked = []
+                    for b in books:
+                        target = (ROOT / str(b)).resolve()
+                        if not str(target).startswith(str(root)) or not layout.is_book(target):
+                            return self._send_json({"error": f"Không tìm thấy cuốn: {b}"}, status=HTTPStatus.BAD_REQUEST)
+                        picked.append(str(target))
+                    if not picked:
+                        return self._send_json({"error": "Chưa chọn cuốn nào."}, status=HTTPStatus.BAD_REQUEST)
+                    for b in picked:
+                        cmd_args += ["--book", b]
+                desc = f"Đẩy lên R2 + xuất CSV ({len(books)} cuốn)" if books is not None else "Đẩy lên R2 + xuất CSV"
 
             elif action == "login":
                 profile_name = params.get("profile", "").strip()
                 if not profile_name:
                     return self._send_json({"error": "Profile name is required"}, status=HTTPStatus.BAD_REQUEST)
+                old = TASK_MANAGER.login_running(profile_name)
+                if old:   # bấm lại = muốn cửa sổ mới (cửa sổ cũ bị khuất/kẹt): đóng cửa sổ cũ rồi mở lại
+                    TASK_MANAGER.stop_task(old.id)
+                    time.sleep(2)
+                busy_msg = _free_profile(profile_name)
+                if busy_msg:
+                    return self._send_json({"error": busy_msg}, status=HTTPStatus.CONFLICT)
                 cmd_args = ["login", profile_name]
                 desc = f"Mở trình duyệt đăng nhập ChatGPT: {profile_name}"
 
@@ -327,6 +508,42 @@ class StudioHandler(SimpleHTTPRequestHandler):
             task_id = TASK_MANAGER.start_task(cmd_args, desc, action, params)
             return self._send_json({"task_id": task_id, "description": desc, "status": "started"})
 
+        if path.startswith("/api/queue/"):
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(length).decode("utf-8")) if length > 0 else {}
+            except Exception as e:
+                return self._send_json({"error": f"Invalid JSON: {e}"}, status=HTTPStatus.BAD_REQUEST)
+            q = batch_queue()
+            op = path.rsplit("/", 1)[-1]
+            try:
+                if op == "add":
+                    q.add(body.get("params") or {})
+                elif op == "remove":
+                    q.remove(str(body.get("id", "")))
+                elif op == "move":
+                    q.move(str(body.get("id", "")), int(body.get("delta", 0)))
+                elif op == "pause":
+                    q.pause()
+                elif op == "resume":
+                    q.resume()
+                elif op == "clear":
+                    q.clear_finished()
+                else:
+                    return self._send_json({"error": "Not found"}, status=HTTPStatus.NOT_FOUND)
+            except ValueError as e:
+                return self._send_json({"error": str(e)}, status=HTTPStatus.BAD_REQUEST)
+            return self._send_json(q.snapshot())
+
+        if path == "/api/shutdown":
+            # nút "Tắt tool": dừng mọi việc đang chạy (kể cả Chrome ngầm) rồi tắt máy chủ
+            for t in TASK_MANAGER.list_tasks():
+                if t.get("status") == "running":
+                    TASK_MANAGER.stop_task(t["id"])
+            self._send_json({"ok": True})
+            threading.Timer(0.5, lambda: os._exit(0)).start()
+            return None
+
         if path in ("/api/open", "/api/task/stop"):
             try:
                 length = int(self.headers.get("Content-Length", 0))
@@ -334,6 +551,7 @@ class StudioHandler(SimpleHTTPRequestHandler):
             except Exception as e:
                 return self._send_json({"error": f"Invalid JSON: {e}"}, status=HTTPStatus.BAD_REQUEST)
             if path == "/api/task/stop":
+                batch_queue().stopped_by_user(str(body.get("id", "")))
                 return self._send_json({"ok": TASK_MANAGER.stop_task(str(body.get("id", "")))})
             target = (ROOT / str(body.get("path", "")).lstrip("/\\")).resolve()
             if not str(target).startswith(str(ROOT.resolve())) or not target.exists():
@@ -703,15 +921,16 @@ class _Server(ThreadingHTTPServer):
     allow_reuse_address = False
 
 
-def run_server(host: str = "127.0.0.1", port: int = 8080, open_browser: bool = True):
+def run_server(host: str = "127.0.0.1", port: int = 8080, open_browser: bool = True, opener=None):
     import webbrowser
 
+    opener = opener or webbrowser.open
     url = f"http://{host}:{port}"
     if _already_running(url):
         # người dùng bấm biểu tượng lần nữa khi tool đang chạy: chỉ mở lại trang, không chạy tool thứ hai
         print("CalForge Studio đang chạy sẵn - mở lại trang.")
         if open_browser:
-            webbrowser.open(url)
+            opener(url)
         return
     try:
         server = _Server((host, port), StudioHandler)
@@ -719,13 +938,14 @@ def run_server(host: str = "127.0.0.1", port: int = 8080, open_browser: bool = T
         print(f"Cổng {port} đang bị chương trình khác dùng. Tắt chương trình đó hoặc khởi động lại máy.")
         raise SystemExit(1)
     print(f"\n========================================================")
+    batch_queue().start()                  # chạy lần lượt các batch trong hàng đợi
     print(f" ✨ CalForge Studio đang chạy tại: {url}")
     print(f" 📂 Bấm Ctrl+C để dừng máy chủ")
     print(f"========================================================\n")
 
     if open_browser:
         import webbrowser
-        threading.Timer(0.8, lambda: webbrowser.open(url)).start()
+        threading.Timer(0.8, lambda: opener(url)).start()
 
     try:
         server.serve_forever()

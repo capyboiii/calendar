@@ -56,49 +56,56 @@ class ShopCsvTest(unittest.TestCase):
             with mock.patch.object(r2, "client", lambda _r2: s3):
                 res = shop_csv.publish_all(cfg, on_event=lambda *_: None)
                 self.assertEqual(len(res["exported"]), 2)
-                self.assertEqual(len(s3.keys), 2 * (5 + 2 * (1 + 26)))   # 5 preview + (PDF tại nhà + 26 PNG) × 2 khổ
-                rows = list(csv.DictReader(open(res["csv"], encoding="utf-8-sig")))
-                with open(res["csv"], encoding="utf-8-sig") as f:
-                    self.assertEqual(next(csv.reader(f)), shop_csv.HEADER)
-                book = [r for r in rows if r["Handle"].startswith("cat-days")]
-                self.assertEqual(len(book), 5 + 4)                       # 11x8.5: Matte+Printable; 14: M+G+P
-                first, printable = book[:2]
-                self.assertEqual((first["Option1 Name"], first["Option2 Name"], first["Option3 Name"]),
-                                 ("Size", "Choose your format", "Finish"))
-                self.assertEqual([(r["Option1 Value"], r["Option2 Value"], r["Option3 Value"]) for r in book[:5]],
-                                 [('11" x 8.5"', "Spiral", "Matte"), ('11" x 8.5"', "Printable", "Digital"),
-                                  ('14" x 11.5"', "Spiral", "Matte"), ('14" x 11.5"', "Spiral", "Glossy"),
-                                  ('14" x 11.5"', "Printable", "Digital")])
-                self.assertTrue(book[2]["Variant Design"].split("|")[0].endswith("/14x11.5/front_cover.png"))
-                self.assertAlmostEqual(float(book[2]["Variant Price"]) - float(first["Variant Price"]), 10.0)
-                self.assertEqual(book[4]["Variant Price"], printable["Variant Price"])
-                design = first["Variant Design"].split("|")
-                self.assertEqual(len(design), 26)                        # 26 trang PNG cho Printify, đúng thứ tự
-                self.assertTrue(design[0].endswith("/11x8.5/front_cover.png"))
-                self.assertTrue(design[1].endswith("/11x8.5/m01_month.png"))
-                self.assertTrue(design[-1].endswith("/11x8.5/back_cover.png"))
-                self.assertEqual(printable["Variant Design"], "")
-                self.assertTrue(printable["Variant File"].endswith("/in_tai_nha_11x8.5.pdf"))
-                self.assertTrue(first["Image Src"].startswith("https://cdn.x.com/calendars/cats/cat-days/01_"))
-                self.assertEqual(first["Tags"], "a, b")
-                self.assertEqual(first["Product Category"], "Wall Calendars (Blank)")
-                dog_first = next(r for r in rows if r["Handle"].startswith("dog-days"))
-                self.assertEqual(dog_first["Product Category"], "Wall Calendars")
-                self.assertTrue(first["Variant SKU"].startswith("WCB-") and first["Variant SKU"].endswith("-11SM"))
-                self.assertTrue(dog_first["Variant SKU"].startswith("WCP-"))
-                self.assertEqual(printable["Title"], "")                 # chỉ dòng đầu mang Title
-                self.assertTrue(all(r["Image Src"] for r in book[5:]))
-                self.assertTrue(all("/01_" in r["Variant Image"] for r in book[:5]))   # preview 1 cho mọi biến thể
-                self.assertEqual([r["Image Src"].rsplit("/", 1)[-1][:3] for r in book if r["Image Src"]],
-                                 ["01_", "02_", "03_", "04_", "05_"])                  # ảnh đầu tiên = preview 1
-                self.assertEqual(len({r["Variant SKU"] for r in book[:5]}), 5)
-                dog = [r for r in rows if r["Handle"].startswith("dog-days") and r["Option1 Value"]]
-                self.assertEqual([(r["Option1 Value"], r["Option2 Value"], r["Option3 Value"]) for r in dog],
-                                 [('11" x 8.5"', "Spiral", "Matte"), ('11" x 8.5"', "Printable", "Digital"),
-                                  ('14" x 11.5"', "Spiral", "Glossy"), ('14" x 11.5"', "Printable", "Digital")])
+                self.assertEqual(len(s3.keys), 59 + 35)   # 5 preview + (PDF + 26 PNG) × 2 khổ; grid in sẵn: 14 PNG (không grid)
+                rows = list(csv.DictReader(open(res["csv"], encoding="utf-8")))
+                with open(res["csv"], encoding="utf-8") as f:
+                    head = next(csv.reader(f))
+                self.assertEqual(len(shop_csv.TEMPLATE), 23)
+                self.assertEqual(head, shop_csv.TEMPLATE + shop_csv.PAGE_COLS + shop_csv.PREVIEW_COLS)
+                self.assertEqual((head[23], head[48], head[-1]), ("Page 01 front_cover", "Page 26 back_cover", "Preview 5"))
+                for r in rows:
+                    size = "14x11.5" if "-14" in r["External ID"] else "11x8.5"
+                    premade = r["External ID"].startswith("WCP")
+                    for c in shop_csv.PAGE_COLS:
+                        if premade and c.endswith("_grid"):
+                            self.assertEqual(r[c], "")              # grid in sẵn: trang grid chỉ cho digital
+                        else:
+                            self.assertTrue(r[c].endswith(f"/{size}/{c[8:]}.png"))
+                cat = [r for r in rows if r["Label"].startswith("Cat Days")]
+                dog = [r for r in rows if r["Label"].startswith("Dog Days")]
+                # chỉ bản Spiral: blank 11 Matte, 14 Matte+Glossy; in sẵn 11 Matte, 14 Glossy
+                self.assertEqual([r["External ID"][-4:] for r in cat], ["11SM", "14SM", "14SG"])
+                self.assertEqual([r["External ID"][-4:] for r in dog], ["11SM", "14SG"])
+                self.assertTrue(cat[0]["External ID"].startswith("WCB-") and dog[0]["External ID"].startswith("WCP-"))
+                self.assertTrue(cat[0]["Print area front"].endswith("/11x8.5/front_cover.png"))
+                self.assertTrue(cat[1]["Print area front"].endswith("/14x11.5/front_cover.png"))
+                self.assertTrue(all(r["Quantity"] == "1" for r in rows))
+                self.assertTrue(all([r[c].rsplit("/", 1)[-1][:3] for c in shop_csv.PREVIEW_COLS]
+                                    == ["01_", "02_", "03_", "04_", "05_"] for r in rows))
+                self.assertTrue(all("/cats/" in r["Preview 1"] for r in cat))
+                filled = {"External ID", "Label", "Quantity", "Print area front"}
+                self.assertTrue(all(not r[k] for r in rows for k in shop_csv.TEMPLATE if k not in filled))
 
                 again = shop_csv.publish_all(cfg, on_event=lambda *_: None)   # chạy lại: không đẩy, không xuất lại
-                self.assertEqual((again["exported"], again["csv"], len(s3.keys)), ([], None, 2 * 59))
+                self.assertEqual((again["exported"], again["csv"], len(s3.keys)), ([], None, 59 + 35))
+
+    def test_only_selected_books_and_reexport(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cat = make_book(root, "cats", "Cat Days")
+            dog = make_book(root, "dogs", "Dog Days")
+            cfg = {"projects_dir": str(root), "r2": {"account_id": "a", "access_key_id": "k",
+                                                     "secret_access_key": "s", "bucket": "b",
+                                                     "public_url": "https://cdn.x.com/"}}
+            s3 = FakeS3()
+            with mock.patch.object(r2, "client", lambda _r2: s3):
+                res = shop_csv.publish_all(cfg, on_event=lambda *_: None, only=[cat])
+                self.assertEqual(res["exported"], ["Cat Days"])                  # chỉ cuốn được chọn
+                self.assertIsNone(r2.read_state(dog).get("pushed_at"))
+                again = shop_csv.publish_all(cfg, on_event=lambda *_: None, only=[cat])
+                self.assertEqual(again["exported"], ["Cat Days"])                # chọn lại = xuất lại
+                rows = list(csv.DictReader(open(again["csv"], encoding="utf-8")))
+                self.assertTrue(rows and all(r["Label"].startswith("Cat Days") for r in rows))
 
     def test_design_column_empty_by_default(self):
         self.assertFalse(shop_csv.DEFAULT_SHOP["include_design"])

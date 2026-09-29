@@ -365,3 +365,45 @@ input[type="text"], input[type="number"], select {
 @media (prefers-reduced-motion: reduce) {
   * { animation: none !important; transition: none !important; }
 }
+
+/* Hàng đợi batch */
+.queue .run-head { align-items: center; }
+.queue-list { list-style: none; margin: 8px 0 0; padding: 0; }
+.queue-list li { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-top: 1px solid var(--line); }
+.queue-list li .grow { flex: 1; }
+.queue-list li .muted, .queue-list li.muted { color: var(--muted); font-size: .9em; }
+.queue-list .tag { font-size: .8em; padding: 1px 8px; border-radius: 999px; background: var(--line); white-space: nowrap; }
+.queue-list .tag.ok { background: var(--ok); color: #fff; }
+.queue-list .tag.bad { background: var(--bad); color: #fff; }
+.queue-list .tag.run { background: var(--accent, #2f5d50); color: #fff; }
+.queue-done { margin-top: 10px; }
+.queue-done summary { cursor: pointer; color: var(--muted); }
+
+/* Chọn cuốn đẩy R2 + xuất CSV */
+.shop-tools, .shop-foot { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 10px 0; }
+.shop-tools .grow, .shop-foot .grow { flex: 1; }
+.shop-tools input[type=search] { padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; min-width: 200px; }
+.shop-books { max-height: 55vh; overflow: auto; border: 1px solid var(--line); border-radius: 10px; }
+.shop-group { padding: 6px 12px 2px; font-size: .85em; color: var(--muted); background: var(--bg, #f6f3ee);
+  position: sticky; top: 0; z-index: 1; }
+.shop-book { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-top: 1px solid var(--line);
+  cursor: pointer; }
+.shop-book img { width: 54px; height: 40px; object-fit: cover; border-radius: 4px; background: var(--line); }
+.shop-book .t { flex: 1; min-width: 0; }
+.shop-book .t strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.shop-book .t small { color: var(--muted); }
+.shop-book .tag { font-size: .75em; padding: 1px 8px; border-radius: 999px; background: var(--line); white-space: nowrap; }
+.shop-book .tag.new { background: var(--ok); color: #fff; }
+
+/* Sửa trang hỏng */
+.book-pages { margin: 14px 0; border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; }
+.book-pages summary { cursor: pointer; font-weight: 600; }
+.page-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 10px; margin-top: 8px; }
+.page-item { position: relative; border: 2px solid transparent; border-radius: 8px; overflow: hidden; cursor: pointer;
+  background: var(--line); }
+.page-item.on { border-color: var(--bad); }
+.page-item img { width: 100%; aspect-ratio: 4 / 3; object-fit: cover; display: block; }
+.page-item .miss { display: grid; place-items: center; aspect-ratio: 4 / 3; color: var(--muted); font-size: .85em; }
+.page-item span { position: absolute; left: 0; right: 0; bottom: 0; padding: 2px 6px; font-size: .8em;
+  background: rgba(0, 0, 0, .55); color: #fff; }
+.page-item input { position: absolute; top: 6px; left: 6px; }

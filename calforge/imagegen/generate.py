@@ -74,8 +74,10 @@ def accept_grid_background(path: Path, text_colors: list[str] | None = None) -> 
             return f"vùng đặt lịch thiếu tương phản với màu chữ {value}; giữ surface system nhưng chỉnh tone"
     valid_text_lums = [float(_relative_luminance(v)) for value in text_colors or []
                        if (v := _hex_rgb(value)) is not None]
-    if valid_text_lums and max(valid_text_lums) < .35 and float(np.median(center)) < .72:
-        return "vùng đặt lịch vẫn quá đậm; cần tint gần trắng 5–10% của shared base cho chữ tối"
+    # Nền grid là tint pastel NHẬN RA ĐƯỢC của màu nền cả cuốn (khoảng 88–93% độ sáng, xem prompts._grid_tone_rule),
+    # không còn là gần trắng; độ đọc chữ đã do kiểm tra tương phản ở trên lo. Chỉ chặn nền thật sự tối/trung tính.
+    if valid_text_lums and max(valid_text_lums) < .35 and float(np.median(center)) < .64:   # ~L* 84
+        return "vùng đặt lịch vẫn quá đậm; cần tint pastel sáng (khoảng 88–93% độ sáng) của shared base cho chữ tối"
     return None
 
 

@@ -131,6 +131,52 @@ def _status(concept_dir: Path, **kw) -> dict:
     return st
 
 
+REDO_PAGES = ["cover"] + [f"m{m:02d}" for m in range(1, 13)] + ["grid"]
+
+
+def redo_pages(concept_dir: Path, pages: list[str], on_event=print) -> list[str]:
+    """Chuẩn bị vẽ lại các trang hỏng: cất ảnh AI cũ (+ bản upscale) vào _he_thong/ky_thuat/anh_cu/ để lượt sản xuất
+    sau gen lại đúng các trang đó; mọi bước sau (upscale, render, mockup) tự làm lại vì ảnh mới hơn. Cuốn đã xuất CSV
+    được đánh dấu chưa xuất để lần Đẩy R2 + xuất CSV sau có bản mới. Trả về các trang đã cất."""
+    concept = json.loads(layout.concept_file(concept_dir).read_text(encoding="utf-8"))
+    allowed = [p for p in REDO_PAGES if p != "grid" or products.ai_grid(concept)]
+    bad = [p for p in pages if p not in allowed]
+    if bad:
+        raise ValueError(f"trang không vẽ lại được: {', '.join(bad)} (được: {', '.join(allowed)})")
+    old = layout.tech(concept_dir, "anh_cu")
+    old.mkdir(parents=True, exist_ok=True)
+    stamp = time.strftime("%Y%m%d_%H%M%S")
+    moved = []
+    for jid in pages:
+        for f in list(layout.raw(concept_dir).glob(f"{jid}.*")) + list(layout.final(concept_dir).glob(f"{jid}.*")):
+            f.replace(old / f"{f.stem}-{f.parent.name}-{stamp}{f.suffix}")
+            if jid not in moved:
+                moved.append(jid)
+    from .publish import r2
+    st = r2.read_state(concept_dir)
+    if st.get("exported_at"):
+        st.pop("exported_at", None)
+        st.pop("exported_csv", None)
+        r2.write_state(concept_dir, st)
+    _status(concept_dir, stage="images", ok=False, reason=f"đang vẽ lại: {', '.join(pages)}")
+    on_event(f"↻ Vẽ lại {len(pages)} trang: {', '.join(pages)} (ảnh cũ cất ở ky_thuat/anh_cu)")
+    return moved
+
+
+def needs_finishing(concept_dir: Path) -> bool:
+    """Đã vẽ đủ tranh nhưng chưa xong phần máy tự làm (trang in / PDF / mockup / listing) - thường do bị dừng
+    giữa chừng. Phần còn lại không cần ChatGPT."""
+    try:
+        concept = json.loads(layout.concept_file(concept_dir).read_text(encoding="utf-8"))
+        st = json.loads(layout.status_file(concept_dir).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    if st.get("ok") and st.get("stage") in ("listing", "printify"):
+        return False
+    jobs = [j for j in RENDER_ART_JOBS if j != "grid" or products.ai_grid(concept)]
+    return all(plan.job_done(concept_dir, j) is not None for j in jobs)
+
+
 def produce(concept_dir: Path, cfg: dict, *, printify: bool = True, publish: bool = False, on_event=print) -> dict:
     """Từ concept.json đến sản phẩm. Trả về status."""
     failed = produce_images(concept_dir, cfg, on_event=on_event)
@@ -203,21 +249,30 @@ def finish_book(concept_dir: Path, cfg: dict, *, printify: bool = True, publish:
 
     # 5 ảnh preview (mockup) cho listing. Lỗi ở đây không chặn sản phẩm: trang in đã xong.
     on_event("▶ Bước 4b: Ghép 5 ảnh preview mockup cho listing")
+    preview_error = ""
     if not product["mockups"]:
         on_event("  ↷ Loại lịch này chưa có ảnh mockup - bỏ qua")
     else:
+        from .render.mockups import PreviewError, missing_previews, previews
         try:
-            from .render.mockups import previews
             made = previews(concept_dir, on_event)
             on_event(f"  ✔ {len(made)} ảnh preview mới" if made else "  ↷ Ảnh preview đã mới, bỏ qua")
+        except PreviewError as e:
+            preview_error = "; ".join(e.errors)
         except Exception as e:  # noqa: BLE001
-            on_event(f"  ⚠ Không ghép được ảnh preview: {e}")
+            preview_error = str(e)
+        lacking = missing_previews(concept_dir)
+        if lacking and not preview_error:
+            preview_error = f"thiếu {', '.join(lacking)}"
 
     if _listing_is_current(concept_dir):
         on_event("▶ Bước 5/6: Listing đã mới, bỏ qua")
     else:
         on_event("▶ Bước 5/6: Tạo listing (title, tags, mô tả)")
         write_listing(concept_dir)
+    if preview_error:     # trang in + listing xong nhưng thiếu ảnh quảng cáo: chưa đủ để đăng bán
+        on_event(f"  ✘ Thiếu ảnh quảng cáo: {preview_error}")
+        return _status(concept_dir, stage="mockup", ok=False, reason=f"thiếu ảnh quảng cáo: {preview_error}")
     if not printify:
         return _status(concept_dir, stage="listing", ok=True, note="bỏ qua Printify theo yêu cầu")
     if not product["printify"]:

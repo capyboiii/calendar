@@ -32,7 +32,17 @@ def is_profile_locked(profile_dir: Path) -> bool:
 
 
 def has_chatgpt_session(profile_dir: Path) -> bool:
-    """Kiểm tra xem profile đã từng lưu cookie/session duyệt web chưa."""
+    """Đã đăng nhập ChatGPT chưa. Profile có dấu đăng nhập (MARKER, ghi khi máy XÁC NHẬN đăng nhập thành công)
+    thì tin dấu đó; profile cũ (trước khi có dấu) mới lùi về kiểm tra cookie."""
+    from .bulk_login import MARKER
+    marker = profile_dir / MARKER
+    if marker.exists():
+        try:
+            return bool(json.loads(marker.read_text(encoding="utf-8")).get("email"))
+        except (OSError, ValueError):
+            return False
+    if (profile_dir / ".calforge_new").exists():      # tạo mới bằng tool mà chưa đăng nhập được lần nào
+        return False
     indicators = [
         profile_dir / "Default" / "Network" / "Cookies",
         profile_dir / "Default" / "Cookies",
@@ -99,7 +109,62 @@ def create_account(name: str, cfg: dict | None = None) -> Path:
         raise FileExistsError(f"Tài khoản '{name}' đã tồn tại trong {pdir}")
 
     acc_dir.mkdir(parents=True, exist_ok=True)
+    (acc_dir / ".calforge_new").write_text("", encoding="utf-8")   # chưa đăng nhập: cookie không được tính
     return acc_dir
+
+
+def close_profile_chrome(udir: Path, wait: float = 8.0) -> None:
+    """Tắt các tiến trình Chrome đang dùng đúng thư mục profile này (không đụng Chrome khác)."""
+    import os
+    import subprocess
+    import time
+    if os.name != "nt":
+        return
+    ps = ("Get-CimInstance Win32_Process -Filter \"Name='chrome.exe'\" | Where-Object { $_.CommandLine -like "
+          f"'*{udir.resolve()}*' }} | ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force "
+          "-ErrorAction SilentlyContinue }")
+    subprocess.run(["powershell", "-NoProfile", "-Command", ps], capture_output=True, check=False,
+                   creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    end = time.time() + wait
+    while is_profile_locked(udir) and time.time() < end:
+        time.sleep(0.5)
+
+
+def _processes() -> list[dict]:
+    """Mọi tiến trình Windows: ProcessId, ParentProcessId, Name, CommandLine."""
+    import os
+    import subprocess
+    if os.name != "nt":
+        return []
+    ps = ("Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,CommandLine "
+          "| ConvertTo-Json -Compress")
+    out = subprocess.run(["powershell", "-NoProfile", "-Command", ps], capture_output=True, text=True,
+                         encoding="utf-8", errors="replace", check=False,
+                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout
+    try:
+        data = json.loads(out or "[]")
+    except ValueError:
+        return []
+    return data if isinstance(data, list) else [data]
+
+
+def profile_users(udir: Path, candidates: set[int]) -> set[int]:
+    """Trong các PID `candidates` (vd tiến trình của các tác vụ đang chạy), PID nào là "tổ tiên" của Chrome đang
+    mở profile này - tức tác vụ nào đang dùng tài khoản. Rỗng = Chrome mồ côi (không tác vụ nào giữ)."""
+    procs = _processes()
+    parent = {p["ProcessId"]: p.get("ParentProcessId") for p in procs}
+    key = str(udir.resolve()).lower()
+    owners: set[int] = set()
+    for p in procs:
+        if (p.get("Name") or "").lower() == "chrome.exe" and key in (p.get("CommandLine") or "").lower():
+            pid, seen = p["ProcessId"], set()
+            while pid and pid not in seen:
+                seen.add(pid)
+                if pid in candidates:
+                    owners.add(pid)
+                    break
+                pid = parent.get(pid)
+    return owners
 
 
 def delete_account(name: str, cfg: dict | None = None) -> bool:
@@ -120,6 +185,8 @@ def delete_account(name: str, cfg: dict | None = None) -> bool:
     if not acc_dir.exists():
         raise FileNotFoundError(f"Không tìm thấy tài khoản '{name}' trong {pdir}")
 
+    if is_profile_locked(acc_dir):
+        close_profile_chrome(acc_dir)          # xoá = bỏ tài khoản: tự đóng Chrome của đúng profile này
     if is_profile_locked(acc_dir):
         raise RuntimeError(f"Tài khoản '{name}' đang mở trong Chrome. Vui lòng đóng cửa sổ Chrome trước khi xóa.")
 
@@ -150,7 +217,8 @@ def delete_account(name: str, cfg: dict | None = None) -> bool:
     return True
 
 
-def wait_until_browser_closed(ctx, udir: Path | None = None, poll: float = 0.5) -> None:
+def wait_until_browser_closed(ctx, udir: Path | None = None, poll: float = 0.5, done=None,
+                              timeout: float | None = None) -> bool:
     """Chờ tới khi người dùng đóng cửa sổ Chrome, rồi trả về (không bao giờ ném lỗi).
 
     Dùng đồng thời hai tín hiệu vì mỗi cái hụt ở một tình huống:
@@ -167,7 +235,17 @@ def wait_until_browser_closed(ctx, udir: Path | None = None, poll: float = 0.5) 
     except Exception:
         pass
     became_locked = False
+    import time as _time
+    deadline = _time.time() + timeout if timeout else None
     while not closed.is_set():
+        if deadline and _time.time() > deadline:
+            return False
+        if done is not None:
+            try:
+                if done():
+                    return True           # điều kiện xong (vd đã đăng nhập) -> không cần chờ người dùng đóng
+            except Exception:  # noqa: BLE001
+                pass
         try:
             if not ctx.pages:
                 return
@@ -178,10 +256,18 @@ def wait_until_browser_closed(ctx, udir: Path | None = None, poll: float = 0.5) 
                 became_locked = True
             elif became_locked:      # đã từng mở, giờ khóa nhả -> đã đóng
                 return
-        closed.wait(poll)
+        # Chờ bằng Playwright (không dùng closed.wait): API đồng bộ chỉ nhận sự kiện của trình duyệt (đổi trang,
+        # tab mới, đóng) khi đang gọi Playwright - ngủ kiểu threading thì ctx.pages / page.url đứng yên mãi.
+        try:
+            ctx.pages[0].wait_for_timeout(poll * 1000)
+        except Exception:  # noqa: BLE001 - trang vừa đóng: vòng sau sẽ thấy
+            closed.wait(poll)
 
 
-def open_login_browser(name: str, cfg: dict | None = None, on_event=print) -> None:
+LOGIN_TIMEOUT_S = 15 * 60      # để quên cửa sổ đăng nhập: tự đóng, không treo tác vụ mãi
+
+
+def open_login_browser(name: str, cfg: dict | None = None, on_event=print) -> bool:
     """Mở trình duyệt Chrome giao diện thật để người dùng đăng nhập tài khoản ChatGPT."""
     from playwright.sync_api import sync_playwright
 
@@ -194,7 +280,7 @@ def open_login_browser(name: str, cfg: dict | None = None, on_event=print) -> No
 
     on_event(f"🚀 Đang mở trình duyệt Chrome cho tài khoản: {name}")
     on_event("👉 Hãy đăng nhập ChatGPT trên cửa sổ vừa mở.")
-    on_event("👉 Khi đăng nhập xong, hãy ĐÓNG CỬA SỔ TRÌNH DUYỆT để hoàn tất lưu phiên.")
+    on_event("👉 Đăng nhập xong, cửa sổ sẽ tự đóng.")
 
     with sync_playwright() as pw:
         try:
@@ -204,6 +290,8 @@ def open_login_browser(name: str, cfg: dict | None = None, on_event=print) -> No
                 channel="chrome",
                 viewport=None,
                 args=["--disable-blink-features=AutomationControlled"],
+                # bỏ cờ "Chrome đang bị phần mềm tự động điều khiển": Google coi là dấu hiệu bot khi đăng nhập
+                ignore_default_args=["--enable-automation", "--no-sandbox"],
             )
         except Exception as e:
             # Fallback nếu channel chrome không tìm thấy
@@ -213,6 +301,8 @@ def open_login_browser(name: str, cfg: dict | None = None, on_event=print) -> No
                 headless=False,
                 viewport=None,
                 args=["--disable-blink-features=AutomationControlled"],
+                # bỏ cờ "Chrome đang bị phần mềm tự động điều khiển": Google coi là dấu hiệu bot khi đăng nhập
+                ignore_default_args=["--enable-automation", "--no-sandbox"],
             )
 
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
@@ -221,16 +311,77 @@ def open_login_browser(name: str, cfg: dict | None = None, on_event=print) -> No
         except Exception as e:
             on_event(f"Lưu ý khi mở trang: {e}")
 
-        wait_until_browser_closed(ctx, udir)   # chờ người dùng đóng cửa sổ (không ném lỗi)
+        from .bulk_login import logged_in_email
+        # Tự nhận đăng nhập xong: giao diện có ô chat VÀ máy chủ ChatGPT trả email (khách chưa đăng nhập cũng thấy ô
+        # chat, nên không tin riêng giao diện). Ở mọi tab. Người dùng vẫn có thể tự đóng cửa sổ.
+        found = {"email": "", "polls": 0}
 
+        def done() -> bool:
+            found["email"] = logged_in_email(ctx)
+            found["polls"] += 1
+            if not found["email"] and found["polls"] % 30 == 0:      # ~1 phút/lần: ghi đang ở trang nào để dò lỗi
+                try:
+                    urls = ", ".join((pg.url or "")[:60] for pg in ctx.pages)
+                except Exception:  # noqa: BLE001
+                    urls = "?"
+                on_event(f"… vẫn chờ đăng nhập '{name}' (trang: {urls})")
+            return bool(found["email"])
+
+        wait_until_browser_closed(ctx, udir, poll=2.0, done=done, timeout=LOGIN_TIMEOUT_S)
+        if found["email"]:
+            on_event(f"✔ Đã đăng nhập '{name}' ({found['email']}). Đang lưu và đóng cửa sổ...")
+            time.sleep(3)                                  # để Chrome kịp ghi cookie phiên xuống đĩa
         try:
             ctx.close()
         except Exception:
             pass
 
-    # Báo trung thực theo trạng thái THẬT của profile, không báo thành công vô điều kiện.
-    if has_chatgpt_session(udir):
-        on_event(f"✔ Đã lưu phiên cho '{name}'. Kiểm tra lại bằng: python -m calforge accounts")
-    else:
-        on_event(f"⚠ Đã đóng trình duyệt nhưng '{name}' chưa có phiên đăng nhập. "
-                 f"Hãy mở lại và đăng nhập ChatGPT trước khi đóng cửa sổ.")
+    email = found["email"]
+    if not email:
+        # người dùng tự đóng trước khi máy kịp nhận (hoặc hết giờ): mở ngầm kiểm tra lại cho chắc
+        on_event("… Đang kiểm tra lại phiên đăng nhập...")
+        email = verify_session(udir)
+    if not email:
+        on_event(f"⚠ '{name}' chưa đăng nhập được ChatGPT. Bấm Đăng nhập để thử lại.")
+        return False
+    from .bulk_login import _emails, _save_email, mark_logged_in
+    dup = [n for n, e in _emails().items() if n != name and e.lower() == email.lower() and (pdir / n).is_dir()]
+    if dup:
+        on_event(f"⚠ Email {email} đã có ở {dup[0]} - '{name}' bị trùng, nên xoá '{name}'.")
+    _save_email(name, email)
+    mark_logged_in(udir, email)
+    (udir / ".calforge_new").unlink(missing_ok=True)
+    on_event(f"✔ Đã lưu phiên cho '{name}' ({email}).")
+    return True
+
+
+def verify_session(udir: Path, wait_s: float = 30.0) -> str:
+    """Mở ngầm profile (ngoài màn hình), vào ChatGPT, trả email nếu đã đăng nhập thật ('' nếu chưa)."""
+    from playwright.sync_api import sync_playwright
+
+    from .browser import BASE_ARGS, HIDDEN_ARGS, hide_offscreen_from_taskbar
+    from .bulk_login import logged_in_email
+    if is_profile_locked(udir):
+        return ""
+    try:
+        with sync_playwright() as pw:
+            ctx = pw.chromium.launch_persistent_context(
+                user_data_dir=str(udir), headless=False, channel="chrome", no_viewport=True,
+                ignore_default_args=["--enable-automation", "--no-sandbox"], args=BASE_ARGS + HIDDEN_ARGS)
+            try:
+                hide_offscreen_from_taskbar()
+                page = ctx.pages[0] if ctx.pages else ctx.new_page()
+                page.goto("https://chatgpt.com/", timeout=60_000)
+                end = time.time() + wait_s
+                while time.time() < end:
+                    email = logged_in_email(ctx)
+                    if email:
+                        return email
+                    page.wait_for_timeout(1500)
+                return ""
+            finally:
+                ctx.close()
+    except Exception:  # noqa: BLE001
+        return ""
+
+

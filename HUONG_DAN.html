@@ -37,110 +37,50 @@
 <body>
 <main>
   <h1>Cách dùng CalForge Studio</h1>
-  <p class="lead">Máy tự làm lịch treo tường để bán. Bạn chỉ cần gõ <b>chủ đề</b>, chọn <b>bao nhiêu cuốn</b>, bấm <b>Bắt đầu</b> rồi chờ.</p>
+  <p class="lead">Gõ chủ đề → bấm Bắt đầu → máy tự làm lịch treo tường để bán.</p>
 
-  <nav>
-    <a href="#cai">1. Cài</a><a href="#mo">2. Mở</a><a href="#tk">3. Thêm tài khoản</a>
-    <a href="#lam">4. Làm lịch</a><a href="#xem">5. Lấy lịch</a><a href="#dang">6. Đưa lên web</a>
-    <a href="#loi">7. Khi có vấn đề</a>
-  </nav>
-
-  <section id="cai">
-    <h2><span class="n">1</span>Cài (chỉ làm 1 lần)</h2>
-    <ol class="big">
-      <li>Bấm đúp vào file <b>CalForge_Setup.exe</b>.</li>
-      <li>Nếu hiện khung xanh: bấm <b class="ui">More info</b> → <b class="ui">Run anyway</b>.<br>
-          Nếu máy hỏi <i>“cho phép không?”</i>: bấm <b class="ui">Yes</b>.</li>
-      <li>Hiện một cửa sổ đen có chữ chạy. <b>Để nguyên, đừng tắt.</b> Chờ khoảng 10–30 phút.</li>
-      <li>Xong thì trang làm lịch <b>tự mở ra</b>. Ngoài màn hình có thêm biểu tượng <b>CalForge Studio</b>.</li>
-    </ol>
+  <section>
+    <h2><span class="n">1</span>Cài (1 lần)</h2>
+    <p><b>Làm:</b> bấm đúp <b>CalForge_Studio_Setup.exe</b> → <b class="ui">Install</b> → <b class="ui">Finish</b>.
+       (Hiện khung xanh thì bấm <b class="ui">More info</b> → <b class="ui">Run anyway</b>.)</p>
+    <p><b>Được:</b> biểu tượng <b>CalForge Studio</b> ngoài màn hình. Bấm vào là mở.</p>
+    <div class="tip">Máy cần có Google Chrome.</div>
   </section>
 
-  <section id="mo">
-    <h2><span class="n">2</span>Mở ra dùng</h2>
-    <ol class="big">
-      <li>Bấm đúp biểu tượng <b>CalForge Studio</b> ngoài màn hình.</li>
-      <li>Chờ vài giây là trang làm lịch hiện ra.</li>
-    </ol>
-    <div class="warn">Luôn có một <b>cửa sổ đen</b> mở kèm. <b>Đừng tắt nó</b> khi máy đang làm lịch. Tắt cửa sổ đen là tắt máy làm lịch.</div>
-    <div class="tip">Lỡ tắt trang làm lịch? Không sao, máy vẫn đang làm. Bấm lại biểu tượng là thấy tiếp.</div>
+  <section>
+    <h2><span class="n">2</span>Thêm tài khoản ChatGPT (1 lần)</h2>
+    <p><b>Làm:</b> bấm <b class="ui">Tài khoản ChatGPT</b> → <b class="ui">Đăng nhập hàng loạt</b> → dán mỗi dòng
+       <code>email | mật khẩu | mã 2FA</code> → <b class="btn">Đăng nhập tất cả</b>.
+       Nếu hiện cửa sổ bắt xác minh thì làm theo trong đó.</p>
+    <p><b>Được:</b> máy dùng các tài khoản này để vẽ. Càng nhiều tài khoản càng nhanh
+       (ví dụ 5 tài khoản ChatGPT Plus ≈ 30 cuốn/ngày).</p>
   </section>
 
-  <section id="tk">
-    <h2><span class="n">3</span>Thêm tài khoản ChatGPT (làm 1 lần)</h2>
-    <p>Máy nhờ ChatGPT nghĩ ý tưởng và vẽ tranh. Có càng nhiều tài khoản thì máy càng ít phải chờ.</p>
-    <ol class="big">
-      <li>Bấm nút <b class="ui">Tài khoản ChatGPT</b> ở góc trên bên phải.</li>
-      <li>Bấm <b class="ui">Đăng nhập hàng loạt</b>.</li>
-      <li>Dán các tài khoản vào ô, <b>mỗi tài khoản một dòng</b>, viết như sau:<br>
-          <code>email | mật khẩu | mã 2FA</code><br>
-          <small>“Mã 2FA” là dãy chữ bảo mật của tài khoản. Tài khoản không có thì bỏ phần này.</small></li>
-      <li>Bấm <b class="btn">Đăng nhập tất cả</b> rồi chờ. Máy tự đăng nhập từng tài khoản.</li>
-      <li>Nếu bật lên một cửa sổ Chrome bắt <b>chứng minh bạn là người</b> (tick ô, chọn hình…), làm theo trong cửa sổ đó là xong.</li>
-    </ol>
-    <div class="tip">Máy <b>không lưu mật khẩu</b>. Tài khoản bị thoát ra thì bấm <b class="ui">Đăng nhập lại</b> bên cạnh tên tài khoản đó.</div>
-  </section>
-
-  <section id="lam">
-    <h2><span class="n">4</span>Làm lịch</h2>
-    <ol class="big">
-      <li>Chọn <b>Loại lịch</b>:
-        <ul>
-          <li><b>Wall Calendar (Blank)</b>: máy làm cả tranh lẫn trang ghi ngày.</li>
-          <li><b>Wall Calendar</b>: máy chỉ vẽ tranh, trang ghi ngày dùng mẫu có sẵn.</li>
-        </ul></li>
-      <li>Gõ <b>chủ đề</b> bằng tiếng Anh. Ví dụ: <code>chickens</code> (gà), <code>coastal beach</code> (biển), <code>bible</code> (Kinh Thánh).</li>
-      <li>Bấm <b class="ui">−</b> / <b class="ui">+</b> để chọn <b>số cuốn</b>.</li>
-      <li>Bấm <b class="btn">Bắt đầu</b>.</li>
-    </ol>
-    <p>Thời gian làm <b>không cố định</b>. Nó tuỳ vào <b>số tài khoản ChatGPT</b> và tài khoản còn <b>đủ lượt</b> hay không:
-       càng nhiều tài khoản còn lượt thì máy vẽ càng nhanh. Hết lượt thì máy phải chờ tài khoản được dùng lại.
-       <b>Bạn không cần ngồi canh</b>.</p>
-    <div class="tip">Ví dụ: <b>5 tài khoản ChatGPT Plus</b> làm được khoảng <b>30 cuốn mỗi ngày</b>.</div>
-    <div class="tip">Máy luôn làm <b>các cuốn khác nhau</b>: trước khi làm cuốn mới, máy tự so với mọi cuốn đã làm trên máy này
-       (kể cả các lần chạy trước) để không bị trùng ý tưởng, kiểu vẽ, nền và bố cục.</div>
-    <p>Thanh chạy trên trang cho biết máy đang làm tới đâu.
-       Muốn dừng: bấm <b class="ui">Dừng</b>, phần đã làm vẫn còn.</p>
-    <div class="tip">Nếu thấy dòng <b>“tạm hết lượt”</b>: tài khoản ChatGPT đang nghỉ. Máy tự chờ rồi làm tiếp, bạn không cần làm gì.</div>
-  </section>
-
-  <section id="xem">
-    <h2><span class="n">5</span>Lấy lịch đã làm</h2>
+  <section>
+    <h2><span class="n">3</span>Làm lịch</h2>
+    <p><b>Làm:</b> chọn loại lịch → gõ chủ đề tiếng Anh (vd <code>chickens</code>) → chọn số cuốn → <b class="btn">Bắt đầu</b>. Rồi để máy tự chạy.</p>
     <ul>
-      <li>Kéo xuống phần <b>Lịch đã làm</b>. Mỗi cuốn có nhãn: <b>Xong</b>, <b>Bị dở</b> hoặc <b>Chưa xong</b>.</li>
-      <li>Bấm vào một cuốn để xem ảnh, tải file in, và bấm <b class="ui">Chép</b> để lấy tên sản phẩm, từ khoá, lời giới thiệu đem đi đăng bán.</li>
-      <li>Bấm <b class="btn">Mở thư mục cuốn này</b> để thấy file trên máy:
-        <ul>
-          <li><code>preview</code>: 5 ảnh để đăng bán.</li>
-          <li><code>11x8.5</code> và <code>14x11.5</code>: file in của 2 cỡ lịch.</li>
-        </ul></li>
-      <li>Cuốn <b>Bị dở</b>: mở cuốn đó, bấm <b class="btn">Làm tiếp</b>.</li>
+      <li><b>Wall Calendar (Blank)</b>: máy vẽ cả tranh lẫn trang lịch.</li>
+      <li><b>Wall Calendar</b>: máy chỉ vẽ tranh, trang lịch có sẵn.</li>
     </ul>
+    <p><b>Được:</b> các cuốn lịch khác nhau, hiện ở mục <b>Lịch đã làm</b>.</p>
   </section>
 
-  <section id="dang">
-    <h2><span class="n">6</span>Đưa lịch lên trang web bán hàng</h2>
-    <ol class="big">
-      <li><b>Lần đầu</b>: bấm <b class="ui">Khoá R2</b>, điền 5 ô theo thông tin người quản lý web đưa cho bạn, bấm <b class="btn">Lưu</b>.</li>
-      <li>Bấm <b class="btn">Đẩy R2 + xuất CSV</b> rồi chờ. Máy gửi ảnh và file lên mạng, rồi tạo <b>1 file danh sách sản phẩm</b>.</li>
-      <li>Bấm <b class="ui">Tải CSV</b> để tải file danh sách về, đưa file này vào trang quản lý web.</li>
-    </ol>
-    <div class="tip">Cuốn nào đã đưa lên rồi thì lần sau máy tự bỏ qua, chỉ làm cuốn mới.</div>
+  <section>
+    <h2><span class="n">4</span>Đưa lên web</h2>
+    <p><b>Làm:</b> bấm <b class="btn">Đẩy R2 + xuất CSV</b> → chờ → bấm <b class="ui">Tải CSV</b>.
+       (Lần đầu bấm <b class="ui">Khoá R2</b> điền thông tin người quản lý đưa cho.)</p>
+    <p><b>Được:</b> 1 file CSV có đủ link ảnh của các cuốn mới, gửi file này cho người quản lý.</p>
   </section>
 
-  <section id="loi">
-    <h2><span class="n">7</span>Khi có vấn đề</h2>
+  <section>
+    <h2><span class="n">!</span>Khi gặp chữ này</h2>
     <table>
-      <tr><th>Bạn thấy</th><th>Bạn làm</th></tr>
-      <tr><td>“Chưa có tài khoản ChatGPT”</td><td>Làm phần 3.</td></tr>
-      <tr><td>“Tạm hết lượt – thử lại lúc …”</td><td>Không làm gì, máy tự chờ. Thêm tài khoản thì đỡ phải chờ.</td></tr>
+      <tr><td>“Tạm hết lượt”</td><td>Không làm gì, máy tự chờ rồi chạy tiếp.</td></tr>
       <tr><td>Cuốn ghi “Bị dở”</td><td>Mở cuốn đó → <b class="btn">Làm tiếp</b>.</td></tr>
-      <tr><td>“Đang chạy việc khác”</td><td>Chờ việc cũ xong, hoặc bấm <b class="ui">Dừng</b> rồi làm lại.</td></tr>
-      <tr><td>“Chưa nhập khoá R2”</td><td>Làm bước 1 của phần 6.</td></tr>
-      <tr><td>Bấm biểu tượng mà không mở được</td><td>Bấm đúp lại file <b>CalForge_Setup.exe</b> một lần.</td></tr>
-      <tr><td>Lỗi khác</td><td>Bấm <b class="ui">Chi tiết</b> dưới thanh chạy, chụp màn hình gửi người hỗ trợ.</td></tr>
+      <tr><td>Lỗi khác</td><td>Chụp màn hình gửi người hỗ trợ.</td></tr>
     </table>
-    <div class="warn">Có bản mới? Bấm đúp file <b>CalForge_Setup.exe</b> mới. Lịch đã làm và tài khoản vẫn còn nguyên.</div>
+    <div class="tip">Đóng cửa sổ thì máy vẫn làm tiếp. Muốn tắt hẳn: bấm <b class="ui">Tắt tool</b>.</div>
   </section>
 </main>
 </body>

@@ -7,19 +7,19 @@ Mỗi hàm trả về (errors, warnings):
 from __future__ import annotations
 
 import re
-from pathlib import Path
+
 
 from ..core import dates, kjv
 from ..render.grid_compositions import COMPOSITIONS
 from . import catalog
 from .templates import load_fonts
 
-BANNED_FILE = Path(__file__).resolve().parents[2] / "data" / "banned_terms.txt"
+
 
 FRAME_TYPES = {"seasonal", "collection", "journey", "one_scene_12_seasons", "word_of_month"}
-CONTENT_TYPES = {"bible_verse_kjv", "practical_tip", "fun_fact", "affirmation", "public_domain_quote", "none"}
+CONTENT_TYPES = {"bible_verse_kjv", "practical_tip", "fun_fact", "affirmation", "quote", "public_domain_quote", "none"}
 GRID_FUNCTIONS = {"standard", "notes_column", "family_columns", "prayer_list", "moon_phases", "tracker"}
-IP_RISKS = {"none", "low", "high"}
+
 MONTH_ABBR = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 HEX = re.compile(r"^#[0-9A-Fa-f]{6}$")
 
@@ -28,34 +28,6 @@ def _relative_luminance(value: str) -> float:
     rgb = [int(value[i:i + 2], 16) / 255 for i in (1, 3, 5)]
     linear = [c / 12.92 if c <= .04045 else ((c + .055) / 1.055) ** 2.4 for c in rgb]
     return .2126 * linear[0] + .7152 * linear[1] + .0722 * linear[2]
-
-
-def banned_terms() -> list[str]:
-    lines = BANNED_FILE.read_text(encoding="utf-8").splitlines()
-    return [ln.strip().lower() for ln in lines if ln.strip() and not ln.startswith("#")]
-
-
-def _strings(obj, path=""):
-    """Duyệt mọi chuỗi trong JSON kèm đường dẫn, để báo lỗi chỉ đúng chỗ."""
-    if isinstance(obj, str):
-        yield path, obj
-    elif isinstance(obj, dict):
-        for k, v in obj.items():
-            yield from _strings(v, f"{path}.{k}" if path else k)
-    elif isinstance(obj, list):
-        for i, v in enumerate(obj):
-            yield from _strings(v, f"{path}[{i}]")
-
-
-def _banned_hits(obj) -> list[str]:
-    terms = banned_terms()
-    hits = []
-    for path, s in _strings(obj):
-        low = s.lower()
-        for t in terms:
-            if re.search(rf"(?<![a-z]){re.escape(t)}(?![a-z])", low):
-                hits.append(f'{path} contains the banned term "{t}" (trademark/IP risk) — replace it')
-    return hits
 
 
 def _words(s: str) -> int:
@@ -107,7 +79,7 @@ def validate_angles(data: dict) -> tuple[list[str], list[str]]:
     for i, a in enumerate(angles):
         p = f"angles[{i}]"
         for key in ("id", "title", "hook", "buyer", "frame_type", "months_sketch", "recurring_motif",
-                    "content_type", "grid_function", "ai_feasibility", "ip_risk"):
+                    "content_type", "grid_function", "ai_feasibility"):
             if key not in a:
                 errors.append(f"{p} is missing \"{key}\"")
         if a.get("id") in ids:
@@ -119,8 +91,6 @@ def validate_angles(data: dict) -> tuple[list[str], list[str]]:
             errors.append(f"{p}.content_type must be one of {sorted(CONTENT_TYPES)}")
         if a.get("grid_function") not in GRID_FUNCTIONS:
             errors.append(f"{p}.grid_function must be one of {sorted(GRID_FUNCTIONS)}")
-        if a.get("ip_risk") not in IP_RISKS:
-            errors.append(f"{p}.ip_risk must be one of {sorted(IP_RISKS)}")
         sketch = a.get("months_sketch") or []
         if len(sketch) != 12:
             errors.append(f"{p}.months_sketch must have exactly 12 items (has {len(sketch)})")
@@ -142,14 +112,13 @@ def validate_angles(data: dict) -> tuple[list[str], list[str]]:
         if a.get("style_family") not in catalog.family_ids():
             errors.append(f'{p}.style_family must be one of: {", ".join(sorted(catalog.family_ids()))}')
 
-    errors += _banned_hits(data)
     return errors, warnings
 
 
 def usable_angles(data: dict, min_feasibility: int = 3) -> list[dict]:
-    """Góc được phép sản xuất: bỏ rủi ro bản quyền cao và khó gen đồng bộ."""
+    """Góc được phép sản xuất: chỉ lọc theo khả năng gen đồng bộ."""
     out = [a for a in data.get("angles", [])
-           if a.get("ip_risk") != "high" and (a.get("ai_feasibility") or {}).get("score", 0) >= min_feasibility]
+           if (a.get("ai_feasibility") or {}).get("score", 0) >= min_feasibility]
     return sorted(out, key=lambda a: -a["ai_feasibility"]["score"])
 
 
@@ -308,7 +277,6 @@ def validate_concept(c: dict, year: int, market: str = "US") -> tuple[list[str],
     if len({t.lower() for t in tags}) != len(tags):
         errors.append("listing.tags contains duplicates")
 
-    errors += _banned_hits(c)
     if ctype == "bible_verse_kjv" and not kjv.has_dataset():
         warnings.append("data/kjv.json chưa có: mới kiểm được tên sách và cú pháp mã câu, chưa kiểm được câu có tồn tại không")
     return errors, warnings

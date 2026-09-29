@@ -97,7 +97,7 @@ def cmd_angles(args, cfg):
     for a in json.loads(f.read_text(encoding="utf-8")):
         feas = a["ai_feasibility"]["score"]
         print(f"{a['id']:>6}  [{a['frame_type']:<20}] [{a.get('style_family', '?'):<24}] AI {feas}/5 "
-              f"IP {a['ip_risk']:<4}  {a['title']}")
+              f"{a['title']}")
         print(f"        {a['hook']}")
 
 
@@ -197,6 +197,36 @@ def cmd_produce(args, cfg):
     _print_status([{"concept": args.concept, **st}])
 
 
+def cmd_finish(args, cfg):
+    """Hoàn thiện một cuốn đã vẽ đủ tranh (không cần ChatGPT): upscale, trang in, PDF, ảnh quảng cáo, listing."""
+    from .pipeline import finish_book, upscale_concept
+
+    d = _concept_dir(args.concept)
+    if args.redo_previews:
+        for f in layout.listing(d).glob("*.jpg"):
+            f.unlink()
+        print("↻ Làm lại 5 ảnh quảng cáo")
+    upscale_concept(d)
+    st = finish_book(d, cfg, printify=False)
+    _print_status([{"concept": args.concept, **st}])
+    if not st.get("ok"):
+        sys.exit(1)
+
+
+def cmd_redo(args, cfg):
+    from .pipeline import produce, redo_pages
+
+    d = _concept_dir(args.concept)
+    try:
+        redo_pages(d, [p.strip() for p in args.pages.split(",") if p.strip()])
+    except ValueError as e:
+        sys.exit(f"✘ {e}")
+    st = produce(d, cfg, printify=False)
+    _print_status([{"concept": args.concept, **st}])
+    if not st.get("ok"):
+        sys.exit(1)
+
+
 def cmd_gen(args, cfg):
     from .imagegen.generate import generate_concept
 
@@ -238,7 +268,8 @@ def cmd_shop(args, cfg):
     from .publish.shop_csv import publish_all
 
     try:
-        res = publish_all(cfg)
+        only = [Path(b) for b in args.book] if args.book else None
+        res = publish_all(cfg, only=only)
     except R2Error as e:
         sys.exit(f"✘ {e}")
     print(f"Đã đẩy lên R2: {len(res['pushed'])} cuốn · xuất CSV: {len(res['exported'])} cuốn "
@@ -283,7 +314,8 @@ def cmd_login(args, cfg):
     from .llm import accounts
 
     try:
-        accounts.open_login_browser(args.profile, cfg)
+        if not accounts.open_login_browser(args.profile, cfg):
+            sys.exit(1)
     except KeyboardInterrupt:
         print("\nĐã hủy đăng nhập.")
     except Exception as e:  # noqa: BLE001 - hiện thông báo gọn thay vì traceback (UI đọc stdout)
@@ -360,6 +392,16 @@ def main(argv=None):
     p.add_argument("--publish", action="store_true")
     p.set_defaults(func=cmd_produce)
 
+    p = sub.add_parser("finish", help="hoàn thiện cuốn đã vẽ đủ tranh: trang in, PDF, ảnh quảng cáo, listing")
+    p.add_argument("concept")
+    p.add_argument("--redo-previews", action="store_true", help="xoá và làm lại 5 ảnh quảng cáo")
+    p.set_defaults(func=cmd_finish)
+
+    p = sub.add_parser("redo", help="vẽ lại vài trang hỏng của một cuốn rồi làm lại các bước sau")
+    p.add_argument("concept")
+    p.add_argument("--pages", required=True, help="vd cover,m05,grid")
+    p.set_defaults(func=cmd_redo)
+
     p = sub.add_parser("gen", help="gen ảnh cho concept (ảnh neo trước, còn lại song song)")
     p.add_argument("concept")
     p.add_argument("--profiles", help="vd acc2,acc3 (mặc định: mọi profile)")
@@ -376,6 +418,7 @@ def main(argv=None):
     p.set_defaults(func=cmd_printify)
 
     p = sub.add_parser("shop", help="đẩy các cuốn đã xong lên R2 + xuất CSV sản phẩm cho cuốn chưa xuất")
+    p.add_argument("--book", action="append", help="chỉ cuốn này (thư mục cuốn, lặp lại được); bỏ trống = mọi cuốn")
     p.set_defaults(func=cmd_shop)
 
     p = sub.add_parser("ui", help="mở giao diện web CalForge Studio")

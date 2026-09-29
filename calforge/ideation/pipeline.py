@@ -286,7 +286,12 @@ def run_ideation(keyword: str, backend: Backend, projects_root: Path, *, year: i
                            or (angle.get("suggested_styles") or ["a distinctive buyer-led visual direction"])[0])
             angle_view = {k: v for k, v in angle.items() if k != "run"}
             usage = ", ".join(f"{key}={count}" for key, count in composition_counts.items())
-            prompt = templates.p2_concept(angle_view, angle_style, year, market, usage)
+            # Tông nền cả cuốn chia đều từ P2 (tranh + grid cùng tông); loại grid in sẵn không cần
+            from .. import products as _prod
+            from . import tones
+            tone = tones.next_tone(projects_root) if _prod.ai_grid({"product": product}) else None
+            prompt = templates.p2_concept(angle_view, angle_style, year, market, usage,
+                                          base_tone_rule=tones.prompt_rule(tone, projects_root) if tone else "")
             # Mỗi cuốn một cuộc chat mới (P3 sửa lỗi vẫn trong chat của cuốn đó): batch nhiều cuốn
             # không dồn hết concept vào một chat dài - chậm, dễ lẫn chi tiết cuốn trước.
             chat.close()
@@ -304,6 +309,8 @@ def run_ideation(keyword: str, backend: Backend, projects_root: Path, *, year: i
                 continue
             concept.update({"year": year, "market": market, "keyword": keyword, "angle_id": angle["id"]})
             concept["style"]["family"] = angle.get("style_family")
+            if tone:   # tông giao + tông thật (xếp theo hex AI chọn) để soi lại
+                concept["style"]["base_tone"] = {"assigned": tone, "actual": tones.book_tone(concept)}
             from .. import products
             concept["product"] = product if product in products.PRODUCTS else products.DEFAULT
             # Khung hình từng tháng do code chia (cùng thứ tự đã đưa vào prompt P2), lưu lại để

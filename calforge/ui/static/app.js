@@ -20,6 +20,7 @@ const S = {
   pollTimer: null,
   refreshTimer: null,
   openBook: null,
+  queue: { paused: false, items: [] },
 };
 
 const $ = (id) => document.getElementById(id);
@@ -29,6 +30,8 @@ document.addEventListener('DOMContentLoaded', () => {
   loadAccounts();
   loadProjects();
   reattachRunningTask();
+  loadQueue();
+  setInterval(loadQueue, 3000);
 });
 
 // --------------------------------------------------------------------------
@@ -36,19 +39,42 @@ document.addEventListener('DOMContentLoaded', () => {
 // --------------------------------------------------------------------------
 function bindEvents() {
   $('btnStart').addEventListener('click', startBatch);
+  $('btnQuit').addEventListener('click', quitTool);
   $('inputKeyword').addEventListener('keydown', (e) => { if (e.key === 'Enter') startBatch(); });
   document.querySelectorAll('.stepper button').forEach((b) => b.addEventListener('click', () => {
     setCount(countValue() + Number(b.dataset.step));
   }));
   $('inputCount').addEventListener('input', () => updateHint());
   $('btnStop').addEventListener('click', stopTask);
+  $('btnQueuePause').addEventListener('click', toggleQueuePause);
+  $('btnRedo').addEventListener('click', redoPages);
+  $('btnFinishAll').addEventListener('click', finishAll);
+  $('btnQueueClear').addEventListener('click', () => queueOp('clear'));
   $('btnAccounts').addEventListener('click', openAccounts);
   $('btnNoticeAccounts').addEventListener('click', openAccounts);
   $('btnAccAdd').addEventListener('click', addAccount);
   $('btnBulkGo').addEventListener('click', startBulkLogin);
   $('btnR2Settings').addEventListener('click', openR2);
   $('btnR2Save').addEventListener('click', saveR2);
-  $('btnShop').addEventListener('click', runShop);
+  $('btnShop').addEventListener('click', openShopPicker);
+  $('btnShopGo').addEventListener('click', () => {
+    const books = [...SHOP.picked];
+    $('shopModal').hidden = true;
+    runShop(books);
+  });
+  $('shopFilter').addEventListener('input', renderShopBooks);
+  document.querySelectorAll('[data-pick]').forEach((b) => b.addEventListener('click', () => {
+    const mode = b.dataset.pick;
+    const shown = shopVisible();
+    if (mode === 'none') shown.forEach((x) => SHOP.picked.delete(x.path));
+    else shown.forEach((x) => { if (mode === 'all' || !x.exported_at) SHOP.picked.add(x.path); });
+    if (mode === 'new') {
+      shown.forEach((x) => { if (x.exported_at) SHOP.picked.delete(x.path); });
+      const n = shown.filter((x) => !x.exported_at).length;
+      toast(n ? `Đã chọn ${n} cuốn chưa xuất.` : 'Không có cuốn nào chưa xuất: mọi cuốn đều đã xuất CSV rồi.', 'info');
+    }
+    renderShopBooks();
+  }));
   $('inputAccName').addEventListener('keydown', (e) => { if (e.key === 'Enter') addAccount(); });
 
   document.querySelectorAll('.modal').forEach((m) => {
@@ -94,6 +120,7 @@ async function loadProjects() {
     const data = await api('/api/projects');
     S.projects = data.projects || [];
     renderResults();
+    loadUnfinished();
     if (S.openBook) {
       const b = findBook(S.openBook);
       if (b && !$('bookModal').hidden) renderBook(b.book, b.keyword);
@@ -134,13 +161,113 @@ async function startBatch() {
   }
   const product = (document.querySelector('input[name="product"]:checked') || {}).value || 'wall_grid';
   const params = { keyword, batch_size: countValue(), product };   // phong cách: máy tự chia đều
-  $('btnStart').disabled = true;
+  const busy = !!S.task || (S.queue.items || []).some((i) => i.status === 'queued' || i.status === 'running');
   try {
-    const data = await api('/api/action', { action: 'run', params });
-    attachTask({ id: data.task_id, params, start_time: Date.now() / 1000 });
+    await queueOp('add', { params });
+    $('inputKeyword').value = '';
+    toast(busy ? `Đã xếp "${keyword}" vào hàng đợi.` : `Bắt đầu làm "${keyword}".`, 'info');
+    setTimeout(loadQueue, 800);
   } catch (err) {
     toast(err.message, 'error');
-    $('btnStart').disabled = false;
+  }
+}
+
+// ---- Hàng đợi batch: bấm Bắt đầu nhiều lần = xếp nhiều batch, máy làm lần lượt -----------------------------
+async function queueOp(op, body = {}) {
+  S.queue = await api(`/api/queue/${op}`, body);
+  renderQueue();
+}
+
+async function loadQueue() {
+  try {
+    S.queue = await api('/api/queue');
+  } catch (_) {
+    return;
+  }
+  renderQueue();
+  const run = (S.queue.items || []).find((i) => i.status === 'running' && i.task_id);
+  if (run && (!S.task || S.task.id !== run.task_id)) {        // hàng đợi vừa chạy batch kế tiếp -> hiện tiến độ
+    attachTask({ id: run.task_id, params: run.params, start_time: Date.now() / 1000 });
+  }
+}
+
+const PRODUCT_LABEL = { wall_grid: 'Wall Calendar (Blank)', wall_premade: 'Wall Calendar' };
+
+function renderQueue() {
+  const items = S.queue.items || [];
+  const active = items.filter((i) => i.status === 'queued' || i.status === 'running');
+  const queued = items.filter((i) => i.status === 'queued');
+  const done = items.filter((i) => !['queued', 'running'].includes(i.status)).reverse();
+  $('queueCard').hidden = !items.length && !S.queue.paused;
+  $('btnQueuePause').textContent = S.queue.paused ? 'Tiếp tục' : 'Tạm dừng';
+  $('btnQueuePause').classList.toggle('btn-primary', !!S.queue.paused);
+  $('queuePaused').hidden = !S.queue.paused;
+  $('btnStart').textContent = (S.task || active.length) ? 'Thêm vào hàng đợi' : 'Bắt đầu';
+  $('btnStart').disabled = false;
+
+  const label = (i) => {
+    const p = i.params;
+    if (p.action === 'produce') return `<strong>Làm tiếp</strong> <span class="muted">${esc(p.title || '')}</span>`;
+    if (p.action === 'finish') {
+      return `<strong>${p.redo_previews ? 'Làm lại ảnh quảng cáo' : 'Hoàn thiện'}</strong> <span class="muted">${esc(p.title || '')}</span>`;
+    }
+    if (p.action === 'redo') {
+      return `<strong>Vẽ lại ${(p.pages || []).length} trang</strong> <span class="muted">${esc(p.title || '')}</span>`;
+    }
+    return `<strong>${esc(p.keyword)}</strong>
+    <span class="muted">${p.batch_size || 1} cuốn · ${PRODUCT_LABEL[p.product] || ''}</span>`;
+  };
+  const wl = $('queueWaiting');
+  wl.innerHTML = '';
+  active.forEach((i) => {
+    const li = document.createElement('li');
+    const tag = i.status === 'running' ? '<span class="tag run">Đang làm</span>'
+      : `<span class="tag">Chờ ${queued.indexOf(i) + 1}</span>`;
+    li.innerHTML = `${tag} ${label(i)}<span class="grow"></span>`;
+    if (i.status === 'queued') {
+      const k = queued.indexOf(i);
+      if (k > 0) li.appendChild(button('↑', 'btn-small btn-ghost', () => queueOp('move', { id: i.id, delta: -1 })));
+      if (k < queued.length - 1) li.appendChild(button('↓', 'btn-small btn-ghost', () => queueOp('move', { id: i.id, delta: 1 })));
+      li.appendChild(button('Bỏ', 'btn-small btn-danger-ghost', () => queueOp('remove', { id: i.id })));
+    }
+    wl.appendChild(li);
+  });
+  if (!active.length) wl.innerHTML = '<li class="muted">Không có batch nào đang chờ.</li>';
+
+  $('queueDoneBox').hidden = !done.length;
+  $('queueDoneCount').textContent = `(${done.length})`;
+  const dl = $('queueDone');
+  dl.innerHTML = '';
+  done.forEach((i) => {
+    const li = document.createElement('li');
+    const res = i.total ? `${i.ok}/${i.total} cuốn đạt` : '';
+    const tag = i.status === 'done' ? '<span class="tag ok">Xong</span>'
+      : i.status === 'stopped' ? '<span class="tag">Đã dừng</span>' : '<span class="tag bad">Lỗi</span>';
+    li.innerHTML = `${tag} ${label(i)}<span class="grow"></span>
+      <span class="muted">${esc(res)}${res ? ' · ' : ''}${esc((i.finished_at || '').slice(5, 16))}</span>`;
+    if (i.status !== 'done' || (i.total && i.ok < i.total)) {
+      const again = i.params.action ? 'Thử lại' : 'Làm nốt phần thiếu';
+      li.appendChild(button(again, 'btn-small btn-accent', async () => {
+        try {
+          await queueOp('add', { params: i.params });
+          toast('Đã xếp lại vào hàng đợi.', 'info');
+        } catch (err) {
+          toast(err.message, 'error');
+        }
+      }));
+    }
+    li.appendChild(button('Xoá', 'btn-small btn-ghost', () => queueOp('remove', { id: i.id })));
+    dl.appendChild(li);
+  });
+}
+
+async function toggleQueuePause() {
+  if (!S.queue.paused && S.task
+      && !confirm('Tạm dừng? Batch đang làm dừng lại (phần đã làm giữ nguyên) và được đưa về đầu hàng đợi.')) return;
+  try {
+    await queueOp(S.queue.paused ? 'resume' : 'pause');
+  } catch (err) {
+    toast(err.message, 'error');
   }
 }
 
@@ -156,16 +283,18 @@ function attachTask(task) {
   S.task = task;
   S.logs = [];
   $('runCard').hidden = false;
-  $('startCard').classList.add('dim');
-  $('btnStart').disabled = true;
-  $('runTitle').textContent = `Đang làm ${task.params.batch_size || 1} cuốn lịch "${task.params.keyword}"`;
+  $('btnStart').textContent = 'Thêm vào hàng đợi';   // đang chạy vẫn bấm được: xếp batch mới vào hàng đợi
+  const p = task.params || {};
+  $('runTitle').textContent = p.action === 'finish' ? `Đang hoàn thiện "${p.title || ''}"`
+    : p.action === 'produce' ? `Đang làm tiếp "${p.title || ''}"`
+    : p.action === 'redo' ? `Đang vẽ lại ${(p.pages || []).length} trang của "${p.title || ''}"`
+      : `Đang làm ${p.batch_size || 1} cuốn lịch "${p.keyword}"`;
   renderProgress();
   clearInterval(S.pollTimer);
   clearInterval(S.refreshTimer);
   S.pollTimer = setInterval(pollTask, 1500);
   S.refreshTimer = setInterval(loadProjects, 20000);   // cuốn nào xong hiện ngay bên dưới
   pollTask();
-  $('runCard').scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 async function pollTask() {
@@ -186,6 +315,7 @@ function finishTask(status) {
   clearInterval(S.pollTimer);
   clearInterval(S.refreshTimer);
   const kw = S.task.params.keyword;
+  const single = S.task.params.action ? S.task.params : null;     // việc một cuốn: làm tiếp / vẽ lại trang
   S.task = null;
   $('runCard').hidden = true;
   $('startCard').classList.remove('dim');
@@ -194,7 +324,11 @@ function finishTask(status) {
     const proj = S.projects.find((p) => p.keyword === slug(kw));
     const rows = ((proj && proj.batch) || {}).report || [];
     const ok = rows.filter((r) => r.ok).length;
-    if (status === 'stopped') toast('Đã dừng. Bấm Bắt đầu lại với cùng chủ đề để làm tiếp phần còn dở.', 'info', 8000);
+    if (single && status === 'success') toast(`Xong "${single.title || ''}".`, 'success', 8000);
+    else if (single && status !== 'stopped') {
+      toast(`"${single.title || ''}" chưa xong - mở cuốn đó xem lý do, hoặc bấm Thử lại ở Hàng đợi.`, 'error', 12000);
+    } else if (status === 'stopped' && S.queue.paused) toast('Đã tạm dừng hàng đợi. Bấm Tiếp tục để làm tiếp.', 'info', 8000);
+    else if (status === 'stopped') toast('Đã dừng batch này. Hàng đợi (nếu có) chạy batch kế tiếp.', 'info', 8000);
     else if (rows.length && ok === rows.length) toast(`Xong! ${ok} cuốn lịch "${kw}" đã sẵn sàng.`, 'success', 10000);
     else if (rows.length) toast(`Xong ${ok}/${rows.length} cuốn. Cuốn lỗi có ghi lý do và nút "Làm tiếp".`, 'info', 12000);
     else if (status === 'success') toast('Đã xong.', 'success');
@@ -205,7 +339,8 @@ function finishTask(status) {
 
 async function stopTask() {
   if (!S.task) return;
-  if (!confirm('Dừng lại? Phần đã làm được giữ nguyên. Lần sau bấm Bắt đầu với cùng chủ đề sẽ làm tiếp.')) return;
+  if (!confirm('Dừng batch này? Phần đã làm giữ nguyên (bấm Bắt đầu lại cùng chủ đề sẽ làm tiếp). '
+    + 'Hàng đợi sẽ chạy batch kế tiếp; muốn dừng hết thì bấm Tạm dừng.')) return;
   try {
     await api('/api/task/stop', { id: S.task.id });
   } catch (err) {
@@ -282,6 +417,7 @@ function friendlyReason(st) {
   if (stage === 'images') return 'ChatGPT chưa vẽ đủ tranh (thường do tài khoản hết lượt). Chờ một lúc rồi bấm "Làm tiếp".';
   if (stage === 'render') return 'Lỗi khi dàn trang in. Bấm "Làm tiếp"; nếu vẫn lỗi, gửi phần chi tiết cho người kỹ thuật.';
   if (stage === 'printify') return 'Chưa đưa lên được Printify. Kiểm tra mạng rồi bấm "Làm tiếp".';
+  if (stage === 'mockup') return 'Thiếu ảnh quảng cáo (mockup). Bấm "Làm lại ảnh quảng cáo" - không tốn lượt ChatGPT.';
   if (stage === 'crash') return 'Gặp lỗi bất ngờ (mất mạng, Chrome bị tắt…). Bấm "Làm tiếp" để thử lại.';
   return raw || 'Chưa làm xong. Bấm "Làm tiếp".';
 }
@@ -367,6 +503,10 @@ function renderBook(c, keyword) {
   if (state !== 'done') {
     a.appendChild(button('Làm tiếp', 'btn-accent', () => continueBook(c)));
   }
+  if ((c.pdfs || []).length) {            // đã có trang in: làm lại mockup không cần ChatGPT
+    a.appendChild(button('Làm lại ảnh quảng cáo', '', () => finishBook(c, true)));
+  }
+  loadBookPages(c);
   const L = c.listing || {};
   const lb = $('bookListing');
   if (!L.title) {
@@ -384,17 +524,117 @@ function renderBook(c, keyword) {
 
 async function continueBook(c) {
   try {
-    await api('/api/action', { action: 'produce', params: { concept: c.path } });
+    const busy = !!S.task;
+    await queueOp('add', { params: { action: 'produce', concept: c.path, title: c.title } });
     $('bookModal').hidden = true;
-    toast(`Đang làm tiếp "${c.title}". Kết quả sẽ tự hiện ở đây.`, 'info', 8000);
-    const poll = setInterval(async () => {
-      const data = await api('/api/tasks').catch(() => ({ tasks: [] }));
-      if (!(data.tasks || []).some((t) => t.status === 'running')) {
-        clearInterval(poll);
-        loadProjects();
-        toast(`Đã chạy xong "${c.title}".`, 'success');
-      }
-    }, 5000);
+    toast(busy ? `Đã xếp "Làm tiếp ${c.title}" vào hàng đợi.` : `Đang làm tiếp "${c.title}".`, 'info', 8000);
+    setTimeout(loadQueue, 800);
+  } catch (err) {
+    toast(err.message, 'error');
+  }
+}
+
+// ---- Hoàn thiện cuốn đã vẽ đủ tranh (không cần ChatGPT) ------------------------------------------------------
+async function finishBook(c, redoPreviews) {
+  try {
+    await queueOp('add', { params: { action: 'finish', concept: c.path, title: c.title, redo_previews: !!redoPreviews } });
+    $('bookModal').hidden = true;
+    toast(redoPreviews ? `Đã xếp "Làm lại ảnh quảng cáo" cho "${c.title}".` : `Đã xếp "Hoàn thiện ${c.title}".`, 'info');
+    setTimeout(loadQueue, 800);
+  } catch (err) {
+    toast(err.message, 'error');
+  }
+}
+
+async function loadUnfinished() {
+  const d = await api('/api/unfinished').catch(() => null);
+  const books = (d && d.books) || [];
+  S.unfinished = books;
+  $('unfinishedNotice').hidden = !books.length;
+  $('unfinishedText').textContent = books.length
+    ? `${books.length} cuốn đã vẽ đủ tranh nhưng chưa hoàn thiện (bị dừng giữa chừng hoặc thiếu ảnh quảng cáo). `
+      + 'Hoàn thiện không tốn lượt ChatGPT.'
+    : '';
+}
+
+async function finishAll() {
+  const books = S.unfinished || [];
+  try {
+    for (const b of books) {
+      await queueOp('add', { params: { action: 'finish', concept: b.path, title: b.title } });
+    }
+    toast(`Đã xếp ${books.length} cuốn vào hàng đợi để hoàn thiện.`, 'info');
+    $('unfinishedNotice').hidden = true;
+    setTimeout(loadQueue, 800);
+  } catch (err) {
+    toast(err.message, 'error');
+  }
+}
+
+// ---- Sửa trang hỏng: tick trang lỗi -> vẽ lại đúng các trang đó ------------------------------------------------
+const PAGE_NAMES = { cover: 'Bìa', grid: 'Nền trang lịch' };
+const BOOK_PAGES = { book: null, picked: new Set() };
+
+async function loadBookPages(c) {
+  BOOK_PAGES.book = c;
+  BOOK_PAGES.picked = new Set();
+  const box = $('bookPages');
+  box.innerHTML = '<p class="empty">Đang tải…</p>';
+  let data;
+  try {
+    data = await api(`/api/concept?path=${encodeURIComponent(c.path)}`);
+  } catch (err) {
+    box.innerHTML = `<p class="empty">${esc(err.message)}</p>`;
+    return;
+  }
+  if (BOOK_PAGES.book !== c) return;                      // người dùng đã mở cuốn khác
+  const files = (data.files || {}).art_raw || [];
+  const ids = ['cover', ...Array.from({ length: 12 }, (_, i) => `m${String(i + 1).padStart(2, '0')}`)];
+  if (c.product !== 'wall_premade') ids.push('grid');
+  box.innerHTML = '';
+  ids.forEach((id) => {
+    const f = files.find((n) => n.startsWith(`${id}.`) && /\.(png|jpe?g|webp)$/i.test(n));
+    const label = PAGE_NAMES[id] || `Tháng ${Number(id.slice(1))}`;
+    const el = document.createElement('label');
+    el.className = 'page-item';
+    el.innerHTML = `<input type="checkbox">
+      ${f ? `<img loading="lazy" src="${thumbUrl(`${c.path}/_he_thong/anh_ai/${f}`, 240)}" alt="">`
+    : '<div class="miss">Chưa có</div>'}<span>${esc(label)}</span>`;
+    el.querySelector('input').addEventListener('change', (e) => {
+      if (e.target.checked) BOOK_PAGES.picked.add(id); else BOOK_PAGES.picked.delete(id);
+      el.classList.toggle('on', e.target.checked);
+      updateRedoButton();
+    });
+    if (f) {
+      el.querySelector('img').addEventListener('dblclick', () => {
+        $('lightboxImg').src = thumbUrl(`${c.path}/_he_thong/anh_ai/${f}`, 1600);
+        $('lightbox').hidden = false;
+      });
+    }
+    box.appendChild(el);
+  });
+  updateRedoButton();
+}
+
+function updateRedoButton() {
+  const n = BOOK_PAGES.picked.size;
+  $('btnRedo').disabled = !n;
+  $('btnRedo').textContent = n ? `Vẽ lại ${n} trang` : 'Vẽ lại';
+  $('bookPagesPicked').textContent = n ? 'Bấm đúp ảnh để xem to.' : 'Chưa chọn trang nào. Bấm đúp ảnh để xem to.';
+}
+
+async function redoPages() {
+  const c = BOOK_PAGES.book;
+  const pages = [...BOOK_PAGES.picked];
+  if (!c || !pages.length) return;
+  if (!confirm(`Vẽ lại ${pages.length} trang của "${c.title}"? Ảnh cũ được cất lại, không mất.`)) return;
+  try {
+    const busy = !!S.task;
+    await queueOp('add', { params: { action: 'redo', concept: c.path, title: c.title, pages } });
+    $('bookModal').hidden = true;
+    toast(busy ? `Đã xếp "Vẽ lại ${pages.length} trang" vào hàng đợi.` : `Đang vẽ lại ${pages.length} trang của "${c.title}".`,
+      'info', 8000);
+    setTimeout(loadQueue, 800);
   } catch (err) {
     toast(err.message, 'error');
   }
@@ -431,7 +671,11 @@ function renderAccounts() {
       <strong>${esc(acc.name)}</strong>
       <span class="muted">${state[0]}${acc.email ? ` · ${esc(acc.email)}` : ''}</span>
       <span class="grow"></span>`;
-    li.appendChild(button(acc.has_session ? 'Đăng nhập lại' : 'Đăng nhập', 'btn-small', () => loginAccount(acc.name)));
+    const busy = LOGGING_IN.has(acc.name);
+    const lb = button(busy ? 'Đang đăng nhập…' : acc.has_session ? 'Đăng nhập lại' : 'Đăng nhập', 'btn-small',
+      () => loginAccount(acc.name));
+    lb.disabled = busy;
+    li.appendChild(lb);
     li.appendChild(button('Xoá', 'btn-small btn-danger-ghost', () => deleteAccount(acc.name)));
     ul.appendChild(li);
   });
@@ -513,14 +757,76 @@ async function saveR2() {
   }
 }
 
-async function runShop() {
+// ---- Chọn cuốn đẩy R2 + xuất CSV -----------------------------------------------------------------------------
+const SHOP = { books: [], picked: new Set() };
+
+async function openShopPicker() {
+  $('shopModal').hidden = false;
+  $('shopFilter').value = '';
+  $('shopBooks').innerHTML = '<p class="empty">Đang tải…</p>';
+  try {
+    SHOP.books = (await api('/api/shop/books')).books || [];
+  } catch (err) {
+    $('shopBooks').innerHTML = `<p class="empty">${esc(err.message)}</p>`;
+    return;
+  }
+  SHOP.picked = new Set(SHOP.books.filter((b) => !b.exported_at).map((b) => b.path));   // mặc định: cuốn mới
+  renderShopBooks();
+}
+
+function shopVisible() {
+  const q = $('shopFilter').value.trim().toLowerCase();
+  return SHOP.books.filter((b) => !q || `${b.title} ${b.keyword}`.toLowerCase().includes(q));
+}
+
+function renderShopBooks() {
+  const box = $('shopBooks');
+  const shown = shopVisible();
+  box.innerHTML = '';
+  if (!SHOP.books.length) box.innerHTML = '<p class="empty">Chưa có cuốn nào làm xong.</p>';
+  else if (!shown.length) box.innerHTML = '<p class="empty">Không có cuốn nào khớp.</p>';
+  let group = '';
+  shown.forEach((b) => {
+    const g = `${b.keyword} · ${PRODUCT_LABEL[b.product] || ''}`;
+    if (g !== group) {
+      group = g;
+      const h = document.createElement('div');
+      h.className = 'shop-group';
+      h.textContent = g;
+      box.appendChild(h);
+    }
+    const row = document.createElement('label');
+    row.className = 'shop-book';
+    const state = b.exported_at ? `<span class="tag">Đã xuất ${esc(b.exported_at.slice(5, 16))}</span>`
+      : b.pushed_at ? '<span class="tag">Đã đẩy R2, chưa xuất CSV</span>' : '<span class="tag new">Mới</span>';
+    row.innerHTML = `<input type="checkbox" ${SHOP.picked.has(b.path) ? 'checked' : ''}>
+      ${b.cover ? `<img src="${thumbUrl(b.cover, 120)}" alt="" loading="lazy">` : '<img alt="">'}
+      <span class="t"><strong>${esc(b.title)}</strong><small>Xong ${esc(b.done_at.slice(5))}</small></span>${state}`;
+    row.querySelector('input').addEventListener('change', (e) => {
+      if (e.target.checked) SHOP.picked.add(b.path); else SHOP.picked.delete(b.path);
+      updateShopPicked();
+    });
+    box.appendChild(row);
+  });
+  updateShopPicked();
+}
+
+function updateShopPicked() {
+  const n = SHOP.picked.size;
+  const again = SHOP.books.filter((b) => SHOP.picked.has(b.path) && b.exported_at).length;
+  $('shopPicked').textContent = n ? `Đã chọn ${n} cuốn${again ? ` (${again} cuốn đã xuất trước đây, sẽ xuất lại)` : ''}` : 'Chưa chọn cuốn nào';
+  $('btnShopGo').disabled = !n;
+  $('btnShopGo').textContent = n ? `Đẩy R2 + xuất CSV (${n} cuốn)` : 'Đẩy R2 + xuất CSV';
+}
+
+async function runShop(books) {
   const btn = $('btnShop');
   btn.disabled = true;
   const box = $('shopResult');
   box.hidden = false;
   box.textContent = 'Đang đẩy lên R2…';
   try {
-    const data = await api('/api/action', { action: 'shop', params: {} });
+    const data = await api('/api/action', { action: 'shop', params: books ? { books } : {} });
     const poll = setInterval(async () => {
       const t = await api(`/api/task?id=${data.task_id}`).catch(() => null);
       if (!t) return;
@@ -558,16 +864,26 @@ async function addAccount() {
   }
 }
 
+const LOGGING_IN = new Set();                          // tài khoản đang mở cửa sổ đăng nhập
+
 async function loginAccount(name) {
+  if (LOGGING_IN.has(name)) return;
   try {
     const data = await api('/api/action', { action: 'login', params: { profile: name } });
-    toast(`Đã mở Chrome cho "${name}". Đăng nhập ChatGPT xong thì đóng cửa sổ Chrome.`, 'info', 10000);
+    LOGGING_IN.add(name);
+    renderAccounts();
+    toast(`Đã mở Chrome cho "${name}". Đăng nhập ChatGPT xong, cửa sổ sẽ tự đóng.`, 'info', 10000);
     const poll = setInterval(async () => {
-      const t = await api(`/api/task?id=${data.task_id}&since=999999`).catch(() => null);
-      if (!t || t.status !== 'running') {
-        clearInterval(poll);
-        loadAccounts();
-      }
+      const t = await api(`/api/task?id=${data.task_id}&since=0`).catch(() => null);
+      if (t && t.status === 'running') return;
+      clearInterval(poll);
+      LOGGING_IN.delete(name);
+      const logs = (t && t.logs) || [];
+      const last = [...logs].reverse().find((l) => /^\s*(✔|⚠|❌)/.test(l)) || '';
+      if (t && t.status === 'success') toast(`"${name}" đã đăng nhập xong.`, 'success', 6000);
+      else if (t && t.status === 'stopped') toast(`Đã huỷ đăng nhập "${name}".`, 'info');
+      else toast(last.replace(/^\s*[✔⚠❌]\s*/, '') || `"${name}" chưa đăng nhập được.`, 'error', 10000);
+      loadAccounts();
     }, 3000);
   } catch (err) {
     toast(err.message, 'error');
@@ -661,4 +977,12 @@ function sanitizeDesc(html) {
     }
   });
   return tmp.innerHTML;
+}
+
+async function quitTool() {
+  const running = S.task ? '\nViệc đang chạy sẽ dừng (phần đã làm vẫn còn, lần sau bấm "Làm tiếp").' : '';
+  if (!confirm('Tắt CalForge Studio?' + running)) return;
+  try { await fetch('/api/shutdown', { method: 'POST' }); } catch (e) { /* máy chủ đã tắt */ }
+  document.body.innerHTML = '<main style="padding:60px;text-align:center;font:18px Segoe UI,sans-serif">' +
+    'Đã tắt CalForge Studio. Bạn có thể đóng cửa sổ này.<br><br>Muốn dùng lại: bấm biểu tượng <b>CalForge Studio</b>.</main>';
 }

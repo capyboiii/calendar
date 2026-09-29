@@ -36,7 +36,7 @@ class ValidateTest(unittest.TestCase):
         errors, _ = validate_concept(c, 2027)
         self.assertTrue(any("months[5].content.value" in e for e in errors), errors)
 
-    def test_low_contrast_font_and_banned_term(self):
+    def test_low_contrast_font_with_unfiltered_brand(self):
         c = fixtures.concept()
         c["style"]["palette"]["title"] = "#D8CBB5"
         c["style"]["fonts"]["title"] = "Comic Sans"
@@ -45,7 +45,7 @@ class ValidateTest(unittest.TestCase):
         joined = "\n".join(errors)
         self.assertIn("contrast", joined)
         self.assertIn("Comic Sans", joined)
-        self.assertIn('banned term "disney"', joined)
+        self.assertNotIn('banned term', joined)
 
     def test_scene_focal_subject_mismatch_is_only_a_warning(self):
         c = fixtures.concept()
@@ -84,7 +84,7 @@ class ValidateTest(unittest.TestCase):
         data = fixtures.angles_payload()
         errors, _ = validate_angles(data)
         self.assertEqual(errors, [])
-        self.assertEqual([a["id"] for a in usable_angles(data)], ["a1"])
+        self.assertEqual([a["id"] for a in usable_angles(data)], ["a1", "a2"])
 
     def test_style_family_does_not_force_creative_variety(self):
         data = fixtures.angles_payload()
@@ -154,9 +154,9 @@ class TemplatesTest(unittest.TestCase):
     def test_prompts_allow_anonymous_people_and_mixed_subjects(self):
         p1 = templates.p1_angles("gardening", 2027, "US", 1, [], Path(tempfile.gettempdir()) / "no-projects")
         p2 = templates.p2_concept(fixtures.ANGLE, "soft watercolor", 2027, "US")
-        self.assertIn("Anonymous people ARE allowed", p1)
-        self.assertIn("identifiable real people", p1)
-        self.assertIn("anonymous people are welcome", p2)
+        self.assertNotIn("never depict identifiable real people", p1)
+        self.assertNotIn("avoid tight close-ups of faces", p1 + p2)
+        self.assertNotIn("No identifiable real person", p2)
         self.assertIn("mix these types across the 12 months", p2)
         self.assertNotIn("No real people's likeness", p2)
 
@@ -209,7 +209,7 @@ class PipelineTest(unittest.TestCase):
         bad = fixtures.concept()
         bad["months"][2]["holiday_tie"], bad["months"][3]["holiday_tie"] = "none", "Easter"
         good = fixtures.concept()
-        keep = fenced({"decisions": [{"id": "r1a1", "keep": True, "duplicates": "", "reason": "new"}],
+        keep = fenced({"decisions": [{"id": "r1a1", "keep": True, "duplicates": "", "reason": "new"}, {"id": "r1a2", "keep": False, "reason": "same product"}],
                        "selected": ["r1a1"]})
         fake = FakeChatGPT([fenced(fixtures.angles_payload()), keep, fenced(bad), fenced(good)])
         with tempfile.TemporaryDirectory() as tmp:
@@ -221,7 +221,7 @@ class PipelineTest(unittest.TestCase):
             labels = [label for label, _ in fake.prompts]
             self.assertEqual(labels, ["p1_angles_run1", "p1b_review_run1", "p2_concept_r1a1",
                                       "p2_concept_r1a1_repair1"])
-            self.assertIn("strict product-line reviewer", fake.prompts[1][1])   # AI thẩm định trùng, không phải code
+            self.assertIn("first priority is artwork that fulfills the keyword", fake.prompts[1][1])
             self.assertIn("falls in March 2027", fake.prompts[3][1])  # lỗi được gửi lại cho ChatGPT
             self.assertNotIn('"months":', fake.prompts[3][1])  # cùng phiên: không lặp lại JSON dài
             concept = json.loads((res.concepts[0] / "_he_thong" / "concept.json").read_text(encoding="utf-8"))
@@ -237,7 +237,7 @@ class PipelineTest(unittest.TestCase):
 
             # Batch mới cùng keyword: batch cũ đã làm xong -> nghĩ lượt ý mới, AI thấy cuốn cũ trong danh mục
             angles2 = fixtures.angles_payload()
-            keep2 = fenced({"decisions": [{"id": "r2a1", "keep": True}], "selected": ["r2a1"]})
+            keep2 = fenced({"decisions": [{"id": "r2a1", "keep": True}, {"id": "r2a2", "keep": False}], "selected": ["r2a1"]})
             nxt = FakeChatGPT([fenced(angles2), keep2, fenced(fixtures.concept())])
             run_ideation("Christian", nxt, Path(tmp), year=2027)
             self.assertEqual([l for l, _ in nxt.prompts], ["p1_angles_run2", "p1b_review_run2", "p2_concept_r2a1"])
@@ -276,7 +276,7 @@ class PipelineTest(unittest.TestCase):
                 finally:
                     self.open -= 1
 
-        keep = fenced({"decisions": [{"id": "r1a1", "keep": True}], "selected": ["r1a1"]})
+        keep = fenced({"decisions": [{"id": "r1a1", "keep": True}, {"id": "r1a2", "keep": False}], "selected": ["r1a1"]})
         backend = StrictBackend([fenced(fixtures.angles_payload()), keep, fenced(fixtures.concept())])
         with tempfile.TemporaryDirectory() as tmp:
             res = run_ideation("Nature", backend, Path(tmp), year=2027)
@@ -388,8 +388,8 @@ class ImagePromptTest(unittest.TestCase):
         self.assertTrue(p.startswith(prompts.CREATE_WITH_SWATCH))  # lệnh "tạo ảnh mới" đứng đầu
         self.assertEqual(p.splitlines()[1], fixtures.STYLE_BIBLE)
         self.assertIn("Sea of Galilee", p)
-        self.assertIn("No text", p)
-        self.assertIn("Do not depict copyrighted or trademarked characters", p)
+        self.assertNotIn("No text", p)
+        self.assertNotIn("Do not depict copyrighted or trademarked characters", p)
         self.assertIn("3:2", p)
         self.assertIn("attached reference image", p)
         self.assertIn("it may be off-center", p)
@@ -458,7 +458,7 @@ class ImagePromptTest(unittest.TestCase):
         forced = templates.p1_angles("flowers", 2027, "US", 1, [], root, family="mid_century_retro")
         self.assertIn("If a REQUIRED PRODUCTION STYLE or REQUIRED STYLE SPLIT is given above, follow it exactly", forced)
         p2 = templates.p2_concept(fixtures.ANGLE, "soft watercolor", 2027, "US")
-        self.assertIn("a flower or botanical calendar", p2)  # hoa được làm chủ thể khi cuốn về hoa
+        self.assertIn("Focal subjects must be specific to the niche and buyer expectation", p2)
         self.assertIn("tint of shared_base_color", p2)
         self.assertIn("The grid background has no decorative motifs", p2)
         self.assertNotIn("decorative motif clusters", p2)
@@ -532,7 +532,7 @@ class ImagePromptTest(unittest.TestCase):
         p = prompts.grid_background_prompt(c)
         self.assertIn("always uses dark software title/body text", p)
         self.assertIn("renderer will replace them with dark", p)
-        self.assertIn("EXTREMELY LIGHT", p)
+        self.assertIn("LIGHT pastel tint", p)
         self.assertNotIn("clearly DARK muted shade", p)
         self.assertNotIn("subdued deep tones for light", p)
 

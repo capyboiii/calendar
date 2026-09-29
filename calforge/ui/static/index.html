@@ -21,6 +21,7 @@
     <button class="btn btn-ghost" id="btnAccounts">
       <span class="dot" id="accDot"></span> Tài khoản ChatGPT <span id="accSummary"></span>
     </button>
+    <button class="btn btn-ghost" id="btnQuit" title="Tắt hẳn tool (dừng cả việc đang chạy)">Tắt tool</button>
   </header>
 
   <main class="page">
@@ -81,6 +82,22 @@
       </details>
     </section>
 
+    <!-- 2b. Hàng đợi batch -->
+    <section class="card queue" id="queueCard" hidden>
+      <div class="run-head">
+        <h2>Hàng đợi</h2>
+        <span class="grow"></span>
+        <button class="btn btn-small btn-ghost" id="btnQueuePause">Tạm dừng</button>
+      </div>
+      <p class="hint" id="queuePaused" hidden>Đã tạm dừng: batch đang làm dở được đưa về đầu hàng. Bấm <b>Tiếp tục</b> để làm tiếp.</p>
+      <ol class="queue-list" id="queueWaiting"></ol>
+      <details class="queue-done" id="queueDoneBox" hidden>
+        <summary>Đã xong <span id="queueDoneCount"></span></summary>
+        <ul class="queue-list" id="queueDone"></ul>
+        <button class="btn btn-small btn-ghost" id="btnQueueClear">Xoá danh sách đã xong</button>
+      </details>
+    </section>
+
     <!-- 3. Kết quả -->
     <section class="results">
       <div class="results-head">
@@ -91,6 +108,10 @@
         <button class="btn btn-small btn-primary" id="btnShop">Đẩy R2 + xuất CSV</button>
       </div>
       <p class="hint" id="shopResult" hidden></p>
+      <div class="notice" id="unfinishedNotice" hidden>
+        <span id="unfinishedText"></span>
+        <button class="btn btn-small btn-accent" id="btnFinishAll">Hoàn thiện ngay</button>
+      </div>
       <div id="results"><p class="empty">Đang tải…</p></div>
     </section>
   </main>
@@ -109,6 +130,17 @@
       <div class="notice" id="bookError" hidden></div>
       <div class="gallery" id="bookGallery"></div>
       <div class="book-actions" id="bookActions"></div>
+      <details class="book-pages" id="bookPagesBox">
+        <summary>Sửa trang hỏng</summary>
+        <p class="hint">Tick trang bị lỗi (vẽ sai, méo, có chữ lạ…) rồi bấm Vẽ lại. Máy chỉ vẽ lại đúng các trang đó,
+          rồi tự làm lại trang in, PDF và ảnh quảng cáo. Ảnh cũ được cất lại, không mất.</p>
+        <div class="page-grid" id="bookPages"></div>
+        <div class="shop-foot">
+          <span class="muted" id="bookPagesPicked"></span>
+          <span class="grow"></span>
+          <button class="btn btn-accent" id="btnRedo" disabled>Vẽ lại</button>
+        </div>
+      </details>
       <div class="listing" id="bookListing"></div>
     </div>
   </div>
@@ -146,6 +178,28 @@
       <label class="field"><span>Bucket</span><input id="r2Bucket" type="text" autocomplete="off"></label>
       <label class="field"><span>Public URL</span><input id="r2Public" type="text" placeholder="https://cdn.example.com" autocomplete="off"></label>
       <button class="btn btn-primary" id="btnR2Save">Lưu</button>
+    </div>
+  </div>
+
+  <!-- Chọn cuốn đẩy R2 + xuất CSV -->
+  <div class="modal" id="shopModal" hidden>
+    <div class="modal-card wide">
+      <button class="modal-x" data-close aria-label="Đóng">✕</button>
+      <h2>Chọn cuốn đưa lên web</h2>
+      <p class="lead">Máy đẩy ảnh + file của các cuốn đã chọn lên R2, rồi xuất 1 file CSV gồm đúng các cuốn đó.</p>
+      <div class="shop-tools">
+        <button class="btn btn-small btn-ghost" data-pick="new">Chọn cuốn chưa xuất</button>
+        <button class="btn btn-small btn-ghost" data-pick="all">Chọn tất cả</button>
+        <button class="btn btn-small btn-ghost" data-pick="none">Bỏ chọn</button>
+        <span class="grow"></span>
+        <input id="shopFilter" type="search" placeholder="Tìm tên / chủ đề…" autocomplete="off">
+      </div>
+      <div class="shop-books" id="shopBooks"><p class="empty">Đang tải…</p></div>
+      <div class="shop-foot">
+        <span class="muted" id="shopPicked"></span>
+        <span class="grow"></span>
+        <button class="btn btn-primary" id="btnShopGo" disabled>Đẩy R2 + xuất CSV</button>
+      </div>
     </div>
   </div>
 

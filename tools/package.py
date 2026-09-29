@@ -1,127 +1,178 @@
-"""Đóng gói CalForge Studio để gửi người khác.
+"""Đóng gói CalForge Studio thành bộ cài app cho Windows.
 
-    python tools/package.py   -> dist/CalForge_Setup.exe          (người dùng chỉ cần bấm đúp file này)
-                                 dist/CalForge_Studio_<ngày>.zip   (bản ZIP, cho người biết kỹ thuật)
+    python tools/package.py   ->  dist/CalForge_Studio_Setup.exe
 
-CalForge_Setup.exe dựng bằng IExpress (có sẵn trong Windows): chứa ZIP + tools/setup.cmd; khi chạy, chép tool vào
-%LOCALAPPDATA%/CalForge Studio (không cần admin, giữ dữ liệu cũ nếu cài đè) rồi chạy tools/cai_dat.ps1.
+Người dùng chỉ cần: bấm đúp Setup.exe -> Next -> Install -> app tự mở. KHÔNG cần mạng, không cài Python, không
+cửa sổ đen: bộ cài chứa sẵn Python (bản nhúng), mọi thư viện, font và Kinh Thánh KJV. Cần sẵn Google Chrome
+(app tự nhắc tải nếu máy chưa có). Cài vào %LOCALAPPDATA%\\CalForge Studio (không cần quyền admin); cài bản mới
+đè lên giữ nguyên lịch đã làm, tài khoản, khoá R2.
 
-Chỉ gồm code + dữ liệu cần để chạy. KHÔNG gồm dữ liệu riêng của máy này: lịch đã làm (projects/), tài khoản
-ChatGPT (.chrome-profiles/), khoá R2/Printify (calforge.json), email tài khoản, môi trường .venv, file tải về
-được (font lấy từ repo, KJV + mô hình do CAI_DAT.bat tải lại).
+Máy đóng gói cần: Python 3.12 (cùng bản với Python nhúng), mạng lần đầu (tải Python nhúng), Inno Setup 6
+(winget install JRSoftware.InnoSetup).
+
+KHÔNG gồm dữ liệu riêng của máy này: lịch đã làm (projects/), tài khoản ChatGPT (.chrome-profiles/), khoá
+R2/Printify (calforge.json), email tài khoản, log.
 """
 from __future__ import annotations
 
+import os
+import shutil
 import subprocess
 import sys
-import time
+import urllib.request
 import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+DIST = ROOT / "dist"
+CACHE = DIST / "_cache"
+PY_VER = "3.12.10"
+PY_EMBED = f"https://www.python.org/ftp/python/{PY_VER}/python-{PY_VER}-embed-amd64.zip"
 # chặn cứng các thư mục/file riêng tư dù .gitignore có sót
 NEVER = ("projects/", ".chrome-profiles/", ".venv/", "dist/", ".cache/", ".git/", ".claude/", ".idea/", "models/",
-         "__pycache__/")
-NEVER_FILES = ("calforge.json", "data/account_emails.json", "data/kjv.json")
+         "__pycache__/", "logs/")
+NEVER_FILES = ("calforge.json", "data/account_emails.json")
+EXTRA = ("data/kjv.json",)          # không nằm trong git (tải về) nhưng app cần, phạm vi công cộng
 
 
 def files() -> list[str]:
-    try:
-        out = subprocess.run(["git", "ls-files", "-co", "--exclude-standard"], cwd=ROOT, capture_output=True,
-                             text=True, check=True).stdout.splitlines()
-    except (OSError, subprocess.CalledProcessError):
-        out = [str(p.relative_to(ROOT)).replace("\\", "/") for p in ROOT.rglob("*") if p.is_file()]
+    out = subprocess.run(["git", "ls-files", "-co", "--exclude-standard"], cwd=ROOT, capture_output=True,
+                         text=True, check=True).stdout.splitlines()
     keep = []
-    for f in out:
+    for f in [*out, *EXTRA]:
         f = f.replace("\\", "/")
         if any(f.startswith(n) or f"/{n}" in f for n in NEVER) or f in NEVER_FILES or f.endswith(".pyc"):
             continue
         if (ROOT / f).is_file():
             keep.append(f)
-    return sorted(keep)
+    return sorted(set(keep))
 
 
-def build_exe(app_zip: Path) -> Path | None:
-    """Gói ZIP + setup.cmd thành 1 file .exe tự giải nén bằng IExpress của Windows."""
-    import os
-    import shutil
+def _python(app: Path) -> None:
+    """Python nhúng + thư viện cài sẵn vào app/python."""
+    if sys.version_info[:2] != (3, 12):
+        sys.exit("Cần chạy bằng Python 3.12 (khớp Python nhúng) để cài đúng thư viện.")
+    CACHE.mkdir(parents=True, exist_ok=True)
+    embed = CACHE / Path(PY_EMBED).name
+    if not embed.exists():
+        print(f"Tải Python nhúng {PY_VER}...")
+        urllib.request.urlretrieve(PY_EMBED, embed)
+    pydir = app / "python"
+    with zipfile.ZipFile(embed) as z:
+        z.extractall(pydir)
+    # thư mục app (..) để chạy được "-m calforge", site-packages cho thư viện
+    (pydir / "python312._pth").write_text("python312.zip\n.\nLib\\site-packages\n..\nimport site\n", encoding="ascii")
+    print("Cài thư viện vào Python nhúng...")
+    subprocess.run([sys.executable, "-m", "pip", "install", "--disable-pip-version-check", "--no-warn-script-location",
+                    "--only-binary=:all:", "--target", str(pydir / "Lib" / "site-packages"),
+                    "-r", str(ROOT / "requirements.txt")], check=True)
+    for cache in pydir.rglob("__pycache__"):
+        shutil.rmtree(cache, ignore_errors=True)
 
-    iexpress = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "iexpress.exe"
-    if not iexpress.exists():
-        print("Không có iexpress.exe - chỉ tạo bản ZIP")
-        return None
-    build = ROOT / "dist" / "_build"
-    shutil.rmtree(build, ignore_errors=True)
-    build.mkdir(parents=True)
-    shutil.copy(app_zip, build / "app.zip")
-    cmd = (ROOT / "tools" / "setup.cmd").read_text(encoding="utf-8")
-    crlf = "".join(line + chr(13) + chr(10) for line in cmd.splitlines())   # cmd.exe cần CRLF (nhãn/goto)
-    (build / "setup.cmd").write_bytes(crlf.encode("ascii"))
-    target = ROOT / "dist" / "CalForge_Setup.exe"
-    target.unlink(missing_ok=True)
-    src_dir = str(build) + chr(92)                          # IExpress cần dấu \ cuối đường dẫn
-    sed = f"""[Version]
-Class=IEXPRESS
-SEDVersion=3
-[Options]
-PackagePurpose=InstallApp
-ShowInstallProgramWindow=1
-HideExtractAnimation=1
-UseLongFileName=1
-InsideCompressed=0
-CAB_FixedSize=0
-CAB_ResvCodeSigning=0
-RebootMode=N
-InstallPrompt=%InstallPrompt%
-DisplayLicense=%DisplayLicense%
-FinishMessage=%FinishMessage%
-TargetName=%TargetName%
-FriendlyName=%FriendlyName%
-AppLaunched=%AppLaunched%
-PostInstallCmd=%PostInstallCmd%
-AdminQuietInstCmd=%AdminQuietInstCmd%
-UserQuietInstCmd=%UserQuietInstCmd%
-SourceFiles=SourceFiles
-[Strings]
-InstallPrompt=
-DisplayLicense=
-FinishMessage=
-TargetName={target}
-FriendlyName=CalForge Studio
-AppLaunched=cmd /c setup.cmd
-PostInstallCmd=<None>
-AdminQuietInstCmd=
-UserQuietInstCmd=
-FILE0="setup.cmd"
-FILE1="app.zip"
-[SourceFiles]
-SourceFiles0={src_dir}
-[SourceFiles0]
-%FILE0%=
-%FILE1%=
+
+def _icon(app: Path) -> None:
+    from PIL import Image, ImageDraw
+    im = Image.new("RGBA", (256, 256), (0, 0, 0, 0))
+    d = ImageDraw.Draw(im)
+    d.rounded_rectangle((16, 28, 240, 240), 36, fill=(47, 93, 80))
+    d.rectangle((16, 84, 240, 100), fill=(255, 255, 255))
+    for x in (76, 180):
+        d.rounded_rectangle((x - 9, 8, x + 9, 60), 8, fill=(34, 32, 28))
+    for i in range(3):
+        for j in range(4):
+            x0, y0 = 44 + j * 45, 118 + i * 38
+            d.rounded_rectangle((x0, y0, x0 + 30, y0 + 24), 5, fill=(227, 238, 233))
+    im.save(app / "calforge.ico", sizes=[(16, 16), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)])
+
+
+ISS = r"""
+[Setup]
+AppId={{6B0E6C3A-4F1D-4B8E-9C2E-CA1F0E5D2A71}
+AppName=CalForge Studio
+AppVersion=%(version)s
+AppPublisher=CalForge
+DefaultDirName={localappdata}\CalForge Studio
+DisableDirPage=yes
+DisableProgramGroupPage=yes
+PrivilegesRequired=lowest
+OutputDir=%(out)s
+OutputBaseFilename=CalForge_Studio_Setup
+SetupIconFile=%(app)s\calforge.ico
+UninstallDisplayIcon={app}\calforge.ico
+Compression=lzma2/max
+SolidCompression=yes
+WizardStyle=modern
+CloseApplications=force
+
+[Languages]
+Name: "en"; MessagesFile: "compiler:Default.isl"
+
+[InstallDelete]
+; thư viện cũ bỏ đi trước khi chép bản mới (dữ liệu người dùng không nằm ở đây)
+Type: filesandordirs; Name: "{app}\python"
+Type: filesandordirs; Name: "{app}\calforge"
+
+[Files]
+Source: "%(app)s\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+
+[Icons]
+Name: "{userdesktop}\CalForge Studio"; Filename: "{app}\python\pythonw.exe"; Parameters: "-m calforge.app"; WorkingDir: "{app}"; IconFilename: "{app}\calforge.ico"
+Name: "{userprograms}\CalForge Studio"; Filename: "{app}\python\pythonw.exe"; Parameters: "-m calforge.app"; WorkingDir: "{app}"; IconFilename: "{app}\calforge.ico"
+
+[Run]
+Filename: "{app}\python\pythonw.exe"; Parameters: "-m calforge.app"; WorkingDir: "{app}"; Description: "Open CalForge Studio"; Flags: postinstall nowait skipifsilent
 """
-    sed_file = build / "setup.sed"
-    sed_file.write_text(sed, encoding="ascii")
-    subprocess.run([str(iexpress), "/N", "/Q", str(sed_file)], check=False)
-    shutil.rmtree(build, ignore_errors=True)
-    if not target.exists():
-        print("IExpress không tạo được file .exe")
-        return None
-    print(f"Bộ cài 1 file -> {target} ({target.stat().st_size / 1e6:.1f} MB)")
-    return target
+
+
+def _iscc() -> Path:
+    for base in (os.environ.get("LOCALAPPDATA", ""), os.environ.get("ProgramFiles(x86)", ""),
+                 os.environ.get("ProgramFiles", "")):
+        p = Path(base) / "Programs" / "Inno Setup 6" / "ISCC.exe"
+        if p.exists():
+            return p
+        p = Path(base) / "Inno Setup 6" / "ISCC.exe"
+        if p.exists():
+            return p
+    sys.exit("Chưa có Inno Setup 6: winget install JRSoftware.InnoSetup")
+
+
+def _guide_pdf() -> None:
+    """dist/Huong_dan_CalForge_Studio.pdf từ HUONG_DAN.html (gửi kèm bộ cài), in bằng Chrome."""
+    sys.path.insert(0, str(ROOT))
+    from calforge.app import _chrome
+    chrome = _chrome()
+    if not chrome:
+        print("Không có Chrome - bỏ qua PDF hướng dẫn")
+        return
+    out = DIST / "Huong_dan_CalForge_Studio.pdf"
+    subprocess.run([str(chrome), "--headless=new", "--disable-gpu", "--no-pdf-header-footer",
+                    f"--print-to-pdf={out}", (ROOT / "HUONG_DAN.html").as_uri()], capture_output=True, check=False)
+    print(f"Hướng dẫn -> {out}" if out.exists() else "Không in được PDF hướng dẫn")
 
 
 def main() -> Path:
-    out = ROOT / "dist" / f"CalForge_Studio_{time.strftime('%Y%m%d')}.zip"
-    out.parent.mkdir(exist_ok=True)
+    import time
+
+    iscc = _iscc()
+    app = DIST / "app"
+    shutil.rmtree(app, ignore_errors=True)
     names = files()
-    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
-        for f in names:
-            z.write(ROOT / f, f"CalForge_Studio/{f}")
-    print(f"{len(names)} file -> {out} ({out.stat().st_size / 1e6:.1f} MB)")
-    build_exe(out)
-    return out
+    for f in names:
+        (app / f).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT / f, app / f)
+    print(f"{len(names)} file của tool")
+    _python(app)
+    _icon(app)
+    iss = DIST / "setup.iss"
+    iss.write_text(ISS % {"version": time.strftime("%Y.%m.%d"), "out": DIST, "app": app}, encoding="utf-8-sig")
+    subprocess.run([str(iscc), "/Q", str(iss)], check=True)
+    shutil.rmtree(app, ignore_errors=True)
+    iss.unlink()
+    target = DIST / "CalForge_Studio_Setup.exe"
+    print(f"Bộ cài -> {target} ({target.stat().st_size / 1e6:.0f} MB)")
+    _guide_pdf()
+    return target
 
 
 if __name__ == "__main__":
-    sys.exit(0 if main() else 1)
+    main()

@@ -60,18 +60,18 @@ def p1b_review(keyword: str, n: int, candidates: list[dict], projects_root: Path
                quota: dict[str, int] | None = None) -> str:
     """Lượt chat RIÊNG làm người thẩm định: AI (không phải code) quyết định ý nào trùng danh mục."""
     keys = ("id", "title", "hook", "buyer", "frame_type", "why_different", "months_sketch", "art_direction",
-            "style_family")
+            "style_family", "buyer_expectation")
     view = [{k: a.get(k) for k in keys} for a in candidates]
     split = ("STYLE SPLIT (fixed by the shop): \"selected\" must contain at most "
              + ", ".join(f'{k} with style_family "{fid}"' for fid, k in quota.items())
-             + " - pick the most different kept candidate within each style." if quota else "")
+             + " - prioritize keyword fit and buyer appeal, then variety, within each style." if quota else "")
     return render("p1b_review", keyword=keyword, n=n, portfolio=catalog.portfolio_text(projects_root, keyword),
                   style_split=split,
                   candidates=json.dumps(view, ensure_ascii=False, indent=1))
 
 
 def p2_concept(angle: dict, style: str, year: int, market: str,
-               grid_composition_usage: str = "none yet") -> str:
+               grid_composition_usage: str = "none yet", base_tone_rule: str = "") -> str:
     from ..imagegen import shots
 
     fonts = load_fonts()
@@ -82,6 +82,7 @@ def p2_concept(angle: dict, style: str, year: int, market: str,
                   fonts_numbers=", ".join(fonts["numbers"]),
                   angle_json=json.dumps(angle, ensure_ascii=False, indent=2), style=style,
                   family_name=fam["name"], grid_composition_usage=grid_composition_usage,
+                  base_tone_rule=base_tone_rule or "Choose the base tone that best suits the art.",
                   month_shots=shots.describe(str(angle.get("title", "")), str(angle.get("frame_type", ""))))
 
 

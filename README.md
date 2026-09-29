@@ -8,9 +8,7 @@ Hướng dẫn cho người dùng (không cần biết kỹ thuật): **[HUONG_D
 
 ## Chạy nhanh
 
-Máy mới: bấm đúp **`CAI_DAT.bat`** (tự cài Python/Chrome nếu thiếu, môi trường `.venv`, thư viện, torch khi có GPU
-NVIDIA, font/KJV/mô hình, biểu tượng ngoài màn hình), sau đó mở bằng **`start_ui.bat`**. Đóng gói gửi người khác:
-`python tools/package.py` -> `dist/CalForge_Studio_<ngày>.zip` (không kèm dữ liệu riêng).
+Người dùng: cài bằng **`CalForge_Studio_Setup.exe`** (dựng bằng `python tools/package.py`, cần Inno Setup 6): có sẵn Python nhúng + thư viện, không cần mạng khi cài, mở như app (không cửa sổ đen). Dev: `python -m calforge ui` hoặc `start_ui.bat`.
 
 Cài tay (dev):
 
@@ -99,7 +97,7 @@ projects/
 ## Kiểm tra tự động
 
 - **Concept** (`ideation/validate.py`): schema, ngày lễ đúng tháng theo lịch thật, mã câu KJV có thật,
-  font OFL, tương phản chữ ≥ 4.5:1, từ cấm (`data/banned_terms.txt`).
+  font OFL, tương phản chữ ≥ 4.5:1. Không lọc tên thương hiệu/nhân vật hoặc loại ý theo `ip_risk`.
 - **Ảnh** (`imagegen/generate.py`): tỉ lệ/kích thước, so màu với ảnh neo, nền grid đủ sạch ở vùng đặt lịch.
 - **Trang in** (`render/preflight.py`): chữ trong lề, không chạm lò xo/lỗ treo/mã vạch, cỡ ≥ 6pt, không
   chồng chữ; đối chiếu độc lập từng ngày với `datetime` (thiếu/trùng/sai ô).

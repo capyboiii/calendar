@@ -94,9 +94,11 @@ class RateWatch:
             if not any(h in url for h in self.HOSTS):
                 return
             status = resp.status
-            if status in (429, 503) and self._core(url):
+            if not self._core(url, getattr(getattr(resp, "request", None), "method", "")):
+                return
+            if status in (429, 503):
                 self.hit = (time.monotonic(), f"HTTP {status} {url.split('?')[0][-60:]}")
-            elif status >= 400 and self._core(url):
+            elif status >= 400:
                 body = ""
                 try:
                     body = resp.text()[:400].lower()
@@ -109,9 +111,16 @@ class RateWatch:
             pass
 
     @staticmethod
-    def _core(url: str) -> bool:
-        """Chỉ request gửi tin nhắn / tạo ảnh / tải file; bỏ request phụ (thống kê, cài đặt, giao diện)."""
-        return "/backend-api/" in url and any(k in url for k in ("conversation", "image", "files", "/f/"))
+    def _core(url: str, method: str = "POST") -> bool:
+        """Chỉ request GỬI tin nhắn / tạo ảnh / tải file lên (POST). Bỏ request đọc (GET): danh sách chat ở thanh
+        bên (/conversations), tải lại một chat (/conversation/<id>), thống kê, cài đặt... - ChatGPT hay trả 429
+        cho các request đọc này khi mở nhiều tab, nhưng tài khoản vẫn gen bình thường (không phải hết lượt)."""
+        if (method or "POST").upper() != "POST":
+            return False
+        path = url.split("?")[0]
+        if "/backend-api/" not in path or "/conversations" in path:
+            return False
+        return any(k in path for k in ("/conversation", "image", "/files", "/f/"))
 
     def recent(self, since: float) -> str | None:
         """Lý do nếu bị giới hạn sau mốc `since` (time.monotonic())."""

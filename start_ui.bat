@@ -9,6 +9,6 @@ echo ========================================================
 "%PY%" -m calforge ui
 if errorlevel 1 (
   echo.
-  echo  Loi khi mo tool. Neu chua cai, hay bam dup CAI_DAT.bat truoc.
+  echo  Loi khi mo tool. Cai thu vien: python -m pip install -r requirements.txt
   pause
 )

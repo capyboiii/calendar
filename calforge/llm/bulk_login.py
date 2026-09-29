@@ -62,6 +62,43 @@ def _emails() -> dict:
         return {}
 
 
+SESSION_EMAIL_JS = ("() => !location.hostname.endsWith('chatgpt.com') ? '' : fetch('/api/auth/session')"
+                    ".then(r => r.json()).then(j => (j && j.user && j.user.email) || '').catch(() => '')")
+
+
+def session_email(page) -> str:
+    """Email của phiên ChatGPT đang đăng nhập ('' nếu chưa) - xác nhận bằng máy chủ ChatGPT, không đoán giao diện."""
+    try:
+        # không lọc theo page.url: địa chỉ Playwright nhớ có thể cũ (vd còn là trang Google) - hỏi thẳng trang
+        return str(page.evaluate(SESSION_EMAIL_JS) or "")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def logged_in_email(ctx) -> str:
+    """Tab ChatGPT nào trong cửa sổ đã đăng nhập thật (máy chủ /api/auth/session trả email) -> email đó."""
+    try:
+        pages = list(ctx.pages)
+    except Exception:  # noqa: BLE001
+        return ""
+    for pg in pages:
+        # Máy chủ ChatGPT trả email = đã đăng nhập thật (khách không có). Không đòi thêm giao diện có ô chat: ngay
+        # sau khi đăng nhập ChatGPT hay che trang bằng hộp chào mừng / khảo sát, ô chat bị che -> chờ mãi.
+        email = session_email(pg)
+        if email:
+            return email
+    return ""
+
+
+def mark_logged_in(udir: Path, email: str) -> None:
+    """Dấu "đã đăng nhập thật" trong profile (danh sách tài khoản dựa vào đây, không dựa vào cookie)."""
+    (udir / MARKER).write_text(json.dumps({"email": email, "at": time.strftime("%Y-%m-%d %H:%M:%S")}),
+                               encoding="utf-8")
+
+
+MARKER = ".calforge_login.json"
+
+
 def _save_email(name: str, email: str) -> None:
     with _LOCK:
         data = _emails()
@@ -161,6 +198,7 @@ def _one(idx: int, name: str, creds: dict, total: int, sem: threading.Semaphore,
                 # Chạy ngầm: cửa sổ nằm ngoài màn hình (headless thật bị ChatGPT/Cloudflare chặn đăng nhập).
                 ctx = pw.chromium.launch_persistent_context(
                     user_data_dir=str(udir), headless=False, channel="chrome", no_viewport=True,
+                    ignore_default_args=["--enable-automation", "--no-sandbox"],
                     args=["--disable-blink-features=AutomationControlled",
                           "--disable-features=CalculateNativeWinOcclusion",
                           "--disable-backgrounding-occluded-windows", "--disable-renderer-backgrounding",
@@ -182,6 +220,7 @@ def _one(idx: int, name: str, creds: dict, total: int, sem: threading.Semaphore,
                 ok = auth_login.auto_login(page, creds, box, check)
                 if ok:
                     _save_email(name, item["email"])
+                    mark_logged_in(udir, item["email"])
                     item["status"] = "done"
                 else:
                     item["status"] = "needs_human" if box.get("needs_human") else "failed"

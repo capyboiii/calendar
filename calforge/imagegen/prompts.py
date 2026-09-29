@@ -19,9 +19,7 @@ PRINT_SAFETY = ("Print safety only: keep indispensable content inside the centra
 COVER_PRINT_SAFETY = ("Print safety only: keep the artwork's indispensable content inside the central 80% horizontal "
                       "area and clear of the top and bottom binding hardware. Background and subordinate decoration "
                       "may bleed and crop.")
-NO_TEXT = "No text, no letters, no numbers, no border, no frame, no signature, no watermark."
-IP_SAFE = ("Do not depict copyrighted or trademarked characters, franchise designs, brand mascots, "
-           "logos, or a living artist's signature style.")
+ARTWORK_FINISH = "No border, no frame, no signature, no watermark."
 REFERENCE = ("The attached reference image is a COLOR AND TEXTURE SWATCH of this collection, not a scene: the top "
              "bands show the palette in its proportions, the bottom patches show the medium and mark-making. "
              "Match those colors, proportions and rendering exactly; take the composition only from this prompt.")
@@ -122,9 +120,10 @@ def _artwork_lightness_rule(style: dict) -> str:
 def _grid_tone_rule(palette: dict) -> str:
     return (
         "MANDATORY LIGHTNESS: the approved workflow always uses dark software title/body text. The grid surface "
-        "must therefore be an EXTREMELY LIGHT near-white pastel tint of the shared base: only about 5–10% "
-        "base-color strength, roughly 93–97% perceived lightness, with strong text contrast. It should read as an "
-        "almost-white colored surface with only a whisper of the shared hue, not as a midtone painted field. Do not "
+        "must therefore be a LIGHT pastel tint of the shared base: about 15–25% base-color strength, roughly "
+        "88–93% perceived lightness, with strong text contrast. The hue must stay clearly recognizable (a blush "
+        "base reads as soft pink, sage as soft green, sky as soft blue), never bleached to near-white or a washed-out "
+        "neutral, and never a midtone painted field. Do not "
         "output a medium, deep, dark, jewel-tone or near-original-strength version of the base color."
     )
 
@@ -167,8 +166,7 @@ def anchor_prompt(concept: dict) -> str:
         PAPER,
         "The image you create will set the visual style for a 12-month calendar series: make the style "
         "distinctive, consistent and easy to repeat.",
-        IP_SAFE,
-        NO_TEXT,
+        ARTWORK_FINISH,
         "Landscape orientation, 3:2.",
     ])
 
@@ -218,8 +216,7 @@ def cover_prompt(concept: dict, with_reference: bool = True) -> str:
     if with_reference:
         lines.append(REFERENCE)
     lines += [
-        IP_SAFE,
-        "No other words, no logo, no signature, no watermark, no mockup and no separate border.",
+        "No signature, no watermark, no mockup and no separate border.",
         "Landscape orientation, 3:2.",
     ]
     return "\n".join(lines)
@@ -250,7 +247,7 @@ def month_prompt(concept: dict, month: dict, with_reference: bool = True) -> str
     ]
     if with_reference:
         lines.append(REFERENCE)
-    lines += [IP_SAFE, NO_TEXT, "Landscape orientation, 3:2."]
+    lines += [ARTWORK_FINISH, "Landscape orientation, 3:2."]
     return "\n".join(lines)
 
 
@@ -324,7 +321,8 @@ def grid_background_prompt(concept: dict, month: dict | None = None, with_refere
         _grid_text_rule(palette),
         _grid_tone_rule(palette),
         (f"SHARED COLLECTION BASE: the artwork series uses {base_name}{base_swatch} as its single dominant ground. "
-         "Use a lighter, quieter, desaturated tint of this exact hue family as the grid's dominant surface. Do not "
+         "Use a lighter, softer tint of this exact hue family as the grid's dominant surface, keeping the hue "
+         "recognizable. Do not "
          "choose another palette color merely because it appears strongly in the reference artwork."),
         ("The attached collection artwork is a STYLE REFERENCE. Make this background harmonize with the whole "
          "12-artwork collection through palette, graphic vocabulary, medium and surface character. Do not copy "
@@ -332,8 +330,9 @@ def grid_background_prompt(concept: dict, month: dict | None = None, with_refere
          "only its color relationships, edge language, mark texture and shape vocabulary."
          if with_reference else
          "Use the collection art direction below for palette, graphic vocabulary, medium and print texture."),
-        ("GRID COLOR INTENSITY: use light, softened, desaturated tints at roughly 5–15% of the "
-         "facing artwork's perceived color intensity. Preserve the collection's hue identity. Never fill the page with full-strength primary color, neon color, "
+        ("GRID COLOR INTENSITY: use light, softened tints at roughly 15–25% of the "
+         "facing artwork's perceived color intensity. Preserve the collection's hue identity: the page must read as "
+         "the shared base hue, not as white or a washed-out neutral. Never fill the page with full-strength primary color, neon color, "
          "luminous yellow, vivid red, electric blue or another high-chroma field—even when the artwork or surface "
          "system is intentionally saturated. Do not introduce accent motifs or focal decorations. Use only light "
          "softened tones suitable for dark software text."),
@@ -363,10 +362,9 @@ def grid_background_prompt(concept: dict, month: dict | None = None, with_refere
          "background must remain visibly subordinate to all 12 facing artworks and must not compete with them. "
          "No frame, inset card, boxed illustration, decorative border, panel or extra composition."),
         "Do not draw calendar geometry or content: no grid lines, table, boxes, checkerboard, rows, "
-         "columns, weekday strip, month title, dates, letters, numerals, pseudo-text, logo, or watermark. "
+         "columns, weekday strip, month title, dates, letters, numerals, pseudo-text, or watermark. "
          "Software will overprint the exact 7-column grid, natural 4/5/6 rows, all dates and words.",
         "Flat landscape 3:2 page, full bleed, no mockup perspective. Generate the image directly.",
-        IP_SAFE,
     ]
     lines.insert(0, CREATE_NEW)
     if not with_reference:

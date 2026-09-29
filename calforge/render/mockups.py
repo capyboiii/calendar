@@ -515,21 +515,54 @@ def previews(concept_dir: Path, on_event=print) -> list[Path]:
         concept = json.loads(layout.concept_file(concept_dir).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         concept = {}                                   # không đọc được concept: coi là lịch thường
-    names = PREVIEWS if products.ai_grid(concept) else PREMADE_PREVIEWS
-    made = []
-    for i, name in enumerate(names, 1):
+    made, errors = [], []
+    for i, name in enumerate(preview_names(concept), 1):
         out = out_dir / f"{i:02d}_{name}.jpg"
-        deps = _dependencies(name, pages)
-        missing = [p for p in deps if not p.is_file()]
-        if missing:
-            raise FileNotFoundError(f"Preview {name} thiếu đầu vào: {', '.join(str(p) for p in missing)}")
-        newest = max(p.stat().st_mtime for p in deps)
-        if out.exists() and out.stat().st_mtime >= newest:
-            continue
-        render(name, pages, out)
-        on_event(f"  preview {out.name}")
-        made.append(out)
+        try:                                    # một tấm lỗi không chặn các tấm còn lại
+            deps = _dependencies(name, pages)
+            missing = [p.name for p in deps if not p.is_file()]
+            if missing:
+                raise FileNotFoundError(f"thiếu trang {', '.join(missing)}")
+            newest = max(p.stat().st_mtime for p in deps)
+            if out.exists() and out.stat().st_mtime >= newest:
+                continue
+            render(name, pages, out)
+            on_event(f"  preview {out.name}")
+            made.append(out)
+        except Exception as e:  # noqa: BLE001
+            errors.append(f"{out.name}: {e}")
+            on_event(f"  ⚠ Không ghép được {out.name}: {e}")
+    if errors:
+        raise PreviewError(made, errors)
     return made
+
+
+class PreviewError(RuntimeError):
+    """Có tấm preview không ghép được; `made` = các tấm vẫn ghép xong."""
+
+    def __init__(self, made: list[Path], errors: list[str]):
+        super().__init__("; ".join(errors))
+        self.made, self.errors = made, errors
+
+
+def preview_names(concept: dict) -> list[str]:
+    from .. import products
+    return PREVIEWS if products.ai_grid(concept) else PREMADE_PREVIEWS
+
+
+def missing_previews(concept_dir: Path) -> list[str]:
+    """Tên file preview còn thiếu của cuốn (loại lịch không có mockup thì rỗng)."""
+    import json
+    from .. import layout, products
+    try:
+        concept = json.loads(layout.concept_file(concept_dir).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        concept = {}
+    if not products.get(concept)["mockups"]:
+        return []
+    out_dir = layout.listing(concept_dir)
+    return [f"{i:02d}_{n}.jpg" for i, n in enumerate(preview_names(concept), 1)
+            if not (out_dir / f"{i:02d}_{n}.jpg").is_file()]
 
 
 if __name__ == "__main__":

@@ -13,3 +13,4 @@ data/account_emails.json
 .chrome-profiles/
 .venv/
 dist/
+logs/
