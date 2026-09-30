@@ -302,6 +302,67 @@ def next_grid_material(projects_root) -> str:
     return min(counts, key=lambda k: counts[k])
 
 
+MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September",
+               "October", "November", "December"]
+
+
+def grid_page_prompt(concept: dict, month: dict, with_reference: bool = True) -> str:
+    """AI vẽ NGUYÊN một trang lịch phẳng để in (grid_mode "ai_page"): tên tháng, thứ, đúng từng ngày, ngày lễ.
+    Ngày được viết sẵn từng tuần trong prompt; OCR (grid_check) soát lại, sai thì gen lại."""
+    from ..core import dates
+    from .grid_check import date_rows
+
+    st = concept["style"]
+    pal = st.get("palette") or {}
+    year, mo = int(concept["year"]), int(month["month"])
+    name = MONTH_NAMES[mo - 1]
+    base_name, base_hex = _shared_base(st)
+    title_c, text_c = pal.get("title", "#1F2A2E"), pal.get("text", "#2A3236")
+    accent, line_c = pal.get("accent", "#C8643A"), pal.get("grid_line", "#7A8A86")
+    color_story = str(st.get("color_story", "")).strip().rstrip(".")
+    surface = str(st.get("surface_system", "")).strip().rstrip(".")
+    season = str(month.get("season_cue") or "").strip().rstrip(".")
+    theme = str(month.get("theme") or "").strip().rstrip(".")
+    rows = date_rows(year, mo)
+    week_lines = [f"  Week {i}: " + ", ".join(d or "empty" for d in w) for i, w in enumerate(rows, 1)]
+    hol = dates.holidays_by_month(year, concept.get("market", "US")).get(mo, [])
+    hol_line = ("- Tiny labels in thin capitals, color " + accent + ", under the number: "
+                + "; ".join(f'"{n.upper()}" under {d}' for d, n in hol) + "."
+                if hol else "- No holiday labels this month.")
+    return "\n".join([
+        f"Design a FLAT, PRINT-READY CALENDAR PAGE ARTWORK for {name} {year}. The image itself IS the printed page, "
+        "viewed straight-on and filling the entire frame edge to edge: landscape 4:3, full bleed. This is a 2D "
+        "graphic design file, NOT a photo of a calendar: no wall, no desk, no room, no hands, no hanging hardware, "
+        "no spiral binding, no paper edges, no page curl, no drop shadows, no perspective, no mockup.",
+        ("The attached image is a COLOR AND TEXTURE REFERENCE for this calendar collection: match its palette, "
+         "medium and surface texture only; do not copy any subject from it." if with_reference else ""),
+        (f"ARTWORK STYLE: match the calendar's art direction ({color_story}). " if color_story else "ARTWORK STYLE: ")
+        + (f"Surface language: {surface}. " if surface else "")
+        + f"Base color of the page: a light tint of {base_name}" + (f" ({base_hex})" if base_hex else "")
+        + ". Decorate the page with a rich, beautiful border of scenery and objects that fit this calendar's theme"
+        + (f" and {name}'s season ({season})" if season else f" and the season of {name}")
+        + (f", echoing this month's idea: {theme}" if theme else "")
+        + ". Decoration sits along the top and outer edges and fades toward the center.",
+        "THE DATE LAYOUT BELONGS TO THE DESIGN: choose the most beautiful way to present the dates for this style "
+        "(for example soft brush-stroke week dividers, a light paper panel, gentle rounded tiles, or dates floating "
+        "on a calm area). Avoid a harsh spreadsheet grid; keep everything flat and printable.",
+        f'TITLE: "{name}" in a graceful, thin, flowing hand-lettered calligraphy script with long soft swashes, '
+        f'color {title_c}; below it "{year}" in small thin widely spaced capitals, color {accent}.',
+        "DATES (must be correct and readable):",
+        f"- Seven columns in this exact order, small thin labels, color {line_c}: SUN MON TUE WED THU FRI SAT",
+        f"- Numbers in a thin, soft, rounded style, color {text_c}; SUN and SAT numbers in {accent}; all numbers "
+        "the same size, clearly legible, each with writing space below it.",
+        "- Exact placement, week by week (empty = no number):",
+        *week_lines,
+        hol_line,
+        "- Keep all text and dates inside the central 84% of the width (x = 8–92%) and the dates area light and "
+        "calm so every number reads clearly.",
+        f"Every number from 1 to {max(int(d) for w in rows for d in w if d)} appears exactly once, in the listed "
+        "week and column; no numbers from other months. All text spelled exactly as given; no other words, "
+        "letters, logos, emblems, symbols, characters, people or signatures anywhere.",
+    ]).replace("\n\n", "\n")
+
+
 def grid_background_prompt(concept: dict, month: dict | None = None, with_reference: bool = True) -> str:
     """AI thiết kế một nền grid dùng chung; code thay chữ và lịch cho 12 tháng."""
     st = concept["style"]

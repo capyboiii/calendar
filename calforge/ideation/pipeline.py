@@ -12,6 +12,7 @@ Thư mục (ổ đĩa là sổ tiến độ, chạy lại thì đi tiếp từ c
 from __future__ import annotations
 
 import json
+import threading
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -38,10 +39,17 @@ class IdeationResult:
     failed: list[str] = field(default_factory=list)
 
 
+# ChatGPT trả lời kiểu "không thấy JSON gốc trong cuộc trò chuyện, hãy dán lại" (chat bị đổi phiên/tài khoản
+# hoặc mất ngữ cảnh): gửi lại kèm JSON, không tính là một lần sửa.
+LOST_CONTEXT = re.compile(r"(not available in this conversation|paste the (original )?json|don't have (access to )?the "
+                          r"(original|previous) json|can(?:no|')t see the (original|previous)|provide the (original )?json)",
+                          re.I)
+
+
 def _ask_validated(chat: LazyChat, label: str, prompt: str, validator, max_repairs: int):
     """Hỏi, bóc JSON, kiểm tra; sai thì gửi P3 kèm danh sách lỗi, tối đa max_repairs lần."""
     data, errors, warnings = None, [], []
-    previous_was_cached = False
+    asked: list[str] = []
     for attempt in range(max_repairs + 1):
         this_label = label if attempt == 0 else f"{label}_repair{attempt}"
         if attempt == 0:
@@ -50,11 +58,15 @@ def _ask_validated(chat: LazyChat, label: str, prompt: str, validator, max_repai
             this_prompt = ("Your previous answer did not contain valid JSON. Return ONLY the JSON "
                            "in one ```json code block, following the schema I gave.")
         else:
-            # Trong cùng chat, model đã thấy JSON trước nên không lặp lại hàng chục KB.
-            # Khi resume từ ledger/cache, phiên mới cần JSON cũ để sửa đúng dữ liệu.
-            this_prompt = templates.p3_repair(errors, data, include_previous=previous_was_cached)
+            # Luôn kèm JSON cũ (gọn): chat có thể đã đổi phiên/tài khoản hoặc model mất ngữ cảnh - không kèm
+            # thì nó trả lời "không thấy JSON" và cuốn hỏng oan.
+            this_prompt = templates.p3_repair(errors, data, include_previous=True)
         answer = chat.ask(this_prompt, this_label)
-        previous_was_cached = chat.last_was_cached
+        asked.append(this_label)
+        if attempt > 0 and data is not None and LOST_CONTEXT.search(answer or ""):
+            print("  ⟳ ChatGPT báo không thấy JSON cũ - gửi lại kèm JSON (không tính lượt sửa)", flush=True)
+            answer = chat.ask(templates.p3_repair(errors, data, include_previous=True), f"{this_label}_resend")
+            asked.append(f"{this_label}_resend")
         try:
             data = extract_json(answer)
         except ValueError as e:
@@ -66,6 +78,15 @@ def _ask_validated(chat: LazyChat, label: str, prompt: str, validator, max_repai
         if attempt < max_repairs:
             print(f"  ⟳ Có {len(errors)} lỗi, bảo ChatGPT sửa (lần {attempt + 1}): "
                   f"{errors[0][:80]}...", flush=True)
+    # Hỏng hẳn: xoá các câu trả lời hỏng khỏi sổ hỏi/đáp, để lần chạy lại HỎI CHATGPT LẠI thay vì dùng lại mãi
+    # đúng câu hỏng đó (trước đây batch kẹt vĩnh viễn ở bước này dù bấm "Làm nốt phần thiếu" bao nhiêu lần).
+    ledger = getattr(chat, "ledger", None)
+    if ledger is not None:
+        for lbl in asked:
+            try:
+                ledger.response_path(lbl).unlink()
+            except OSError:
+                pass
     return data, errors, warnings
 
 
@@ -138,6 +159,9 @@ def _review_and_pick(keyword: str, backend: Backend, ledger: Ledger, kdir: Path,
     return chosen
 
 
+_ASSIGN = threading.Lock()        # chia tông / chất liệu / bố cục khi nhiều cuốn viết concept song song
+_RESERVED_TONES: list[str] = []   # tông đã giao cho cuốn đang viết (chưa ghi concept xuống đĩa)
+
 ROUND_SIZE = 3   # số cuốn mỗi lượt P1 -> P1b: câu trả lời của AI giữ độ dài cố định dù batch lớn
 
 
@@ -175,7 +199,9 @@ def run_ideation(keyword: str, backend: Backend, projects_root: Path, *, year: i
                  n_angles: int = 1, more: bool = False, pick: list[str] | None = None,
                  auto_pick: int = 1, style: str | None = None, max_repairs: int = 2,
                  family: str | None = None, grid_preset: str | None = None,
-                 product: str | None = None, keyword_root: Path | None = None) -> IdeationResult:
+                 product: str | None = None, keyword_root: Path | None = None,
+                 grid_mode: str | None = None, p2_parallel: int = 3,
+                 mockup_mode: str | None = None) -> IdeationResult:
     # keyword_root: thư mục loại lịch (projects/Wall Calendar (Blank)...); danh mục chống trùng, chia đều style/nền/
     # bố cục vẫn tính trên TOÀN BỘ projects_root (mọi loại lịch)
     kdir = (keyword_root or projects_root) / slugify(keyword)
@@ -197,6 +223,12 @@ def run_ideation(keyword: str, backend: Backend, projects_root: Path, *, year: i
             prev = _load_review(kdir, last_run)
             if prev and prev.get("selected") and all(
                     _handled(kdir, a) for a in all_angles if a.get("run") == last_run and a["id"] in prev["selected"]):
+                need_p1 = True
+        if not need_p1 and not pick and not family:
+            # Ý của lượt gần nhất đã dùng hết (thành cuốn / hỏng) - kể cả khi thẩm định lượt đó lỗi, không có
+            # review_run*.json - thì phải nghĩ lượt ý mới, không được chọn lại ý đã làm.
+            last = [a for a in all_angles if a.get("run") == last_run]
+            if not [a for a in usable_angles({"angles": last}) if not _handled(kdir, a)]:
                 need_p1 = True
         n_candidates = max(n_angles, 3 * auto_pick)   # dư ý để người thẩm định có chỗ loại
         # Chia đều họ style (code quyết định, không để người dùng chọn): mỗi suất 3 ý cùng họ cho P1b chọn.
@@ -249,7 +281,7 @@ def run_ideation(keyword: str, backend: Backend, projects_root: Path, *, year: i
                 raise ValueError(f"Không có góc: {', '.join(sorted(unknown))}")
         else:
             latest = {"angles": [a for a in all_angles if a.get("run") == run_no]}
-            pool = usable_angles(latest)
+            pool = [a for a in usable_angles(latest) if not _handled(kdir, a)]   # không chọn lại ý đã làm
             if family:  # ép họ style: lấy trong mọi lượt đã sinh
                 pool = [a for a in usable_angles({"angles": all_angles}) if a.get("style_family") == family]
                 if not pool:
@@ -274,70 +306,101 @@ def run_ideation(keyword: str, backend: Backend, projects_root: Path, *, year: i
             except Exception:  # noqa: BLE001 - one damaged old concept must not stop ideation
                 pass
 
-        # ---- P2: concept cho từng góc đã chọn ----
+        # ---- P2: concept cho từng góc đã chọn - SONG SONG, mỗi cuốn một chat trên một tài khoản riêng ----
+        # (P1/P1b ở trên vẫn tuần tự vì cần nhìn cả danh mục để chống trùng; P2 thì các góc đã khác nhau.)
+        chat.close()
+        todo = []
         for angle in chosen:
             cdir = layout.find_book(kdir, angle["id"])
             if cdir is not None and layout.is_book(cdir):
                 result.concepts.append(cdir)
-                continue
+            else:
+                todo.append((angle, cdir))
+
+        def write(angle: dict, cdir: Path | None) -> tuple[Path | None, str | None]:
+            """(thư mục cuốn, None) nếu xong; (None, id góc) nếu concept hỏng sau các vòng sửa."""
+            from .. import products
+            from . import tones
             print(f"▶ P2: viết concept 12 tháng cho \"{angle['title']}\" "
                   f"[{angle.get('style_family')}]...", flush=True)
             angle_style = (style or angle.get("art_direction")
                            or (angle.get("suggested_styles") or ["a distinctive buyer-led visual direction"])[0])
             angle_view = {k: v for k, v in angle.items() if k != "run"}
-            usage = ", ".join(f"{key}={count}" for key, count in composition_counts.items())
-            # Tông nền cả cuốn chia đều từ P2 (tranh + grid cùng tông); loại grid in sẵn không cần
-            from .. import products as _prod
-            from . import tones
-            tone = tones.next_tone(projects_root) if _prod.ai_grid({"product": product}) else None
-            prompt = templates.p2_concept(angle_view, angle_style, year, market, usage,
-                                          base_tone_rule=tones.prompt_rule(tone, projects_root) if tone else "")
-            # Mỗi cuốn một cuộc chat mới (P3 sửa lỗi vẫn trong chat của cuốn đó): batch nhiều cuốn
-            # không dồn hết concept vào một chat dài - chậm, dễ lẫn chi tiết cuốn trước.
-            chat.close()
-            concept, errors, warnings = _ask_validated(
-                chat, f"p2_concept_{angle['id']}", prompt,
-                lambda c: validate_concept(c, year, market), max_repairs)
-            if cdir is None:   # thư mục mang tên cuốn (dễ đọc); mã góc ghi trong _he_thong/angle_id.txt
-                cdir = layout.new_book_dir(kdir, (concept or {}).get("title") or angle["title"], angle["id"])
-            if errors:
-                layout.ensure_system(cdir)
-                layout.tech(cdir).mkdir(parents=True, exist_ok=True)
-                layout.tech(cdir, "concept_failed.json").write_text(json.dumps(concept, ensure_ascii=False, indent=2), encoding="utf-8")
-                _report(cdir, angle, errors, warnings)
-                result.failed.append(angle["id"])
-                continue
-            concept.update({"year": year, "market": market, "keyword": keyword, "angle_id": angle["id"]})
-            concept["style"]["family"] = angle.get("style_family")
-            if tone:   # tông giao + tông thật (xếp theo hex AI chọn) để soi lại
-                concept["style"]["base_tone"] = {"assigned": tone, "actual": tones.book_tone(concept)}
-            from .. import products
-            concept["product"] = product if product in products.PRODUCTS else products.DEFAULT
-            # Khung hình từng tháng do code chia (cùng thứ tự đã đưa vào prompt P2), lưu lại để
-            # prompt ảnh dùng đúng khung đó kể cả khi AI đổi tên cuốn.
-            from ..imagegen import shots
-            for m, shot in zip(concept["months"], shots.assign(str(angle.get("title", "")), str(angle.get("frame_type", "")))):
-                m["shot"] = shot
-            # Chất liệu giấy nền grid chia đều theo danh mục (không ngẫu nhiên), lưu lại để gen lại vẫn cùng giấy.
-            from ..imagegen.prompts import next_grid_material
-            concept["style"]["grid_material"] = next_grid_material(projects_root)
-            # Bố cục trang lịch chia đều 5 kiểu (calforge/render/grid_layouts.py), tránh cặp hợp kém với chất liệu.
-            from ..render.grid_layouts import next_grid_layout
-            concept["style"]["grid_layout"] = next_grid_layout(projects_root, concept["style"]["grid_material"])
-            # Grid được chọn theo toàn bộ cuốn (buyer, content, chức năng và art direction),
-            # không còn gắn cứng chỉ theo style family. Người dùng vẫn có thể ghi đè khi tạo dự án.
-            from ..render.grid_select import apply_grid_selection
-            apply_grid_selection(concept, requested=grid_preset or "auto")
-            selected_composition = concept["style"].get("grid_composition")
-            if selected_composition in composition_counts:
-                composition_counts[selected_composition] += 1
-            if concept.get("content_type") == "bible_verse_kjv":
-                for m in concept["months"]:  # lời câu lấy từ dữ liệu KJV, không lấy từ ChatGPT
-                    m["content"]["text"] = kjv.lookup(m["content"]["value"])
-            layout.ensure_system(cdir)
-            layout.concept_file(cdir).write_text(json.dumps(concept, ensure_ascii=False, indent=2), encoding="utf-8")
-            _report(cdir, angle, [], warnings)
-            result.concepts.append(cdir)
+            tone = None
+            with _ASSIGN:            # tông nền giữ chỗ ngay: các cuốn viết song song không nhận trùng tông
+                usage = ", ".join(f"{key}={count}" for key, count in composition_counts.items())
+                if products.ai_grid({"product": product}):
+                    tone = tones.next_tone(projects_root, extra=_RESERVED_TONES)
+                    _RESERVED_TONES.append(tone)
+            try:
+                prompt = templates.p2_concept(angle_view, angle_style, year, market, usage,
+                                              base_tone_rule=tones.prompt_rule(tone, projects_root) if tone else "")
+                # Mỗi cuốn một cuộc chat mới (P3 sửa lỗi vẫn trong chat của cuốn đó).
+                with LazyChat(backend, ledger) as own:
+                    concept, errors, warnings = _ask_validated(
+                        own, f"p2_concept_{angle['id']}", prompt,
+                        lambda c: validate_concept(c, year, market), max_repairs)
+                with _ASSIGN:
+                    if cdir is None:   # thư mục mang tên cuốn (dễ đọc); mã góc ghi trong _he_thong/angle_id.txt
+                        cdir = layout.new_book_dir(kdir, (concept or {}).get("title") or angle["title"], angle["id"])
+                if errors:
+                    layout.ensure_system(cdir)
+                    layout.tech(cdir).mkdir(parents=True, exist_ok=True)
+                    layout.tech(cdir, "concept_failed.json").write_text(
+                        json.dumps(concept, ensure_ascii=False, indent=2), encoding="utf-8")
+                    _report(cdir, angle, errors, warnings)
+                    return None, angle["id"]
+                concept.update({"year": year, "market": market, "keyword": keyword, "angle_id": angle["id"]})
+                concept["style"]["family"] = angle.get("style_family")
+                if tone:   # tông giao + tông thật (xếp theo hex AI chọn) để soi lại
+                    concept["style"]["base_tone"] = {"assigned": tone, "actual": tones.book_tone(concept)}
+                concept["product"] = product if product in products.PRODUCTS else products.DEFAULT
+                if products.ai_grid(concept):
+                    concept["style"]["grid_mode"] = (grid_mode if grid_mode in products.GRID_MODES
+                                                     else products.DEFAULT_GRID_MODE)
+                if products.ai_page(concept):       # ảnh quảng cáo: chỉ "AI vẽ cả trang" mới có lựa chọn AI mockup
+                    concept["style"]["mockup_mode"] = mockup_mode if mockup_mode in products.MOCKUP_MODES else "template"
+                # Khung hình từng tháng do code chia (cùng thứ tự đã đưa vào prompt P2).
+                from ..imagegen import shots
+                for m, shot in zip(concept["months"],
+                                   shots.assign(str(angle.get("title", "")), str(angle.get("frame_type", "")))):
+                    m["shot"] = shot
+                from ..render.grid_select import apply_grid_selection
+                apply_grid_selection(concept, requested=grid_preset or "auto")
+                if concept.get("content_type") == "bible_verse_kjv":
+                    for m in concept["months"]:  # lời câu lấy từ dữ liệu KJV, không lấy từ ChatGPT
+                        m["content"]["text"] = kjv.lookup(m["content"]["value"])
+                # Chất liệu + bố cục chia đều theo danh mục: chọn và GHI concept trong cùng khoá, để cuốn viết
+                # song song xong ngay sau đó đếm thấy cuốn này.
+                from ..imagegen.prompts import next_grid_material
+                from ..render.grid_layouts import next_grid_layout
+                with _ASSIGN:
+                    concept["style"]["grid_material"] = next_grid_material(projects_root)
+                    concept["style"]["grid_layout"] = next_grid_layout(projects_root, concept["style"]["grid_material"])
+                    selected_composition = concept["style"].get("grid_composition")
+                    if selected_composition in composition_counts:
+                        composition_counts[selected_composition] += 1
+                    layout.ensure_system(cdir)
+                    layout.concept_file(cdir).write_text(json.dumps(concept, ensure_ascii=False, indent=2),
+                                                         encoding="utf-8")
+                _report(cdir, angle, [], warnings)
+                return cdir, None
+            finally:
+                if tone:
+                    with _ASSIGN:
+                        _RESERVED_TONES.remove(tone)
+
+        if todo:
+            from concurrent.futures import ThreadPoolExecutor
+            workers = max(1, min(len(todo), int(p2_parallel)))
+            with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="p2") as ex:
+                futures = [ex.submit(write, a, c) for a, c in todo]
+                outcomes = [f.result() for f in futures]    # lỗi bất ngờ của một cuốn nổi lên như trước
+            for made, failed_id in outcomes:
+                if made is not None:
+                    result.concepts.append(made)
+                if failed_id:
+                    result.failed.append(failed_id)
     return result
 
 

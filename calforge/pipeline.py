@@ -7,6 +7,7 @@ ghi rõ lý do vào status.json, không render một cuốn thiếu trang.
 from __future__ import annotations
 
 import json
+import threading
 import time
 from pathlib import Path
 
@@ -35,7 +36,12 @@ def upscale_concept(concept_dir: Path, on_event=print, *, settle_s: float = 0.0)
     final = layout.final(concept_dir)
     final.mkdir(parents=True, exist_ok=True)
     done = []
-    for jid in UPSCALE_JOBS:
+    try:
+        concept = json.loads(layout.concept_file(concept_dir).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        concept = {}
+    jobs = UPSCALE_JOBS + [j for j in products.art_jobs(concept) if j.startswith("g")]   # + trang lịch AI
+    for jid in jobs:
         src = plan.job_done(concept_dir, jid)
         dst = final / f"{jid}.jpg"
         if src is None:
@@ -101,9 +107,7 @@ def _render_is_current(concept_dir: Path, format_id: str) -> bool:
     if not validation.get("complete") or validation.get("issues"):
         return False
     inputs = [layout.concept_file(concept_dir)]
-    for jid in RENDER_ART_JOBS:
-        if jid == "grid" and not products.ai_grid(concept):
-            continue
+    for jid in products.art_jobs(concept):
         src, _kind = art_source(concept_dir, jid)
         if src is None:
             return False
@@ -139,7 +143,7 @@ def redo_pages(concept_dir: Path, pages: list[str], on_event=print) -> list[str]
     sau gen lại đúng các trang đó; mọi bước sau (upscale, render, mockup) tự làm lại vì ảnh mới hơn. Cuốn đã xuất CSV
     được đánh dấu chưa xuất để lần Đẩy R2 + xuất CSV sau có bản mới. Trả về các trang đã cất."""
     concept = json.loads(layout.concept_file(concept_dir).read_text(encoding="utf-8"))
-    allowed = [p for p in REDO_PAGES if p != "grid" or products.ai_grid(concept)]
+    allowed = products.art_jobs(concept)
     bad = [p for p in pages if p not in allowed]
     if bad:
         raise ValueError(f"trang không vẽ lại được: {', '.join(bad)} (được: {', '.join(allowed)})")
@@ -173,8 +177,7 @@ def needs_finishing(concept_dir: Path) -> bool:
         return False
     if st.get("ok") and st.get("stage") in ("listing", "printify"):
         return False
-    jobs = [j for j in RENDER_ART_JOBS if j != "grid" or products.ai_grid(concept)]
-    return all(plan.job_done(concept_dir, j) is not None for j in jobs)
+    return all(plan.job_done(concept_dir, j) is not None for j in products.art_jobs(concept))
 
 
 def produce(concept_dir: Path, cfg: dict, *, printify: bool = True, publish: bool = False, on_event=print) -> dict:
@@ -264,6 +267,16 @@ def finish_book(concept_dir: Path, cfg: dict, *, printify: bool = True, publish:
         lacking = missing_previews(concept_dir)
         if lacking and not preview_error:
             preview_error = f"thiếu {', '.join(lacking)}"
+        if products.ai_mockups(concept) and not lacking:
+            # "AI gen mockup": ChatGPT dựng bối cảnh cho 4 ảnh; ảnh nào hỏng thì giữ mockup code (không chặn cuốn)
+            try:
+                from .imagegen.ai_mockups import ai_previews
+                res = ai_previews(concept_dir, cfg, on_event)
+                if res["ai"] or res["kept_code"]:
+                    on_event(f"  ✔ Ảnh quảng cáo AI: {len(res['ai'])} ảnh"
+                             + (f", tạm dùng mockup code: {', '.join(res['kept_code'])}" if res["kept_code"] else ""))
+            except Exception as e:  # noqa: BLE001 - lỗi AI mockup không làm hỏng cuốn: giữ mockup code
+                on_event(f"  ⚠ Không gen được ảnh quảng cáo AI ({e}) - tạm dùng mockup code")
 
     if _listing_is_current(concept_dir):
         on_event("▶ Bước 5/6: Listing đã mới, bỏ qua")
@@ -325,7 +338,13 @@ class _Finisher:
     def submit(self, cdir: Path) -> None:
         # log hậu kỳ có nhãn cuốn và không mang dấu "▶ Bước" để UI không nhầm tiến độ của cuốn đang gen ảnh
         log = lambda m, n=cdir.name: self.on_event(f"  [hậu kỳ · {n}] " + str(m).replace("▶ ", "").strip())
-        self.jobs.append(self.pool.submit(_safe_call, finish_book, cdir, self.cfg, log, **self.kw))
+
+        def run():
+            st = _safe_call(finish_book, cdir, self.cfg, log, **self.kw)
+            # mốc cho UI đếm tiến độ khi nhiều cuốn chạy song song
+            self.on_event(f"◆ CUỐN {'XONG' if st.get('ok') else 'LỖI'}: {cdir.name}")
+            return st
+        self.jobs.append(self.pool.submit(run))
 
     def wait(self) -> None:
         for j in self.jobs:
@@ -353,6 +372,8 @@ def _safe_pipelined(cdir: Path, cfg: dict, finisher: "_Finisher", on_event=print
                      cdir, cfg, on_event)
     if res.get("_next"):
         finisher.submit(cdir)
+    else:
+        on_event(f"◆ CUỐN LỖI: {cdir.name}")
 
 
 def _safe_produce(cdir: Path, cfg: dict, on_event=print, **kw) -> dict:
@@ -431,7 +452,8 @@ def batch_report(kdir: Path, batch: dict) -> list[dict]:
 def run(keyword: str, cfg: dict, *, pick: list[str] | None = None, auto_pick: int | None = None,
         printify: bool = True, publish: bool = False, grid_preset: str | None = None,
         family: str | None = None, on_event=print, retry_wait_s: float | None = None,
-        product: str | None = None) -> list[dict]:
+        product: str | None = None, grid_mode: str | None = None, resume: bool = False,
+        mockup_mode: str | None = None) -> list[dict]:
     """Chạy trọn gói một batch N cuốn theo lượt tối đa ROUND_SIZE cuốn.
 
     - Lỗi của một cuốn chỉ hỏng cuốn đó (status.json có lý do + traceback), batch đi tiếp.
@@ -448,14 +470,107 @@ def run(keyword: str, cfg: dict, *, pick: list[str] | None = None, auto_pick: in
     kdir.mkdir(parents=True, exist_ok=True)
     wait = cfg.get("batch_retry_wait_s", 300) if retry_wait_s is None else retry_wait_s
     common = dict(year=cfg["year"], market=cfg["market"], n_angles=cfg["angles_per_keyword"],
-                  max_repairs=cfg["max_repairs"], grid_preset=grid_preset, family=family, product=product)
+                  max_repairs=cfg["max_repairs"], grid_preset=grid_preset, family=family, product=product,
+                  grid_mode=grid_mode, mockup_mode=mockup_mode)
     kw = dict(printify=printify, publish=publish)
 
     from . import products as _products
     product = product if product in _products.PRODUCTS else _products.DEFAULT
+    lock = _BatchLock(kdir, on_event)
+    lock.acquire()                                      # batch cùng chủ đề đang chạy ở tiến trình khác: chờ xong
+    try:
+        return _run_locked(keyword, cfg, kdir, pick, auto_pick, product, resume, backend, common, kw, wait, on_event)
+    finally:
+        lock.release()
+
+
+def _pid_alive(pid: int) -> bool:
+    """Tiến trình còn chạy không (Windows: OpenProcess + GetExitCodeProcess; nơi khác: os.kill(pid, 0))."""
+    import os
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        import ctypes
+        k = ctypes.windll.kernel32
+        h = k.OpenProcess(0x1000, False, pid)          # PROCESS_QUERY_LIMITED_INFORMATION
+        if not h:
+            return False
+        try:
+            code = ctypes.c_ulong()
+            return bool(k.GetExitCodeProcess(h, ctypes.byref(code))) and code.value == 259   # STILL_ACTIVE
+        finally:
+            k.CloseHandle(h)
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+class _BatchLock:
+    """Khoá theo chủ đề (_he_thong/batch.lock): KHÔNG cho 2 lượt chạy cùng một batch cùng lúc - vd tắt tool khi batch
+    đang chạy (tiến trình batch cũ còn chạy nốt ngầm) rồi mở lại, hàng đợi chạy lại đúng batch đó: lượt mới CHỜ lượt
+    cũ xong rồi mới làm nốt phần còn thiếu, không sinh cuốn trùng. Khoá của tiến trình đã chết thì bỏ qua."""
+
+    _local = threading.Lock()                          # trong cùng tiến trình (test / nhiều luồng)
+    _held: set[str] = set()
+
+    def __init__(self, kdir: Path, on_event=print, poll: float = 3.0):
+        self.file = layout.system(kdir) / "batch.lock"
+        self.on_event, self.poll = on_event, poll
+        self.key = str(self.file.resolve())
+
+    def acquire(self) -> None:
+        import os
+        told = False
+        while True:
+            with _BatchLock._local:
+                if self.key not in _BatchLock._held and not (self.file.exists() and self._owner_alive()):
+                    self.file.parent.mkdir(parents=True, exist_ok=True)
+                    self.file.write_text(json.dumps({"pid": os.getpid(), "since": time.strftime("%Y-%m-%d %H:%M:%S")}),
+                                         encoding="utf-8")
+                    _BatchLock._held.add(self.key)
+                    return
+            if not told:
+                self.on_event("⏸ Batch cùng chủ đề đang chạy ở nơi khác (vd tiến trình cũ trước khi mở lại tool) - "
+                              "chờ nó xong rồi làm nốt phần còn thiếu")
+                told = True
+            time.sleep(self.poll)
+
+    def _owner_alive(self) -> bool:
+        import os
+        try:
+            data = json.loads(self.file.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return False
+        pid = int(data.get("pid", 0))
+        if pid == os.getpid():
+            return self.key in _BatchLock._held
+        return _pid_alive(pid)
+
+    def release(self) -> None:
+        with _BatchLock._local:
+            _BatchLock._held.discard(self.key)
+            try:
+                self.file.unlink()
+            except OSError:
+                pass
+
+
+def _run_locked(keyword, cfg, kdir, pick, auto_pick, product, resume, backend, common, kw, wait, on_event):
+    from . import products as _products
     batch = None if pick else _load_batch(kdir)
     if batch and batch.get("product", _products.DEFAULT) != product:
         batch = None            # batch dở của loại lịch khác: không làm tiếp nhầm loại, mở batch mới
+    if batch and batch.get("finished") and resume:
+        # "Làm nốt phần thiếu": mở lại batch đã kết thúc để làm các cuốn hỏng/thiếu, KHÔNG mở batch N cuốn mới
+        missing = batch["target"] - sum(1 for rel in batch["concepts"] if _finished_ok(kdir / rel))
+        if missing > 0:
+            batch["finished"] = ""
+            on_event(f"▶ Làm nốt batch trước: còn {missing}/{batch['target']} cuốn chưa xong")
+        else:
+            on_event("▶ Batch trước đã đủ cuốn - không còn gì để làm nốt")
+            return batch_report(kdir, batch)
     if batch and not batch.get("finished"):
         on_event(f"▶ Tiếp tục batch dở: {len(batch['concepts'])}/{batch['target']} cuốn đã có ý tưởng")
     else:
@@ -475,46 +590,89 @@ def _run_batch(keyword, cfg, kdir, batch, backend, common, finisher, pick, wait,
     from .ideation.pipeline import ROUND_SIZE, run_ideation
     from .llm.chatgpt_web import NoAccountLeft
 
-    # 1) Cuốn đã có ý tưởng từ lần chạy trước nhưng chưa xong: làm nốt trước.
-    for rel in list(batch["concepts"]):
-        if layout.is_book(kdir / rel) and not _finished_ok(kdir / rel):
-            _safe_pipelined(kdir / rel, cfg, finisher, on_event)
+    # Dây chuyền: vòng dưới đây LÊN Ý TƯỞNG (chat) còn các cuốn đã có concept được đưa cho `books` VẼ SONG SONG
+    # (tối đa book_workers cuốn cùng lúc; tài khoản chia qua bộ điều phối nên chat và vẽ không giẫm lên nhau).
+    # Nghĩ trước tối đa idea_lookahead cuốn chưa kịp vẽ, để không phí lượt chat nếu dừng giữa chừng.
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
 
-    # 2) Lên ý + sản xuất theo lượt cho đủ số còn thiếu.
-    on_event("▶ Bước 1/6: Lên ý tưởng (P1 góc tiếp cận → P2 concept). Chờ ChatGPT vài phút...")
-    empty_rounds = 0
-    idea_waited = 0.0
-    while True:
-        left = batch["target"] - len(batch["concepts"]) - len(batch["failed_ideas"])
-        if left <= 0 or empty_rounds >= 2:
-            break
-        n = min(ROUND_SIZE, left)
-        on_event(f"▶ Lượt lên ý: {n} cuốn (còn thiếu {left}/{batch['target']})")
-        try:
-            res = run_ideation(keyword, backend, Path(cfg["projects_dir"]), pick=pick, auto_pick=n,
-                               keyword_root=kdir.parent, **common)
-        except NoAccountLeft:
-            # hết lượt chat ở mọi tài khoản: chờ rồi làm lại đúng lượt này (sổ hỏi/đáp giữ phần đã có)
-            if _wait_for_quota(cfg, idea_waited, on_event, "chat"):
-                idea_waited += cfg.get("quota_wait_s", 1800)
-                continue
-            batch["errors"].append("hết lượt chat ở mọi tài khoản quá lâu")
+    lookahead = max(1, int(cfg.get("idea_lookahead", 3)))
+    books = ThreadPoolExecutor(max_workers=max(1, int(cfg.get("book_workers", 3))), thread_name_prefix="cuon")
+    waiting = {"n": 0}
+    cv = threading.Condition()
+    futures = []
+
+    def produce_one(cdir: Path) -> None:
+        with cv:
+            waiting["n"] -= 1
+            cv.notify_all()
+        _safe_pipelined(cdir, cfg, finisher, on_event)
+
+    def submit(cdir: Path) -> None:
+        with cv:
+            waiting["n"] += 1
+        futures.append(books.submit(produce_one, cdir))
+
+    try:
+        # 1) Cuốn đã có ý tưởng từ lần chạy trước nhưng chưa xong: làm nốt trước.
+        for rel in list(batch["concepts"]):
+            if layout.is_book(kdir / rel) and not _finished_ok(kdir / rel):
+                submit(kdir / rel)
+
+        # 2) Lên ý + sản xuất theo lượt cho đủ số còn thiếu.
+        on_event("▶ Bước 1/6: Lên ý tưởng (P1 góc tiếp cận → P2 concept). Chờ ChatGPT vài phút...")
+        empty_rounds = 0
+        idea_waited = 0.0
+        failed_before = len(batch["failed_ideas"])          # hỏng của lần chạy trước không chặn lần làm nốt này
+        while True:
+            # Ý tưởng hỏng hẳn (concept không qua kiểm tra) KHÔNG tính vào số cuốn: nghĩ cuốn khác thay cho đủ số.
+            # Chặn vòng lặp vô tận: hỏng quá nhiều (>= số cuốn yêu cầu) thì thôi, báo cáo ghi rõ.
+            left = batch["target"] - len(batch["concepts"])
+            if left <= 0 or empty_rounds >= 2:
+                break
+            failed_now = len(batch["failed_ideas"]) - failed_before
+            if failed_now >= max(3, batch["target"]):
+                batch["errors"].append(f"quá nhiều ý tưởng hỏng ({failed_now}) - dừng nghĩ thêm")
+                _save_batch(kdir, batch)
+                break
+            with cv:                                   # đủ ý chờ vẽ rồi: đợi bớt mới nghĩ tiếp
+                while waiting["n"] >= lookahead:
+                    cv.wait(5)
+            n = min(ROUND_SIZE, left)
+            on_event(f"▶ Lượt lên ý: {n} cuốn (còn thiếu {left}/{batch['target']})")
+            try:
+                res = run_ideation(keyword, backend, Path(cfg["projects_dir"]), pick=pick, auto_pick=n,
+                                   keyword_root=kdir.parent, p2_parallel=cfg.get("p2_parallel", 3), **common)
+            except NoAccountLeft:
+                # hết lượt chat ở mọi tài khoản: chờ rồi làm lại đúng lượt này (sổ hỏi/đáp giữ phần đã có)
+                if _wait_for_quota(cfg, idea_waited, on_event, "chat"):
+                    idea_waited += cfg.get("quota_wait_s", 1800)
+                    continue
+                batch["errors"].append("hết lượt chat ở mọi tài khoản quá lâu")
+                _save_batch(kdir, batch)
+                break
+            except Exception as e:  # noqa: BLE001 - ChatGPT/mạng hỏng: ghi lại, vẫn vét + báo cáo các cuốn đã có
+                batch["errors"].append(f"{type(e).__name__}: {e}"[:500])
+                _save_batch(kdir, batch)
+                on_event(f"  ✘ Lên ý tưởng lỗi: {e}")
+                break
+            new = [c for c in res.concepts if c.name not in batch["concepts"]]
+            batch["concepts"] += [c.name for c in new]
+            batch["failed_ideas"] += [f for f in res.failed if f not in batch["failed_ideas"]]
             _save_batch(kdir, batch)
-            break
-        except Exception as e:  # noqa: BLE001 - ChatGPT/mạng hỏng: ghi lại, vẫn vét + báo cáo các cuốn đã có
-            batch["errors"].append(f"{type(e).__name__}: {e}"[:500])
-            _save_batch(kdir, batch)
-            on_event(f"  ✘ Lên ý tưởng lỗi: {e}")
-            break
-        new = [c for c in res.concepts if c.name not in batch["concepts"]]
-        batch["concepts"] += [c.name for c in new]
-        batch["failed_ideas"] += [f for f in res.failed if f not in batch["failed_ideas"]]
-        _save_batch(kdir, batch)
-        empty_rounds = 0 if new or res.failed else empty_rounds + 1
-        for cdir in new:
-            _safe_pipelined(cdir, cfg, finisher, on_event)
-        if pick:
-            break
+            empty_rounds = 0 if new or res.failed else empty_rounds + 1
+            if empty_rounds >= 2:
+                batch["errors"].append("2 lượt lên ý liền không ra cuốn mới - dừng nghĩ thêm")
+                _save_batch(kdir, batch)
+            for cdir in new:
+                submit(cdir)
+            if pick:
+                break
+    finally:
+        books.shutdown(wait=True)                      # chờ mọi cuốn vẽ xong (mỗi cuốn tự cô lập lỗi)
+    for f in futures:
+        if f.exception() is not None:                  # _safe_pipelined đã tự bắt lỗi; phòng hờ
+            on_event(f"  ✘ Lỗi luồng sản xuất: {f.exception()}")
 
     # 3) Vòng vét: làm lại một lần các cuốn dừng vì thiếu ảnh / lỗi bất ngờ (chờ hậu kỳ nền xong để đọc đúng status).
     finisher.wait()

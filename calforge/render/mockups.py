@@ -518,6 +518,9 @@ def previews(concept_dir: Path, on_event=print) -> list[Path]:
     made, errors = [], []
     for i, name in enumerate(preview_names(concept), 1):
         out = out_dir / f"{i:02d}_{name}.jpg"
+        if name in skipped_previews(concept):
+            out.unlink(missing_ok=True)         # chế độ AI mockup chỉ còn 4 ảnh
+            continue
         try:                                    # một tấm lỗi không chặn các tấm còn lại
             deps = _dependencies(name, pages)
             missing = [p.name for p in deps if not p.is_file()]
@@ -550,6 +553,12 @@ def preview_names(concept: dict) -> list[str]:
     return PREVIEWS if products.ai_grid(concept) else PREMADE_PREVIEWS
 
 
+def skipped_previews(concept: dict) -> set[str]:
+    """Preview không làm cho cuốn này (giữ số thứ tự các ảnh còn lại): AI mockup bỏ ảnh treo tường mở đôi."""
+    from .. import products
+    return {"wall_spread"} if products.ai_mockups(concept) else set()
+
+
 def missing_previews(concept_dir: Path) -> list[str]:
     """Tên file preview còn thiếu của cuốn (loại lịch không có mockup thì rỗng)."""
     import json
@@ -561,8 +570,9 @@ def missing_previews(concept_dir: Path) -> list[str]:
     if not products.get(concept)["mockups"]:
         return []
     out_dir = layout.listing(concept_dir)
+    skip = skipped_previews(concept)
     return [f"{i:02d}_{n}.jpg" for i, n in enumerate(preview_names(concept), 1)
-            if not (out_dir / f"{i:02d}_{n}.jpg").is_file()]
+            if n not in skip and not (out_dir / f"{i:02d}_{n}.jpg").is_file()]
 
 
 if __name__ == "__main__":

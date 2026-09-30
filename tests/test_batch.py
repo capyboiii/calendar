@@ -77,7 +77,9 @@ class BatchTest(unittest.TestCase):
         with self.patched(crash_once={"b1"}, missing_once={"b4"}):
             rows = pipeline.run("kw", cfg(self.root), auto_pick=4, retry_wait_s=0)
         self.assertEqual(self.idea.calls, [3, 1])                     # lượt 3 + 1
-        self.assertEqual(self.produced, ["b1", "b2", "b3", "b4", "b1", "b4"])   # b1 lỗi không chặn b2..b4; vét lại b1, b4
+        # các cuốn vẽ song song nên thứ tự trong lượt không cố định: b1 lỗi không chặn b2..b4; vòng vét làm lại b1, b4
+        self.assertEqual(sorted(self.produced[:4]), ["b1", "b2", "b3", "b4"])
+        self.assertEqual(sorted(self.produced[4:]), ["b1", "b4"])
         self.assertTrue(all(r["ok"] for r in rows))
         report = layout.batch_report_file(self.root / "Wall Calendar (Blank)" / "kw").read_text(encoding="utf-8")
         self.assertIn("xong 4", report)
@@ -113,7 +115,7 @@ class BatchTest(unittest.TestCase):
         with self.patched():
             rows = pipeline.run("kw", cfg(self.root), auto_pick=5, retry_wait_s=0)
         self.assertEqual(self.idea.calls, [1])                        # chỉ lên ý 1 cuốn còn thiếu
-        self.assertEqual(self.produced, ["b4", "b5"])                 # làm nốt b4, rồi b5
+        self.assertEqual(sorted(self.produced), ["b4", "b5"])         # làm nốt b4 và b5 (song song)
         self.assertEqual(sum(r["ok"] for r in rows), 5)
 
 
@@ -184,3 +186,47 @@ class BatchTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PipelinedBatchTest(unittest.TestCase):
+    """Lên ý tưởng chạy CHỒNG lên lúc vẽ; vẽ nhiều cuốn song song có trần; nghĩ trước có giới hạn."""
+
+    def test_ideation_overlaps_drawing_with_limits(self):
+        import threading
+        import time as _t
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            idea = FakeIdeation()
+            lock = threading.Lock()
+            state = {"drawing": 0, "peak": 0, "overlap": False}
+            events = []
+
+            def slow_idea(*a, **kw):
+                with lock:
+                    if state["drawing"]:
+                        state["overlap"] = True               # đang có cuốn vẽ mà vẫn nghĩ ý lượt sau
+                events.append(("idea", kw["auto_pick"]))
+                _t.sleep(0.05)
+                return idea(*a, **kw)
+
+            def produce_images(cdir, cfg, **kw):
+                with lock:
+                    state["drawing"] += 1
+                    state["peak"] = max(state["peak"], state["drawing"])
+                _t.sleep(0.2)
+                with lock:
+                    state["drawing"] -= 1
+                return None
+
+            def finish_book(cdir, cfg, **kw):
+                return pipeline._status(cdir, stage="listing", ok=True)
+
+            c = {**cfg(root), "book_workers": 2, "idea_lookahead": 3}
+            with mock.patch.object(ideation, "run_ideation", slow_idea), \
+                    mock.patch.object(pipeline.config, "make_backend", lambda c: None), \
+                    mock.patch.multiple(pipeline, produce_images=produce_images, finish_book=finish_book):
+                rows = pipeline.run("kw", c, auto_pick=7, retry_wait_s=0)
+            self.assertEqual(sum(r["ok"] for r in rows), 7)
+            self.assertTrue(state["overlap"])                  # ý tưởng không chờ vẽ xong hết mới nghĩ tiếp
+            self.assertLessEqual(state["peak"], 2)             # không vượt số cuốn vẽ cùng lúc
+            self.assertEqual(sum(n for _, n in events), 7)     # không nghĩ thừa cuốn

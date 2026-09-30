@@ -13,6 +13,7 @@ from __future__ import annotations
 import base64
 import logging
 import queue
+from contextlib import contextmanager
 import threading
 import time
 from dataclasses import dataclass, field
@@ -105,6 +106,44 @@ class Refused(RuntimeError): ...
 class TempError(RuntimeError): ...
 
 
+class NavError(RuntimeError):
+    """Không mở được trang ChatGPT (mạng chập / trang tự chuyển hướng / Cloudflare): lỗi của tài khoản-mạng,
+    KHÔNG phải lỗi ảnh -> không tính là một lần vẽ; việc chuyển sang tài khoản khác."""
+
+
+NAV_TRANSIENT = ("interrupted by another navigation", "chrome-error://", "net::err", "err_", "navigation failed",
+                 "timeout", "target page, context or browser has been closed")
+
+
+def open_home(page, url: str, tries: int = 4, wait_ms: int = 1500, net_wait_ms: int = 12_000) -> None:
+    """Mở trang ChatGPT chắc chắn: bị chuyển hướng giữa chừng thì chờ trang ổn định rồi kiểm tra; trang lỗi mạng
+    (chrome-error) thì chờ mạng rồi mở lại. Hết số lần mà vẫn không vào được -> NavError."""
+    last = ""
+    for i in range(tries):
+        try:
+            page.goto(url, wait_until="domcontentloaded", timeout=90_000)
+            if "chrome-error://" not in (page.url or ""):
+                return
+            last = f"trang lỗi mạng ({page.url})"
+        except Exception as e:  # noqa: BLE001
+            last = str(e).splitlines()[0][:200]
+            if not any(k in last.lower() for k in NAV_TRANSIENT):
+                raise
+            # bị chuyển hướng sang chính chatgpt.com: chờ trang nạp xong, nếu đã ở trang ChatGPT là được
+            try:
+                page.wait_for_load_state("domcontentloaded", timeout=30_000)
+            except Exception:  # noqa: BLE001
+                pass
+            if "chatgpt.com" in (page.url or "") and "chrome-error" not in last.lower():
+                return
+        page.wait_for_timeout(net_wait_ms if "chrome-error" in last.lower() or "err_" in last.lower() else wait_ms)
+    raise NavError(f"không mở được ChatGPT sau {tries} lần: {last}")
+
+
+LOGGED_OUT = "tài khoản bị đăng xuất"
+NAV_MAX = 6               # một ảnh gặp lỗi trang/mạng quá bấy nhiêu lần (trên nhiều tài khoản) thì mới tính là lần hỏng
+
+
 class WantsSourceImage(TempError):
     """ChatGPT coi nhầm là việc sửa ảnh và đòi ảnh gốc thay vì tự vẽ."""
 
@@ -153,6 +192,7 @@ class GenJob:
     attach: list[Path] = field(default_factory=list)
     accept: object = None              # hàm (Path) -> str | None: lý do loại ảnh, None = nhận
     attempts: int = 0
+    nav_errors: int = 0                # số lần lỗi trang/mạng (không tính vào attempts cho tới NAV_MAX)
     result: Path | None = None
     error: str | None = None
 
@@ -191,7 +231,16 @@ class _Worker:
                 return loc
             except Exception:  # noqa: BLE001
                 continue
-        raise TempError(f"không thấy {selectors[0]} (ChatGPT đổi giao diện hoặc chưa đăng nhập)")
+        # Không thấy ô chat: trang chưa tải xong / bị che / tài khoản bị đăng xuất - lỗi của trang, KHÔNG phải ảnh
+        from ..llm.bulk_login import LOGIN_STATE_JS
+        try:
+            st = page.evaluate(LOGIN_STATE_JS)
+            logged_out = bool(st.get("hasLoginBtn")) or "auth" in (page.url or "")
+        except Exception:  # noqa: BLE001
+            logged_out = False
+        if logged_out:
+            raise NavError(f"{LOGGED_OUT}: trang ChatGPT đòi đăng nhập lại")
+        raise NavError(f"không thấy ô chat {selectors[0]} (trang chưa tải xong / bị che)")
 
     def _attach(self, page, files: list[Path]) -> None:
         if not files:
@@ -219,8 +268,13 @@ class _Worker:
     def _send(self, page, prompt: str) -> dict:
         before = _eval(page, STATE_JS)
         box = self._find(page, SEL_PROMPT)
-        box.click()
-        box.evaluate(INSERT_JS, prompt)
+        from ..llm.pool import human_pause
+        human_pause()                                   # nhịp người thật trước khi gõ + gửi
+        try:
+            box.click(timeout=15_000)
+            box.evaluate(INSERT_JS, prompt)
+        except Exception as e:  # noqa: BLE001 - ô chat bị hộp thoại che / trang đang tải lại
+            raise NavError(f"không gõ được vào ô chat: {str(e).splitlines()[0][:120]}") from e
         page.wait_for_timeout(400)
         for sel in SEL_SEND:
             btn = page.locator(sel).first
@@ -231,7 +285,10 @@ class _Worker:
             except Exception:  # noqa: BLE001
                 continue
         else:
-            box.press("Enter")
+            try:
+                box.press("Enter", timeout=15_000)
+            except Exception as e:  # noqa: BLE001
+                raise NavError(f"không bấm gửi được: {str(e).splitlines()[0][:120]}") from e
         sent_at = time.monotonic()
         deadline = sent_at + 30
         while not _sent(_eval(page, STATE_JS), before):
@@ -239,7 +296,7 @@ class _Worker:
             if limited:
                 raise QuotaExceeded(f"chặn lúc gửi: {limited}")
             if time.monotonic() > deadline:
-                raise TempError("gửi tin nhắn không đi")
+                raise NavError("gửi tin nhắn không đi (trang ChatGPT không phản hồi)")
             page.wait_for_timeout(400)
         return before
 
@@ -306,7 +363,7 @@ class _Worker:
     def run_job(self, page, job: GenJob) -> Path:
         if not hasattr(page, "_calforge_rate"):
             page._calforge_rate = RateWatch(page)          # theo dõi 429/503 của trang (gắn 1 lần)
-        page.goto(URL, wait_until="domcontentloaded", timeout=90_000)
+        open_home(page, URL)                             # mạng chập / chuyển hướng: chờ + thử lại, không tính lượt
         self._find(page, SEL_PROMPT, 60_000)
         self._attach(page, job.attach)
         before = self._send(page, job.prompt)
@@ -332,129 +389,177 @@ class _Worker:
         return dst
 
 
-def run_jobs(jobs: list[GenJob], profiles_dir: Path, profiles: list[str], *, headless=False,
-             timeout_s=420, max_attempts=3, on_event=print) -> list[GenJob]:
-    """Chạy hết job trên các tài khoản song song. Trả về danh sách job (có result hoặc error)."""
-    from playwright.sync_api import sync_playwright
+def _correct_prompt(job: GenJob) -> None:
+    """Ảnh bị QC/OCR loại: thêm lời sửa vào prompt cho lần vẽ lại."""
+    if job.id.startswith("g") and "lịch sai" in (job.error or ""):
+        job.prompt += (
+            f"\n\nRETRY CORRECTION {job.attempts}: the previous page had calendar errors "
+            "found by an automatic check. Redraw the page and place EVERY number exactly "
+            "in the week and weekday column listed above, each number once, weekday "
+            "labels in the order SUN MON TUE WED THU FRI SAT from left to right, with "
+            "clear, evenly spaced columns."
+        )
+    if job.id == "grid" and "vùng đặt lịch" in (job.error or ""):
+        job.prompt += (
+            f"\n\nRETRY CORRECTION {job.attempts}: The previous result was rejected because "
+            "the calendar writing area was too busy or lacked contrast with the specified "
+            "software text colors. Preserve the chosen surface system, but remove illustrated "
+            "objects and strong high-frequency marks from x=8–92%, y=30–88%, and adjust its "
+            "tone until the supplied title and body colors are clearly readable. Do not turn "
+            "it into generic pale paper. Keep decorative motifs solely above y=27%. "
+            "Do not solve this by adding or moving a character, animal, focal object, "
+            "still life or miniature scene to the margins; decorative motifs only."
+        )
 
+
+NAV_REST_S = 120          # tài khoản mở trang lỗi nghỉ vẽ bấy nhiêu giây
+
+
+def run_jobs(jobs: list[GenJob], profiles_dir: Path, profiles: list[str], *, headless=False,
+             timeout_s=420, max_attempts=3, on_event=print, pool=None, open_page=None) -> list[GenJob]:
+    """Chạy hết job, mỗi tài khoản rảnh một luồng; tài khoản mượn qua bộ điều phối chung (llm/pool.py) nên
+    nhiều cuốn / bước chat chạy song song không bao giờ dùng chung một tài khoản.
+
+    - Luồng vẽ hết việc trong hàng -> trả tài khoản ngay (cuốn khác / chat dùng); có việc mới thì mượn lại.
+    - Hết lượt vẽ -> tài khoản nghỉ vẽ (vẫn chat được), việc trả về hàng, không tính lượt thử.
+    - Chat đang thiếu chỗ -> luồng vẽ nhường tài khoản sau ảnh đang vẽ.
+    - Mọi tài khoản đều nghỉ vẽ -> dừng, việc còn lại ghi QUOTA_MARK để batch chờ rồi thử lại.
+    open_page(profile) (tuỳ chọn, cho test): context manager trả về trang đã mở."""
+    from ..llm.pool import IMAGE, get_pool
+
+    pool = pool or get_pool()
     q: queue.Queue[GenJob] = queue.Queue()
     for j in jobs:
         q.put(j)
-    remaining = {"n": len(jobs)}
     lock = threading.Lock()
-    alive = {"n": 0}
+    state = {"remaining": len(jobs), "alive": 0}
+    broken: set[str] = set()                          # không mở được Chrome trong lần chạy này
 
-    def finish(job: GenJob):
+    def finish(job: GenJob) -> None:
         with lock:
-            remaining["n"] -= 1
+            state["remaining"] -= 1
+        pool.poke()                                   # đánh thức vòng điều phối
 
-    def worker(profile: str):
+    @contextmanager
+    def default_open(profile: str):
+        from playwright.sync_api import sync_playwright
+        from ..llm.browser import launch_options
         udir = profiles_dir / profile
-        w = _Worker(udir, headless, timeout_s)
-        try:
-            with sync_playwright() as pw:
-                from ..llm.browser import launch_options
+        with sync_playwright() as pw:
+            with pool.launch_gate():
                 ctx = pw.chromium.launch_persistent_context(
                     str(udir), channel="chrome", viewport={"width": 1400, "height": 950},
                     **launch_options(headless))
+            try:
                 page = ctx.pages[0] if ctx.pages else ctx.new_page()
                 if headless in ("hidden", None):
                     from ..llm.browser import hide_offscreen_from_taskbar
-                    hide_offscreen_from_taskbar()           # Chrome ngầm: không hiện biểu tượng dưới thanh tác vụ
-                try:
-                    while True:
-                        with lock:
-                            if remaining["n"] <= 0:
-                                return
-                        try:
-                            job = q.get(timeout=2)
-                        except queue.Empty:
-                            continue
-                        job.attempts += 1
-                        on_event(f"[{profile}] {job.id}: gen (lần {job.attempts})")
-                        try:
-                            job.result = w.run_job(page, job)
-                            job.error = None
-                            on_event(f"[{profile}] {job.id}: xong -> {job.result.name}")
-                            finish(job)
-                        except QuotaExceeded as e:
-                            job.attempts -= 1            # không tính lượt: lỗi của tài khoản
-                            q.put(job)
-                            on_event(f"[{profile}] HẾT LƯỢT, nghỉ tài khoản này: {str(e)[:120]}")
-                            recruit()                    # gọi tài khoản dự bị vào thay (nếu còn việc)
-                            return
-                        except Refused as e:
-                            job.error = f"bị từ chối: {str(e)[:200]}"
-                            on_event(f"[{profile}] {job.id}: {job.error}")
-                            finish(job)
-                        except TempError as e:
-                            job.error = str(e)[:300]
-                            if job.attempts < max_attempts:
-                                if job.id == "grid" and "vùng đặt lịch" in job.error:
-                                    job.prompt += (
-                                        f"\n\nRETRY CORRECTION {job.attempts}: The previous result was rejected because "
-                                        "the calendar writing area was too busy or lacked contrast with the specified "
-                                        "software text colors. Preserve the chosen surface system, but remove illustrated "
-                                        "objects and strong high-frequency marks from x=8–92%, y=30–88%, and adjust its "
-                                        "tone until the supplied title and body colors are clearly readable. Do not turn "
-                                        "it into generic pale paper. Keep decorative motifs solely above y=27%. "
-                                        "Do not solve this by adding or moving a character, animal, focal object, "
-                                        "still life or miniature scene to the margins; decorative motifs only."
-                                    )
-                                q.put(job)
-                                on_event(f"[{profile}] {job.id}: QC không đạt ({job.error[:120]}) - sửa prompt và thử lại")
-                            else:
-                                on_event(f"[{profile}] {job.id}: bỏ sau {job.attempts} lần: {job.error[:160]}")
-                                finish(job)
-                        except Exception as e:  # noqa: BLE001 - lỗi tạm: thử lại nếu còn lượt
-                            job.error = str(e)[:300]
-                            if job.attempts < max_attempts:
-                                q.put(job)
-                                on_event(f"[{profile}] {job.id}: lỗi ({job.error[:120]}) - thử lại")
-                            else:
-                                on_event(f"[{profile}] {job.id}: bỏ sau {job.attempts} lần: {job.error[:160]}")
-                                finish(job)
-                finally:
-                    ctx.close()
-        except Exception as e:  # noqa: BLE001 - không mở được Chrome/profile (thường do profile bị khóa
-            # bởi Chrome mồ côi từ lần chạy trước) -> gọi tài khoản dự bị vào thay, đừng để job kẹt.
-            on_event(f"[{profile}] không mở được Chrome (profile bị khóa?): {str(e)[:160]}")
-            recruit()
+                    hide_offscreen_from_taskbar()     # Chrome ngầm: không hiện biểu tượng dưới thanh tác vụ
+                yield page
+            finally:
+                ctx.close()
+
+    opener = open_page or default_open
+
+    def handle(profile: str, w, page, job: GenJob) -> bool:
+        """Chạy 1 việc. False = tài khoản phải thôi (hết lượt)."""
+        job.attempts += 1
+        on_event(f"[{profile}] {job.id}: gen (lần {job.attempts})")
+        try:
+            job.result = w.run_job(page, job)
+            job.error = None
+            on_event(f"[{profile}] {job.id}: xong -> {job.result.name}")
+            finish(job)
+        except QuotaExceeded as e:
+            job.attempts -= 1                         # không tính lượt: lỗi của tài khoản
+            q.put(job)
+            pool.rest(profile, IMAGE, pool.rest_s, str(e))
+            on_event(f"[{profile}] HẾT LƯỢT VẼ, nghỉ vẽ tài khoản này: {str(e)[:120]}")
+            return False
+        except NavError as e:
+            logged_out = LOGGED_OUT in str(e)
+            pool.rest(profile, IMAGE, 3600 if logged_out else NAV_REST_S, str(e))   # tài khoản nghỉ, việc sang acc khác
+            job.nav_errors += 1
+            if job.nav_errors < NAV_MAX:
+                job.attempts -= 1                     # lỗi trang / mạng, không phải lỗi ảnh: không tính lượt
+                q.put(job)
+                on_event(f"[{profile}] " + (f"{LOGGED_OUT} - cần đăng nhập lại; " if logged_out else
+                                            f"lỗi trang ChatGPT ({str(e)[:80]}); ")
+                         + f"chuyển {job.id} sang tài khoản khác")
+            else:                                     # lỗi trang lặp mãi trên nhiều tài khoản: tính như lỗi thường
+                job.error = f"lỗi trang ChatGPT lặp lại: {str(e)[:200]}"
+                if job.attempts < max_attempts:
+                    q.put(job)
+                else:
+                    on_event(f"[{profile}] {job.id}: bỏ sau {job.attempts} lần: {job.error[:160]}")
+                    finish(job)
+            return False
+        except Refused as e:
+            job.error = f"bị từ chối: {str(e)[:200]}"
+            on_event(f"[{profile}] {job.id}: {job.error}")
+            finish(job)
+        except Exception as e:  # noqa: BLE001 - TempError (QC/OCR/mạng) và lỗi tạm: thử lại nếu còn lượt
+            job.error = str(e)[:300]
+            if job.attempts < max_attempts:
+                if isinstance(e, TempError):
+                    _correct_prompt(job)
+                q.put(job)
+                on_event(f"[{profile}] {job.id}: không đạt ({job.error[:120]}) - thử lại")
+            else:
+                on_event(f"[{profile}] {job.id}: bỏ sau {job.attempts} lần: {job.error[:160]}")
+                finish(job)
+        return True
+
+    def worker(profile: str) -> None:
+        w = _Worker(profiles_dir / profile, headless, timeout_s)
+        try:
+            with opener(profile) as page:
+                while not pool.should_yield(profile):
+                    try:
+                        job = q.get_nowait()
+                    except queue.Empty:
+                        return                        # hết việc: trả tài khoản cho cuốn khác / chat
+                    if not handle(profile, w, page, job):
+                        return
+        except Exception as e:  # noqa: BLE001 - không mở được Chrome/profile: đổi tài khoản khác
+            on_event(f"[{profile}] không mở được Chrome: {str(e)[:160]}")
+            with lock:
+                broken.add(profile)
+            pool.rest(profile, IMAGE, 600, f"không mở được Chrome: {e}")   # các cuốn khác khỏi thử lại liên tục
         finally:
             with lock:
-                alive["n"] -= 1
+                state["alive"] -= 1
+            pool.release(profile)
 
-    # Chỉ mở số cửa sổ Chrome bằng số việc: gen ảnh neo (1 việc) không mở thừa 4 cửa sổ trắng.
-    # Giữ nguyên thứ tự tài khoản (ưu tiên); các tài khoản dư để dành làm dự bị.
-    n_workers = max(1, min(len(profiles), len(jobs)))
-    threads = []
-    reserves = list(profiles[n_workers:])   # tài khoản dự bị, gọi vào khi worker hết lượt
-
-    def spawn(profile: str):
+    threads: list[threading.Thread] = []
+    while True:
         with lock:
-            alive["n"] += 1
-        t = threading.Thread(target=worker, args=(profile,), daemon=True)
-        t.start()
-        threads.append(t)
-
-    def recruit():
-        """Khi một worker nghỉ vì hết lượt: gọi một tài khoản dự bị vào thay (nếu còn việc)."""
-        with lock:
-            if remaining["n"] <= 0 or not reserves:
-                return
-            nxt = reserves.pop(0)
-        on_event(f"[{nxt}] gọi tài khoản dự bị vào thay")
-        spawn(nxt)
-
-    for p in profiles[:n_workers]:
-        spawn(p)
-        time.sleep(1.5)  # bật Chrome lệch nhau cho đỡ nghẽn
-    while any(t.is_alive() for t in threads):
-        for t in list(threads):
-            t.join(timeout=1)
-    left = []
+            remaining, alive = state["remaining"], state["alive"]
+        if remaining <= 0 and alive == 0:
+            break
+        queued = q.qsize()
+        spawned = False
+        if queued > alive:                            # còn việc chưa có người làm: mượn thêm tài khoản
+            prefer = [n for n in profiles if n not in broken]
+            name = pool.acquire(IMAGE, prefer=prefer)
+            if name and name in broken:
+                pool.release(name)
+            elif name:
+                with lock:
+                    state["alive"] += 1
+                t = threading.Thread(target=worker, args=(name,), daemon=True)
+                t.start()
+                threads.append(t)
+                spawned = True
+        if not spawned:
+            if alive == 0 and queued:
+                usable = [n for n in pool.names if n not in broken]
+                if not usable or all(pool._resting(n, IMAGE) for n in usable):
+                    break                             # mọi tài khoản nghỉ vẽ / hỏng: để batch chờ rồi thử lại
+            pool.wait_change(1.0)
+    for t in threads:
+        t.join(timeout=5)
     while not q.empty():
         j = q.get()
         j.error = "hết tài khoản còn lượt"      # = generate.QUOTA_MARK: batch sẽ chờ rồi thử lại
-        left.append(j)
     return jobs

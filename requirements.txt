@@ -8,4 +8,5 @@ fonttools
 opencv-python-headless
 boto3
 pyotp
+rapidocr-onnxruntime   # OCR soat ngay tren trang lich AI ve (grid_mode ai_page), chay CPU
 # torch + spandrel (upscale on NVIDIA GPU) are installed by CAI_DAT.bat only when the machine has an NVIDIA card

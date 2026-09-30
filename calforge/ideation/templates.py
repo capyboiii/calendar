@@ -89,7 +89,7 @@ def p2_concept(angle: dict, style: str, year: int, market: str,
 def p3_repair(errors: list[str], previous: dict, *, include_previous: bool = True) -> str:
     """Prompt sửa ngắn trong cùng phiên; kèm JSON gọn khi đang resume từ cache."""
     if include_previous:
-        previous_block = ("This run resumed in a new chat, so here is the JSON to correct:\n"
+        previous_block = ("Here is the JSON to correct (your previous answer):\n"
                           "```json\n"
                           + json.dumps(previous, ensure_ascii=False, separators=(",", ":"))
                           + "\n```")

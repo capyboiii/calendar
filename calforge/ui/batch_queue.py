@@ -15,6 +15,7 @@ import uuid
 from pathlib import Path
 
 WAITING, RUNNING, DONE, FAILED, STOPPED = "queued", "running", "done", "failed", "stopped"
+PARTIAL = "partial"          # chạy xong nhưng chỉ đạt một phần số cuốn
 
 
 class BatchQueue:
@@ -28,6 +29,8 @@ class BatchQueue:
         for it in self.items:                     # tool vừa mở lại: batch "đang chạy" cũ đã chết theo tool
             if it["status"] == RUNNING:
                 it.update(status=WAITING, task_id=None)
+                if not it["params"].get("action"):      # batch: làm nốt đúng batch đó, không mở batch N cuốn mới
+                    it["params"] = {**it["params"], "resume": True}
         self._save()
 
     # ---- lưu trạng thái -------------------------------------------------------------------------------------
@@ -49,6 +52,15 @@ class BatchQueue:
     def add(self, params: dict) -> dict:
         self.build_args(params)                  # kiểm tra tham số ngay (thiếu chủ đề -> báo lỗi lúc bấm)
         with self.lock:
+            same = self._same_book_waiting(params)
+            if same is not None:                 # bấm lại cho cùng một cuốn khi việc cũ còn đang chờ: gộp, không nhân đôi
+                if params.get("action") == "redo":
+                    pages = list(dict.fromkeys((same["params"].get("pages") or []) + (params.get("pages") or [])))
+                    same["params"] = {**same["params"], "pages": pages}
+                elif params.get("redo_previews"):
+                    same["params"] = {**same["params"], "redo_previews": True}
+                self._save()
+                return same
             item = {"id": f"q_{int(time.time() * 1000)}_{uuid.uuid4().hex[:6]}", "params": params,
                     "status": WAITING, "task_id": None,
                     "added_at": time.strftime("%Y-%m-%d %H:%M:%S"), "started_at": "", "finished_at": ""}
@@ -56,6 +68,14 @@ class BatchQueue:
             self._save()
         self.tick()
         return item
+
+    def _same_book_waiting(self, params: dict) -> dict | None:
+        """Việc ĐANG CHỜ cùng loại (vẽ lại / làm tiếp / hoàn thiện) cho đúng cuốn này, nếu có."""
+        action, concept = params.get("action"), params.get("concept")
+        if not action or not concept:
+            return None
+        return next((i for i in self.items if i["status"] == WAITING and i["params"].get("action") == action
+                     and i["params"].get("concept") == concept), None)
 
     def remove(self, item_id: str) -> bool:
         """Bỏ một batch đang chờ, hoặc xoá một dòng khỏi danh sách xong (batch đang chạy thì phải Dừng trước)."""
@@ -89,6 +109,8 @@ class BatchQueue:
             if cur:                                   # đưa batch đang chạy về đầu hàng, làm nốt khi Tiếp tục
                 task_id = cur["task_id"]
                 cur.update(status=WAITING, task_id=None, paused_from=True)
+                if not cur["params"].get("action"):     # Tiếp tục = làm nốt đúng batch đang dở
+                    cur["params"] = {**cur["params"], "resume": True}
                 self.items.remove(cur)
                 first = next((k for k, i in enumerate(self.items) if i["status"] == WAITING), len(self.items))
                 self.items.insert(first, cur)
@@ -128,9 +150,15 @@ class BatchQueue:
                     return
                 status = t.status if t is not None else "failed"
                 ok, total = self.report(cur["params"])
-                cur.update(finished_at=time.strftime("%Y-%m-%d %H:%M:%S"), ok=ok, total=total,
-                           status=STOPPED if status == "stopped" or cur.get("user_stopped")
-                           else DONE if status == "success" else FAILED)
+                if status == "stopped" or cur.get("user_stopped"):
+                    final = STOPPED
+                elif status != "success" or (total and ok == 0):
+                    final = FAILED                       # chạy hết mà không cuốn nào đạt = lỗi, không phải "xong"
+                elif total and ok < total:
+                    final = PARTIAL
+                else:
+                    final = DONE
+                cur.update(finished_at=time.strftime("%Y-%m-%d %H:%M:%S"), ok=ok, total=total, status=final)
                 self._save()
             if self.paused or self.tasks.running():
                 return

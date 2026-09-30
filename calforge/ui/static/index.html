@@ -46,6 +46,28 @@
           <span><strong>Wall Calendar</strong><small>Chỉ làm tranh</small></span>
         </label>
       </fieldset>
+      <fieldset class="kinds" id="gridModePicker">
+        <legend>Trang lịch</legend>
+        <label class="kind">
+          <input type="radio" name="grid_mode" value="ai_page" checked>
+          <span><strong>AI vẽ cả trang</strong><small>Đẹp, tự do; máy soát ngày, sai thì vẽ lại</small></span>
+        </label>
+        <label class="kind">
+          <input type="radio" name="grid_mode" value="background">
+          <span><strong>AI vẽ nền, máy in lịch</strong><small>Ít lượt vẽ, ngày chuẩn tuyệt đối, có câu trích</small></span>
+        </label>
+      </fieldset>
+      <fieldset class="kinds" id="mockupPicker">
+        <legend>Ảnh quảng cáo</legend>
+        <label class="kind">
+          <input type="radio" name="mockup_mode" value="template" checked>
+          <span><strong>Dùng mockup đã có</strong><small>5 ảnh ghép sẵn, không tốn lượt</small></span>
+        </label>
+        <label class="kind">
+          <input type="radio" name="mockup_mode" value="ai">
+          <span><strong>AI gen mockup</strong><small>4 ảnh, bối cảnh riêng cho từng cuốn (+4 lượt vẽ)</small></span>
+        </label>
+      </fieldset>
       <div class="start-row">
         <label class="field grow">
           <span>Chủ đề</span>
@@ -61,7 +83,7 @@
         </label>
         <button class="btn btn-primary btn-big" id="btnStart">Bắt đầu</button>
       </div>
-      <p class="hint" id="startHint">~30 phút</p>
+      <p class="hint" id="startHint"></p>
     </section>
 
     <!-- 2. Đang chạy -->
@@ -75,7 +97,6 @@
       </div>
       <ol class="steps" id="runSteps"></ol>
       <div class="bar"><div class="bar-fill" id="runBar"></div></div>
-      <p class="hint" id="runTime"></p>
       <details class="advanced" id="logBox">
         <summary>Chi tiết</summary>
         <pre id="runLog"></pre>

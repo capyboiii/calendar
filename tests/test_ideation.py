@@ -223,7 +223,7 @@ class PipelineTest(unittest.TestCase):
                                       "p2_concept_r1a1_repair1"])
             self.assertIn("first priority is artwork that fulfills the keyword", fake.prompts[1][1])
             self.assertIn("falls in March 2027", fake.prompts[3][1])  # lỗi được gửi lại cho ChatGPT
-            self.assertNotIn('"months":', fake.prompts[3][1])  # cùng phiên: không lặp lại JSON dài
+            self.assertIn('"months":', fake.prompts[3][1])  # lần sửa luôn kèm JSON cũ (chat có thể đã đổi phiên)
             concept = json.loads((res.concepts[0] / "_he_thong" / "concept.json").read_text(encoding="utf-8"))
             self.assertEqual(concept["year"], 2027)
             self.assertEqual(concept["grid_selection"]["mode"], "auto")
@@ -247,10 +247,12 @@ class PipelineTest(unittest.TestCase):
             # Kế hoạch gen ảnh + CSV cho chatgpt-automation
             jobs = plan.write_plan(res.concepts[0])
             self.assertEqual([j["id"] for j in jobs][:4], ["anchor", "cover", "m01", "m02"])
-            self.assertEqual(len(jobs), 15)
-            grid_job = next(j for j in jobs if j["id"] == "grid")
-            self.assertEqual(grid_job["attach"], ["_he_thong/anh_ai/anchor.png"])
-            self.assertIn("no grid", grid_job["prompt"].lower())
+            # cuốn Blank mới: AI vẽ nguyên 12 trang lịch (g01..g12), không còn một nền grid chung
+            self.assertEqual(len(jobs), 26)
+            self.assertNotIn("grid", [j["id"] for j in jobs])
+            g01 = next(j for j in jobs if j["id"] == "g01")
+            self.assertEqual(g01["attach"], ["_he_thong/anh_ai/anchor_swatch.png"])
+            self.assertIn("SUN MON TUE WED THU FRI SAT", g01["prompt"])
             csv_text = plan.export_csv(res.concepts[0]).read_text(encoding="utf-8-sig")
             self.assertEqual(csv_text.count("cal-"), 14)  # CSV không đính ảnh, bỏ nền grid chung
 
@@ -650,3 +652,56 @@ class GridLayoutRotationTest(unittest.TestCase):
         self.assertLessEqual(max(counts.values()) - min(counts.values()), 1)       # 15 cuốn -> mỗi bố cục ~3
         self.assertFalse([p for p in picks if p[1] in gl.AVOID.get(p[0], ())])     # không có cặp hợp kém
         self.assertGreater(len(set(picks)), 5)                                       # không khoá cặp chất liệu-bố cục
+
+
+
+class RepairContextTest(unittest.TestCase):
+    def test_repair_always_carries_json_and_resends_on_lost_context(self):
+        from calforge.ideation.pipeline import _ask_validated
+
+        class Chat:
+            last_was_cached = False
+
+            def __init__(self):
+                self.prompts = []
+                self.answers = ['```json\n{"a": 1}\n```',
+                                "The original JSON is not available in this conversation. Please paste the original JSON.",
+                                '```json\n{"a": 2}\n```']
+
+            def ask(self, prompt, label):
+                self.prompts.append(prompt)
+                return self.answers.pop(0)
+
+        chat = Chat()
+        data, errors, _ = _ask_validated(chat, "p2", "go", lambda d: ([] if d.get("a") == 2 else ["a must be 2"], []), 1)
+        self.assertEqual((data, errors), ({"a": 2}, []))                 # lượt gửi lại không tính là một lần sửa
+        self.assertIn('{"a":1}', chat.prompts[1])                        # lần sửa có kèm JSON cũ
+        self.assertIn('{"a":1}', chat.prompts[2])
+
+
+class BrokenAnswerNotCachedTest(unittest.TestCase):
+    def test_failed_answers_are_asked_again_next_run(self):
+        from calforge.ideation.pipeline import _ask_validated
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger = Ledger(Path(tmp))
+
+            class Chat:
+                def __init__(self, answers):
+                    self.answers, self.asked = list(answers), []
+                    self.ledger, self.last_was_cached = ledger, False
+
+                def ask(self, prompt, label):
+                    cached = ledger.cached(label)
+                    if cached is not None:
+                        return cached
+                    self.asked.append(label)
+                    a = self.answers.pop(0)
+                    ledger.record(label, prompt, a)
+                    return a
+
+            bad = Chat(["no json", "still no json"])
+            _, errors, _ = _ask_validated(bad, "p1", "go", lambda d: ([], []), 1)
+            self.assertTrue(errors)
+            good = Chat(['```json\n{"ok": 1}\n```'])            # chạy lại: phải hỏi ChatGPT thật, không dùng câu hỏng
+            data, errors, _ = _ask_validated(good, "p1", "go", lambda d: ([], []), 1)
+            self.assertEqual((data, errors, good.asked), ({"ok": 1}, [], ["p1"]))

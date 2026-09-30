@@ -21,6 +21,18 @@ ASPECT_RANGE = (1.35, 1.65)   # yêu cầu 3:2 = 1.5
 MIN_LONG_SIDE = 1024
 
 
+def accept_grid_page(path: Path, year: int, month: int) -> str | None:
+    """Trang lịch AI vẽ nguyên trang: ngang (4:3..3:2) rồi OCR soát từng ngày (grid_check)."""
+    with Image.open(path) as im:
+        w, h = im.size
+    if max(w, h) < MIN_LONG_SIDE:
+        return f"ảnh nhỏ quá ({w}x{h})"
+    if not 1.2 <= w / h <= 1.65:
+        return f"sai tỉ lệ ({w}x{h}, cần trang ngang 4:3)"
+    from .grid_check import check_grid_page
+    return check_grid_page(path, year, month)
+
+
 def accept_landscape(path: Path) -> str | None:
     with Image.open(path) as im:
         w, h = im.size
@@ -136,6 +148,9 @@ def generate_concept(concept_dir: Path, profiles_dir: Path, profiles: list[str] 
             palette = (concept.get("style") or {}).get("palette") or {}
             text_colors = [palette.get("title", ""), palette.get("text", "")]
             accept = lambda path: accept_grid_background(path, text_colors)
+        elif spec["kind"] == "grid_page":
+            year, mo = int(concept["year"]), int(spec["month"])
+            accept = lambda path, year=year, mo=mo: accept_grid_page(path, year, mo)
         else:
             accept = accept_landscape
         # "anchor.png" trong kế hoạch = ảnh neo thật (có thể là .jpg); còn lại là file trong concept.
@@ -172,11 +187,12 @@ def generate_concept(concept_dir: Path, profiles_dir: Path, profiles: list[str] 
     # 3) Một nền grid dùng chung tham chiếu ảnh neo của cả collection.
     grid_pending = []
     for spec in specs.values():
-        if spec["kind"] != "grid_background" or job_done(concept_dir, spec["id"]):
+        if spec["kind"] not in ("grid_background", "grid_page") or job_done(concept_dir, spec["id"]):
             continue
         grid_pending.append(to_job(spec, anchor))
     if grid_pending:
-        on_event("Gen nền grid AI dùng chung cho 12 tháng...")
+        on_event(f"Gen {len(grid_pending)} trang lịch AI (OCR soát ngày, sai thì vẽ lại)..."
+                 if grid_pending[0].id != "grid" else "Gen nền grid AI dùng chung cho 12 tháng...")
         for job in run_jobs(grid_pending, profiles_dir, names, headless=headless, timeout_s=timeout_s,
                             max_attempts=max_attempts, on_event=on_event):
             if job.result is None:
@@ -195,6 +211,9 @@ def generate_concept(concept_dir: Path, profiles_dir: Path, profiles: list[str] 
             size = f"{im.width}x{im.height}"
         if jid == "anchor":
             qc.append(f"| {jid} | {size} | - | |")
+            continue
+        if specs[jid]["kind"] == "grid_page":
+            qc.append(f"| {jid} | {size} | - | trang lịch AI, OCR đã soát ngày |")
             continue
         if specs[jid]["kind"] == "grid_background":
             qc.append(f"| {jid} | {size} | - | thiết kế grid AI; duyệt cạnh artwork tháng |")

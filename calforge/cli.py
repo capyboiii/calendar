@@ -183,7 +183,8 @@ def cmd_run(args, cfg):
 
     rows = run(args.keyword, cfg, pick=args.pick.split(",") if args.pick else None, auto_pick=args.auto,
                printify=not args.no_printify, publish=args.publish, grid_preset=args.grid_preset,
-               family=args.family, product=args.product)
+               family=args.family, product=args.product, grid_mode=args.grid_mode, resume=args.resume,
+               mockup_mode=args.mockup_mode)
     _print_status(rows)
 
 
@@ -381,6 +382,12 @@ def main(argv=None):
                    choices=("auto", "bento_planner", "quiet_luxury", "soft_tech", "fresh_monochrome", "organic_capsules", "playful_editorial"))
     p.add_argument("--product", default="wall_grid", choices=("wall_grid", "wall_premade"),
                    help="loại lịch: wall_grid (máy thiết kế grid) hoặc wall_premade (grid in sẵn, không gen grid)")
+    p.add_argument("--resume", action="store_true",
+                   help="làm nốt batch trước của chủ đề này (chỉ các cuốn thiếu/hỏng), không mở batch mới")
+    p.add_argument("--mockup-mode", choices=("template", "ai"),
+                   help='chỉ với --grid-mode ai_page: template = mockup có sẵn; ai = AI gen bối cảnh cho 4 ảnh quảng cáo')
+    p.add_argument("--grid-mode", choices=("ai_page", "background"),
+                   help="Wall Calendar (Blank): ai_page = AI vẽ cả trang lịch; background = AI vẽ nền, code in lịch")
     p.add_argument("--no-printify", action="store_true", help="dừng ở file in + listing")
     p.add_argument("--publish", action="store_true", help="publish sang cửa hàng (mặc định chỉ tạo NHÁP)")
     p.set_defaults(func=cmd_run)

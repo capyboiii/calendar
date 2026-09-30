@@ -3,7 +3,6 @@
  * nhập chủ đề + số cuốn -> bấm Bắt đầu -> xem tiến độ bằng lời -> nhận các cuốn lịch.
  */
 
-const MIN_PER_BOOK = 10;           // ước lượng thời gian mỗi cuốn (phút)
 const STEPS = [                    // các bước người dùng nhìn thấy (khớp log "▶ Bước N/6")
   { key: 1, label: 'Nghĩ ý tưởng', weight: 0.10 },
   { key: 2, label: 'Vẽ tranh (lâu nhất)', weight: 0.55 },
@@ -45,6 +44,16 @@ function bindEvents() {
     setCount(countValue() + Number(b.dataset.step));
   }));
   $('inputCount').addEventListener('input', () => updateHint());
+  // "Trang lịch" (AI vẽ cả trang / AI vẽ nền) chỉ áp dụng cho Wall Calendar (Blank)
+  const syncGridMode = () => {
+    const product = (document.querySelector('input[name="product"]:checked') || {}).value;
+    const mode = (document.querySelector('input[name="grid_mode"]:checked') || {}).value;
+    $('gridModePicker').hidden = product !== 'wall_grid';
+    $('mockupPicker').hidden = product !== 'wall_grid' || mode !== 'ai_page';   // chỉ "AI vẽ cả trang"
+  };
+  document.querySelectorAll('input[name="product"], input[name="grid_mode"]')
+    .forEach((r) => r.addEventListener('change', syncGridMode));
+  syncGridMode();
   $('btnStop').addEventListener('click', stopTask);
   $('btnQueuePause').addEventListener('click', toggleQueuePause);
   $('btnRedo').addEventListener('click', redoPages);
@@ -98,7 +107,7 @@ function setCount(n) {
 
 function updateHint() {
   const n = countValue();
-  $('startHint').textContent = `~${fmtMinutes(n * MIN_PER_BOOK)} (tuỳ số tài khoản còn lượt)`;
+  $('startHint').textContent = '';   // không ước giờ: tuỳ hạn mức tài khoản nên số đoán hay sai
 }
 
 // --------------------------------------------------------------------------
@@ -161,6 +170,12 @@ async function startBatch() {
   }
   const product = (document.querySelector('input[name="product"]:checked') || {}).value || 'wall_grid';
   const params = { keyword, batch_size: countValue(), product };   // phong cách: máy tự chia đều
+  if (product === 'wall_grid') {
+    params.grid_mode = (document.querySelector('input[name="grid_mode"]:checked') || {}).value || 'ai_page';
+    if (params.grid_mode === 'ai_page') {
+      params.mockup_mode = (document.querySelector('input[name="mockup_mode"]:checked') || {}).value || 'template';
+    }
+  }
   const busy = !!S.task || (S.queue.items || []).some((i) => i.status === 'queued' || i.status === 'running');
   try {
     await queueOp('add', { params });
@@ -214,8 +229,10 @@ function renderQueue() {
     if (p.action === 'redo') {
       return `<strong>Vẽ lại ${(p.pages || []).length} trang</strong> <span class="muted">${esc(p.title || '')}</span>`;
     }
+    const mode = p.product === 'wall_grid' ? (p.grid_mode === 'background' ? ' · AI vẽ nền'
+      : ` · AI vẽ cả trang${p.mockup_mode === 'ai' ? ' · AI mockup' : ''}`) : '';
     return `<strong>${esc(p.keyword)}</strong>
-    <span class="muted">${p.batch_size || 1} cuốn · ${PRODUCT_LABEL[p.product] || ''}</span>`;
+    <span class="muted">${p.batch_size || 1} cuốn · ${PRODUCT_LABEL[p.product] || ''}${mode}</span>`;
   };
   const wl = $('queueWaiting');
   wl.innerHTML = '';
@@ -242,14 +259,16 @@ function renderQueue() {
     const li = document.createElement('li');
     const res = i.total ? `${i.ok}/${i.total} cuốn đạt` : '';
     const tag = i.status === 'done' ? '<span class="tag ok">Xong</span>'
-      : i.status === 'stopped' ? '<span class="tag">Đã dừng</span>' : '<span class="tag bad">Lỗi</span>';
+      : i.status === 'partial' ? '<span class="tag part">Xong một phần</span>'
+        : i.status === 'stopped' ? '<span class="tag">Đã dừng</span>' : '<span class="tag bad">Lỗi</span>';
     li.innerHTML = `${tag} ${label(i)}<span class="grow"></span>
       <span class="muted">${esc(res)}${res ? ' · ' : ''}${esc((i.finished_at || '').slice(5, 16))}</span>`;
     if (i.status !== 'done' || (i.total && i.ok < i.total)) {
       const again = i.params.action ? 'Thử lại' : 'Làm nốt phần thiếu';
       li.appendChild(button(again, 'btn-small btn-accent', async () => {
         try {
-          await queueOp('add', { params: i.params });
+          // batch: "Làm nốt phần thiếu" = mở lại đúng batch đó (không làm thêm N cuốn mới)
+          await queueOp('add', { params: i.params.action ? i.params : { ...i.params, resume: true } });
           toast('Đã xếp lại vào hàng đợi.', 'info');
         } catch (err) {
           toast(err.message, 'error');
@@ -348,52 +367,46 @@ async function stopTask() {
   }
 }
 
-// Đọc log thành "đang ở cuốn mấy, bước nào" bằng lời dễ hiểu.
+// Đọc log thành tiến độ dễ hiểu. Nhiều cuốn chạy SONG SONG: đếm cuốn đã xong / đang làm / lỗi theo các mốc
+// "◆ CUỐN XONG|LỖI" và "===== Sản xuất"; bước hiện tại = bước xa nhất đang có cuốn làm.
 function readProgress(logs, target) {
-  let book = 0, bookName = '', step = 1, sweep = false, stepText = '';
+  const started = new Set(), done = new Set(), failed = new Set();
+  let step = 1, sweep = false, stepText = '', ideating = false;
   logs.forEach((line) => {
     const prod = line.match(/===== Sản xuất: (.+?) =====/);
-    if (prod) {
-      if (prod[1] !== bookName) book += 1;
-      bookName = prod[1];
-      step = 2;
-      stepText = '';
-      return;
-    }
-    if (/▶ (Lượt lên ý|P1|P1b|P2|Bước 1\/6)/.test(line)) { step = 1; stepText = ''; }
+    if (prod) { started.add(prod[1]); failed.delete(prod[1]); step = Math.max(step, 2); return; }
+    const end = line.match(/◆ CUỐN (XONG|LỖI): (.+)$/);
+    if (end) { (end[1] === 'XONG' ? done : failed).add(end[2].trim()); return; }
+    if (/▶ (Lượt lên ý|P1|P1b|P2|Bước 1\/6)/.test(line)) ideating = true;
+    if (/Batch xong/.test(line)) ideating = false;
     const m = line.match(/▶ Bước (\d)(?:\/6|b| \()/);
-    if (m) {
-      step = /Bước 4b/.test(line) ? 5 : Number(m[1]);
-      stepText = '';
-    }
-    if (/▶ Vòng vét/.test(line)) { sweep = true; stepText = 'Đang chờ tài khoản ChatGPT hồi lượt rồi làm lại cuốn bị dở'; }
-    if (/hết lượt|limit/i.test(line) && /chuyển tài khoản/.test(line)) stepText = 'Một tài khoản hết lượt, đang đổi sang tài khoản khác';
+    if (m) step = Math.max(step, /Bước 4b/.test(line) ? 5 : Number(m[1]));
+    if (/\[hậu kỳ/.test(line)) step = Math.max(step, 4);
+    if (/▶ Vòng vét/.test(line)) { sweep = true; stepText = 'Đang chờ tài khoản hồi lượt rồi làm lại cuốn bị dở'; }
     const pause = line.match(/⏸ Tất cả tài khoản hết lượt .*thử lại lúc (\d\d:\d\d)/);
-    if (pause) stepText = `Cả 5 tài khoản ChatGPT tạm hết lượt - máy tự chờ, thử lại lúc ${pause[1]}`;
+    if (pause) stepText = `Tài khoản ChatGPT tạm hết lượt - máy tự chờ, thử lại lúc ${pause[1]}`;
     if (/▶ Hết giờ chờ/.test(line)) stepText = '';
   });
-  const done = STEPS.filter((s) => s.key < step).reduce((a, s) => a + s.weight, 0);
-  const current = Math.max(0, book - 1) + (book ? done : done * 0.5);
-  const pct = sweep ? 97 : Math.min(97, Math.round((current / Math.max(1, target)) * 100));
-  return { book: Math.max(book, 1), bookName, step, pct, sweep, stepText };
+  const running = [...started].filter((n) => !done.has(n) && !failed.has(n)).length;
+  const pct = sweep ? 97 : Math.min(97, Math.round(((done.size + failed.size + running * 0.4) / Math.max(1, target)) * 100));
+  return { done: done.size, failed: failed.size, running, ideating, step, pct, sweep, stepText };
 }
 
 function renderProgress() {
   if (!S.task) return;
   const target = Number(S.task.params.batch_size) || 1;
   const p = readProgress(S.logs, target);
-  $('runSub').textContent = p.sweep
-    ? 'Đang làm lại các cuốn bị dở'
-    : `Cuốn ${Math.min(p.book, target)}/${target}` + (p.bookName ? ` · ${prettyName(p.bookName)}` : '')
-      + (p.stepText ? ` · ${p.stepText}` : '');
+  const parts = [`Xong ${p.done}/${target} cuốn`];
+  if (p.running) parts.push(`đang làm ${p.running} cuốn`);
+  if (p.ideating && p.done + p.failed + p.running < target) parts.push('đang nghĩ ý cuốn tiếp');
+  if (p.failed) parts.push(`${p.failed} cuốn lỗi`);
+  if (p.stepText) parts.push(p.stepText);
+  $('runSub').textContent = p.sweep ? 'Đang làm lại các cuốn bị dở' : parts.join(' · ');
   $('runSteps').innerHTML = STEPS.map((s) => {
     const cls = s.key < p.step ? 'done' : s.key === p.step ? 'now' : '';
     return `<li class="${cls}"><span class="n">${s.key < p.step ? '✓' : s.key}</span>${esc(s.label)}</li>`;
   }).join('');
   $('runBar').style.width = `${p.pct}%`;
-  const elapsed = (Date.now() / 1000 - (S.task.start_time || Date.now() / 1000)) / 60;
-  const left = Math.max(1, target * MIN_PER_BOOK - elapsed);
-  $('runTime').textContent = `${fmtMinutes(elapsed)} · còn ~${fmtMinutes(left)}`;
   const log = $('runLog');
   log.textContent = S.logs.slice(-400).join('\n');
   if ($('logBox').open) log.scrollTop = log.scrollHeight;
@@ -589,16 +602,19 @@ async function loadBookPages(c) {
   }
   if (BOOK_PAGES.book !== c) return;                      // người dùng đã mở cuốn khác
   const files = (data.files || {}).art_raw || [];
+  const ver = (data.files || {}).art_raw_v || {};              // ảnh vẽ lại cùng tên: URL mới, không hiện ảnh cũ
   const ids = ['cover', ...Array.from({ length: 12 }, (_, i) => `m${String(i + 1).padStart(2, '0')}`)];
-  if (c.product !== 'wall_premade') ids.push('grid');
+  const aiPage = ((data.concept || {}).style || {}).grid_mode === 'ai_page';
+  if (aiPage) ids.push(...Array.from({ length: 12 }, (_, i) => `g${String(i + 1).padStart(2, '0')}`));
+  else if (c.product !== 'wall_premade') ids.push('grid');
   box.innerHTML = '';
   ids.forEach((id) => {
     const f = files.find((n) => n.startsWith(`${id}.`) && /\.(png|jpe?g|webp)$/i.test(n));
-    const label = PAGE_NAMES[id] || `Tháng ${Number(id.slice(1))}`;
+    const label = PAGE_NAMES[id] || (id[0] === 'g' ? `Lịch tháng ${Number(id.slice(1))}` : `Tranh tháng ${Number(id.slice(1))}`);
     const el = document.createElement('label');
     el.className = 'page-item';
     el.innerHTML = `<input type="checkbox">
-      ${f ? `<img loading="lazy" src="${thumbUrl(`${c.path}/_he_thong/anh_ai/${f}`, 240)}" alt="">`
+      ${f ? `<img loading="lazy" src="${thumbUrl(`${c.path}/_he_thong/anh_ai/${f}?v=${ver[f] || ''}`, 240)}" alt="">`
     : '<div class="miss">Chưa có</div>'}<span>${esc(label)}</span>`;
     el.querySelector('input').addEventListener('change', (e) => {
       if (e.target.checked) BOOK_PAGES.picked.add(id); else BOOK_PAGES.picked.delete(id);
@@ -607,7 +623,7 @@ async function loadBookPages(c) {
     });
     if (f) {
       el.querySelector('img').addEventListener('dblclick', () => {
-        $('lightboxImg').src = thumbUrl(`${c.path}/_he_thong/anh_ai/${f}`, 1600);
+        $('lightboxImg').src = thumbUrl(`${c.path}/_he_thong/anh_ai/${f}?v=${ver[f] || ''}`, 1600);
         $('lightbox').hidden = false;
       });
     }
@@ -955,12 +971,6 @@ function fileUrl(path) {
   return `/api/file?path=${encodeURIComponent(path)}`;
 }
 
-function fmtMinutes(min) {
-  const m = Math.round(min);
-  if (m < 60) return `${Math.max(1, m)} phút`;
-  const h = Math.floor(m / 60);
-  return `${h} giờ${m % 60 ? ` ${m % 60} phút` : ''}`;
-}
 
 function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));

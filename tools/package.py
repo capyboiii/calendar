@@ -2,8 +2,8 @@
 
     python tools/package.py   ->  dist/CalForge_Studio_Setup.exe
 
-Người dùng chỉ cần: bấm đúp Setup.exe -> Next -> Install -> app tự mở. KHÔNG cần mạng, không cài Python, không
-cửa sổ đen: bộ cài chứa sẵn Python (bản nhúng), mọi thư viện, font và Kinh Thánh KJV. Cần sẵn Google Chrome
+Người dùng chỉ cần: bấm đúp Setup.exe -> Next -> Install -> app tự mở. Không cài Python, không cửa sổ đen
+(máy có card NVIDIA thì cần mạng để tải thêm bộ làm nét ảnh Real-ESRGAN ~2.5 GB lúc cài, xem calforge/gpu_setup.py): bộ cài chứa sẵn Python (bản nhúng), mọi thư viện, font và Kinh Thánh KJV. Cần sẵn Google Chrome
 (app tự nhắc tải nếu máy chưa có). Cài vào %LOCALAPPDATA%\\CalForge Studio (không cần quyền admin); cài bản mới
 đè lên giữ nguyên lịch đã làm, tài khoản, khoá R2.
 
@@ -61,11 +61,13 @@ def _python(app: Path) -> None:
     with zipfile.ZipFile(embed) as z:
         z.extractall(pydir)
     # thư mục app (..) để chạy được "-m calforge", site-packages cho thư viện
-    (pydir / "python312._pth").write_text("python312.zip\n.\nLib\\site-packages\n..\nimport site\n", encoding="ascii")
+    # ..\gpu: torch + spandrel cho card NVIDIA, tải lúc cài (calforge/gpu_setup.py); nằm ngoài python\ nên cài đè không mất
+    (pydir / "python312._pth").write_text("python312.zip\n.\nLib\\site-packages\n..\\gpu\n..\nimport site\n",
+                                         encoding="ascii")
     print("Cài thư viện vào Python nhúng...")
     subprocess.run([sys.executable, "-m", "pip", "install", "--disable-pip-version-check", "--no-warn-script-location",
                     "--only-binary=:all:", "--target", str(pydir / "Lib" / "site-packages"),
-                    "-r", str(ROOT / "requirements.txt")], check=True)
+                    "-r", str(ROOT / "requirements.txt"), "pip"], check=True)   # pip: để gpu_setup tải torch
     for cache in pydir.rglob("__pycache__"):
         shutil.rmtree(cache, ignore_errors=True)
 
@@ -113,13 +115,21 @@ Type: filesandordirs; Name: "{app}\python"
 Type: filesandordirs; Name: "{app}\calforge"
 
 [Files]
-Source: "%(app)s\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "%(app)s\*"; DestDir: "{app}"; Excludes: "\calforge.json"; Flags: ignoreversion recursesubdirs createallsubdirs
+; khoá R2 kèm sẵn (chỉ khi đóng gói bằng --with-r2): chỉ chép nếu máy chưa có calforge.json, không đè khoá người dùng
+Source: "%(app)s\calforge.json"; DestDir: "{app}"; Flags: onlyifdoesntexist uninsneveruninstall skipifsourcedoesntexist
 
 [Icons]
 Name: "{userdesktop}\CalForge Studio"; Filename: "{app}\python\pythonw.exe"; Parameters: "-m calforge.app"; WorkingDir: "{app}"; IconFilename: "{app}\calforge.ico"
 Name: "{userprograms}\CalForge Studio"; Filename: "{app}\python\pythonw.exe"; Parameters: "-m calforge.app"; WorkingDir: "{app}"; IconFilename: "{app}\calforge.ico"
 
+[UninstallDelete]
+Type: filesandordirs; Name: "{app}\gpu"
+Type: filesandordirs; Name: "{app}\models"
+
 [Run]
+; máy có card NVIDIA: tải bộ làm nét ảnh Real-ESRGAN (~2.5 GB, chỉ lần đầu); máy khác thoát ngay
+Filename: "{app}\python\python.exe"; Parameters: "-m calforge.gpu_setup"; WorkingDir: "{app}"; StatusMsg: "Checking NVIDIA graphics card (image sharpening)..."; Flags: waituntilterminated skipifsilent
 Filename: "{app}\python\pythonw.exe"; Parameters: "-m calforge.app"; WorkingDir: "{app}"; Description: "Open CalForge Studio"; Flags: postinstall nowait skipifsilent
 """
 
@@ -134,6 +144,23 @@ def _iscc() -> Path:
         if p.exists():
             return p
     sys.exit("Chưa có Inno Setup 6: winget install JRSoftware.InnoSetup")
+
+
+def _bundle_r2(app: Path) -> None:
+    """python tools/package.py --with-r2: kèm KHOÁ R2 của máy này (chỉ mục "r2" trong calforge.json, không gì khác)
+    để người nhận đẩy R2 + xuất CSV được ngay. Ai có bộ cài đều đọc được khoá này - chỉ gửi người tin cậy, nên dùng
+    API token R2 giới hạn đúng 1 bucket."""
+    import json
+    try:
+        r2 = json.loads((ROOT / "calforge.json").read_text(encoding="utf-8")).get("r2") or {}
+    except (OSError, ValueError):
+        r2 = {}
+    need = ("account_id", "access_key_id", "secret_access_key", "bucket", "public_url")
+    missing = [k for k in need if not r2.get(k)]
+    if missing:
+        sys.exit(f"--with-r2: calforge.json chưa có đủ khoá R2 ({', '.join(missing)})")
+    (app / "calforge.json").write_text(json.dumps({"r2": r2}, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"Kèm khoá R2 (bucket {r2['bucket']}) - bộ cài này chứa khoá bí mật, chỉ gửi người tin cậy")
 
 
 def _guide_pdf() -> None:
@@ -163,6 +190,8 @@ def main() -> Path:
     print(f"{len(names)} file của tool")
     _python(app)
     _icon(app)
+    if "--with-r2" in sys.argv:
+        _bundle_r2(app)
     iss = DIST / "setup.iss"
     iss.write_text(ISS % {"version": time.strftime("%Y.%m.%d"), "out": DIST, "app": app}, encoding="utf-8-sig")
     subprocess.run([str(iscc), "/Q", str(iss)], check=True)

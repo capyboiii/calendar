@@ -68,9 +68,12 @@ def usage(projects_root: Path) -> dict[str, int]:
     return counts
 
 
-def next_tone(projects_root: Path) -> str:
-    """Tông ít cuốn dùng nhất (hoà thì theo thứ tự BASE_TONES)."""
+def next_tone(projects_root: Path, extra: list[str] | tuple = ()) -> str:
+    """Tông ít cuốn dùng nhất (hoà thì theo thứ tự BASE_TONES). extra = tông đã giao cho cuốn đang viết dở."""
     counts = usage(projects_root)
+    for tone in extra:
+        if tone in counts:
+            counts[tone] += 1
     return min(counts, key=lambda k: counts[k])
 
 

@@ -225,7 +225,7 @@ def _shop_books() -> list[dict]:
         previews = sorted(layout.listing(b).glob("*.jpg"))
         out.append({
             "path": _rel(b), "title": concept.get("title") or b.name, "keyword": b.parent.name,
-            "product": products.product_id(concept), "cover": _rel(previews[0]) if previews else "",
+            "product": products.product_id(concept), "cover": _vrel(previews[0]) if previews else "",
             "pushed_at": st.get("pushed_at", ""), "exported_at": st.get("exported_at", ""),
             "exported_csv": st.get("exported_csv", ""),
             "done_at": time.strftime("%Y-%m-%d %H:%M", time.localtime(layout.status_file(b).stat().st_mtime)),
@@ -274,6 +274,12 @@ def run_args(params: dict) -> tuple[list[str], str]:
         cmd_args += ["--family", params["family"]]
     if params.get("product") in products.PRODUCTS:
         cmd_args += ["--product", params["product"]]
+    if params.get("resume"):
+        cmd_args += ["--resume"]
+    if params.get("grid_mode") in products.GRID_MODES and params.get("product", products.DEFAULT) == "wall_grid":
+        cmd_args += ["--grid-mode", params["grid_mode"]]
+        if params["grid_mode"] == "ai_page" and params.get("mockup_mode") in products.MOCKUP_MODES:
+            cmd_args += ["--mockup-mode", params["mockup_mode"]]
     desc = f"Chạy trọn gói {batch} cuốn cho keyword: {keyword}" if batch > 1 else f"Chạy trọn gói cho keyword: {keyword}"
     return cmd_args, desc
 
@@ -289,8 +295,9 @@ def _batch_result(params: dict) -> tuple[int, int]:
     from ..ideation.pipeline import slugify
     cfg = config.load()
     kdir = products.root(cfg["projects_dir"], params.get("product") or products.DEFAULT) / slugify(params["keyword"])
-    rows = (_read_batch(kdir) or {}).get("report") or []
-    return sum(1 for r in rows if r.get("ok")), len(rows)
+    b = _read_batch(kdir) or {}
+    rows = b.get("report") or []
+    return sum(1 for r in rows if r.get("ok")), int(b.get("target") or len(rows))
 
 
 _QUEUE = None
@@ -751,6 +758,8 @@ class StudioHandler(SimpleHTTPRequestHandler):
 
         files = {
             "art_raw": _list_files(layout.raw(target)),
+            "art_raw_v": {f.name: f.stat().st_mtime_ns for f in layout.raw(target).iterdir() if f.is_file()}
+            if layout.raw(target).is_dir() else {},
             "art_final": _list_files(layout.final(target)),
             "render_printify": _list_files(layout.print_dir(target)),
             "render_printify_14x11_5": _list_files(layout.print_dir(target, "printify_wall_14x11_5")),
@@ -807,6 +816,7 @@ class StudioHandler(SimpleHTTPRequestHandler):
 
     def _api_thumb(self, rel_path: str, width: int):
         """Ảnh thu nhỏ (JPEG) cho lưới kết quả; lưu tạm theo mtime để lần sau trả ngay."""
+        rel_path = rel_path.split("?v=")[0]               # "?v=<mtime>": chỉ để trình duyệt không dùng ảnh cũ
         target = (ROOT / rel_path.lstrip("/\\")).resolve()
         if not str(target).startswith(str(ROOT.resolve())) or not target.is_file():
             return self._send_json({"error": "File not found or forbidden"}, status=HTTPStatus.NOT_FOUND)
@@ -870,6 +880,15 @@ def _rel(p: Path) -> str:
     return str(p.relative_to(ROOT)).replace("\\", "/")
 
 
+def _vrel(p: Path) -> str:
+    """Đường dẫn ảnh kèm phiên bản (thời điểm sửa): ảnh bị ghi đè cùng tên (vd ảnh quảng cáo AI thay mockup code)
+    có URL mới, trình duyệt không hiện ảnh cũ trong bộ nhớ."""
+    try:
+        return f"{_rel(p)}?v={p.stat().st_mtime_ns}"
+    except OSError:
+        return _rel(p)
+
+
 def _book_outputs(c_dir: Path) -> dict:
     """Những thứ người bán cần thấy: ảnh bìa, 5 ảnh preview, PDF in tại nhà, listing."""
     previews = sorted(layout.listing(c_dir).glob("*.jpg")) if layout.listing(c_dir).exists() else []
@@ -885,7 +904,7 @@ def _book_outputs(c_dir: Path) -> dict:
         listing = json.loads(layout.listing_file(c_dir).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         pass
-    return {"cover": _rel(cover) if cover.exists() else "", "previews": [_rel(p) for p in previews],
+    return {"cover": _vrel(cover) if cover.exists() else "", "previews": [_vrel(p) for p in previews],
             "pdfs": pdfs, "listing": listing}
 
 

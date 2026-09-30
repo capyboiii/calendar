@@ -181,7 +181,8 @@ def render_concept(concept_dir: Path, months: list[int] | None = None, placehold
     ai_grid = "grid" in fmt["pages"] and products.ai_grid(concept)
     premade = premade_grids(fmt) if not ai_grid else {}
     copies: list[tuple[Path, Path]] = []
-    art_matched = ai_grid and resolve_grid_preset(concept) == "art_matched"
+    ai_page = ai_grid and products.ai_page(concept)          # AI vẽ nguyên 12 trang lịch
+    art_matched = ai_grid and not ai_page and resolve_grid_preset(concept) == "art_matched"
     shared_grid = fitted_art("grid", crop=False) if art_matched else None
     if art_matched and shared_grid is None:
         # Project cũ: lấy nền tháng đầu tiên đang có làm master để vẫn render được.
@@ -207,7 +208,14 @@ def render_concept(concept_dir: Path, months: list[int] | None = None, placehold
             verse = kjv.lookup(m["content"]["value"])
             if not verse:
                 issues.append(f"[{tag}] không tra được lời câu {m['content']['value']} - chỉ in mã câu")
-        if ai_grid:
+        if ai_page:
+            g = fitted_art(f"g{mo:02d}")                 # cắt vừa tỉ lệ khổ (AI vẽ 4:3, lịch nằm trong x 8–92%)
+            if g is None:
+                issues.append(f"[g{mo:02d}] chưa có trang lịch AI")
+            else:
+                copies.append((g, out / f"{tag}_grid.png"))
+                pngs.append((out / f"{tag}_grid.png", "premade_grid"))
+        elif ai_grid:
             pages.append(grid_page(fmt, concept, mo, f"{tag} grid", verse, shared_grid))
             pngs.append((out / f"{tag}_grid.png", "grid"))
         elif mo in premade:
@@ -262,7 +270,8 @@ def render_concept(concept_dir: Path, months: list[int] | None = None, placehold
         with Image.open(src) as im:
             im = im.convert("RGB")
             if im.size != tuple(fmt["size_px"]):
-                warnings.append(f"{src.name}: {im.width}x{im.height} khác cỡ trang {fmt['size_px']} - đã co giãn")
+                if not ai_page:
+                    warnings.append(f"{src.name}: {im.width}x{im.height} khác cỡ trang {fmt['size_px']} - đã co giãn")
                 im = im.resize(tuple(fmt["size_px"]), Image.Resampling.LANCZOS)
             im.save(dst, dpi=(fmt["dpi"], fmt["dpi"]))
     if proofs:
@@ -283,6 +292,8 @@ def render_concept(concept_dir: Path, months: list[int] | None = None, placehold
     lines += ["## Chọn grid", f"- Chế độ: {selection['mode']}",
               f"- Đã chọn: {selection['selected_label']}",
               *[f"- Lý do: {r}" for r in selection.get("reasons", [])],
+              "- AI vẽ nguyên 12 trang lịch; OCR đã soát thứ tự thứ, đủ ngày, đúng cột và đúng tuần từng trang."
+              if ai_page else
               "- AI thiết kế một nền grid dùng chung cho 12 tháng; ô, thứ, ngày và nội dung do code dựng chính xác."
               if art_matched else "- Grid thủ công chỉ dùng typography và shape." if ai_grid else
               f"- Lịch grid in sẵn: không dựng trang grid; {'đã chèn 12 trang grid thiết kế sẵn' if premade else 'chưa có trang grid (14 trang)'}.",

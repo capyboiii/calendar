@@ -42,6 +42,14 @@ def build_jobs(concept: dict, with_reference: bool = True) -> list[dict]:
                      "expect": {"aspect": "3:2", "alpha": False}})
     from .. import products
 
+    # AI vẽ nguyên 12 trang lịch (đính dải màu của ảnh neo như 12 tranh tháng).
+    if products.ai_page(concept):
+        for m in concept["months"]:
+            jobs.append({"id": f"g{m['month']:02d}", "kind": "grid_page", "month": m["month"],
+                         "prompt": prompts.grid_page_prompt(concept, m, with_reference),
+                         "attach": [SWATCH] if with_reference else [],
+                         "expect": {"aspect": "4:3", "alpha": False}})
+        return jobs
     # Lịch grid in sẵn: không gen nền grid (trang grid do người dùng thiết kế).
     if products.ai_grid(concept) and resolve_grid_preset(concept) == "art_matched":
         jobs.append({"id": "grid", "kind": "grid_background",
@@ -96,8 +104,8 @@ def export_csv(concept_dir: Path, only_pending: bool = True) -> Path:
         w = csv.writer(f)
         w.writerow(["Topic", "Style", "Prompt"])
         for j in jobs:
-            if j["kind"] == "grid_background":
-                continue  # CSV không đính được mXX: không được sinh nền grid lệch artwork.
+            if j["kind"] in ("grid_background", "grid_page"):
+                continue  # CSV không đính được ảnh, không soát được OCR: chỉ chạy qua driver.
             if only_pending and job_done(concept_dir, j["id"]):
                 continue
             topic, style = csv_keys(concept_dir, j["id"])
@@ -112,7 +120,7 @@ def import_from_automation(concept_dir: Path, automation_dir: Path) -> list[str]
     raw.mkdir(parents=True, exist_ok=True)
     got = []
     for j in build_jobs(concept, with_reference=False):
-        if j["kind"] == "grid_background":
+        if j["kind"] in ("grid_background", "grid_page"):
             continue
         if job_done(concept_dir, j["id"]):
             continue

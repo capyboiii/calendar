@@ -101,6 +101,8 @@ class _WebChat:
         print(f"   [chat] gửi yêu cầu ({label})...", flush=True)
         before = self._state()
         box = self._find(SEL_PROMPT)
+        from .pool import human_pause
+        human_pause()                                   # nhịp người thật trước khi gõ + gửi
         box.click()
         box.evaluate(INSERT_JS, prompt)
         self.page.wait_for_timeout(400)
@@ -190,34 +192,51 @@ class _RotatingChat:
         self.ctx = None
         self.chat: _WebChat | None = None
         self.profile = None
+        self.failed: set[str] = set()                        # không mở được trong phiên này
 
     def _open_next(self) -> None:
+        """Mượn tài khoản kế tiếp qua bộ điều phối (không đụng tài khoản đang vẽ / đang nghỉ chat) và mở chat.
+        Mọi tài khoản đang bận vẽ thì CHỜ (luồng vẽ sẽ nhường chỗ sau ảnh đang vẽ); chỉ báo NoAccountLeft khi
+        mọi tài khoản đều hết lượt chat hoặc không mở được."""
+        from .pool import CHAT, get_pool
         self.close()
-        while self.order:
-            name = self.order.pop(0)
-            udir = self.backend.profiles_dir / name
-            try:
-                from .browser import launch_options
-                self.ctx = self.pw.chromium.launch_persistent_context(
-                    user_data_dir=str(udir), channel="chrome", viewport={"width": 1400, "height": 950},
-                    **launch_options(self.backend.headless))
-                page = self.ctx.pages[0] if self.ctx.pages else self.ctx.new_page()
-                if self.backend.headless in ("hidden", None):
-                    from .browser import hide_offscreen_from_taskbar
-                    hide_offscreen_from_taskbar()            # Chrome ngầm: không hiện biểu tượng dưới thanh tác vụ
-                page.goto(URL, wait_until="domcontentloaded", timeout=90_000)
-                self.chat = _WebChat(page, self.backend.timeout_s)
-                from .limits import RateWatch
-                self.chat.rate = RateWatch(page)            # 429/503 từ máy chủ ChatGPT -> hết lượt
-                self.chat._find(SEL_PROMPT, 60_000)
-                self.profile = name
-                self.backend.mark_used(name)
-                print(f"[chat] dùng tài khoản {name}")
-                return
-            except Exception as e:  # noqa: BLE001 - profile đang mở ở nơi khác / chưa đăng nhập
-                print(f"[chat] bỏ qua {name}: {str(e)[:120]}")
-                self.close()
-        raise NoAccountLeft("Không còn tài khoản ChatGPT nào dùng được cho bước chat (hết lượt)")
+        pool = get_pool()
+        while True:
+            for name in list(self.order):
+                if name in self.failed or pool.acquire(CHAT, only=name) is None:
+                    continue
+                self.order.remove(name)
+                self.order.append(name)                     # lần sau bắt đầu từ tài khoản khác
+                udir = self.backend.profiles_dir / name
+                try:
+                    from .browser import launch_options
+                    with pool.launch_gate():
+                        self.ctx = self.pw.chromium.launch_persistent_context(
+                            user_data_dir=str(udir), channel="chrome", viewport={"width": 1400, "height": 950},
+                            **launch_options(self.backend.headless))
+                    self.profile = name
+                    page = self.ctx.pages[0] if self.ctx.pages else self.ctx.new_page()
+                    if self.backend.headless in ("hidden", None):
+                        from .browser import hide_offscreen_from_taskbar
+                        hide_offscreen_from_taskbar()        # Chrome ngầm: không hiện biểu tượng dưới thanh tác vụ
+                    from ..imagegen.driver import open_home
+                    open_home(page, URL)                  # mạng chập / chuyển hướng: chờ + thử lại
+                    self.chat = _WebChat(page, self.backend.timeout_s)
+                    from .limits import RateWatch
+                    self.chat.rate = RateWatch(page)        # 429/503 từ máy chủ ChatGPT -> hết lượt
+                    self.chat._find(SEL_PROMPT, 60_000)
+                    self.backend.mark_used(name)
+                    print(f"[chat] dùng tài khoản {name}")
+                    return
+                except Exception as e:  # noqa: BLE001 - chưa đăng nhập / profile hỏng: không thử lại trong phiên
+                    print(f"[chat] bỏ qua {name}: {str(e)[:120]}")
+                    self.failed.add(name)
+                    pool.rest(name, CHAT, 600, f"không mở được Chrome: {e}")
+                    self.close()
+            usable = [n for n in self.order if n not in self.failed]
+            if not usable or all(pool._resting(n, CHAT) for n in usable):
+                raise NoAccountLeft("Không còn tài khoản ChatGPT nào dùng được cho bước chat (hết lượt)")
+            pool.wait_change(5)                             # tài khoản đang bận vẽ: chờ luồng vẽ nhường
 
     def ask(self, prompt: str, label: str) -> str:
         while True:
@@ -227,6 +246,9 @@ class _RotatingChat:
                 return self.chat.ask(prompt, label)
             except QuotaExceeded as e:
                 print(f"[chat] {self.profile} hết lượt ({str(e)[:80]}) - chuyển tài khoản")
+                from .pool import CHAT, get_pool
+                pool = get_pool()
+                pool.rest(self.profile, CHAT, pool.rest_s, str(e))
                 self.close()
             except SendFailed as e:
                 print(f"[chat] {self.profile} không gửi được tin nhắn ({str(e)[:80]}) - chuyển tài khoản")
@@ -238,7 +260,10 @@ class _RotatingChat:
                 self.ctx.close()
             except Exception:  # noqa: BLE001
                 pass
-        self.ctx = self.chat = None
+        if self.profile is not None:
+            from .pool import get_pool
+            get_pool().release(self.profile)
+        self.ctx = self.chat = self.profile = None
 
 
 class ChatGPTWebBackend:
@@ -279,7 +304,8 @@ class ChatGPTWebBackend:
     def session(self, workdir: Path):
         from playwright.sync_api import sync_playwright
 
-        with sync_playwright() as pw:
+        from .pool import get_pool
+        with sync_playwright() as pw, get_pool().reserve_chat(1):   # giữ 1 chỗ chat khi đang lên ý tưởng
             chat = _RotatingChat(self, pw)
             try:
                 yield chat

@@ -7,6 +7,8 @@ Không có GPU / spandrel / trọng số thì lùi về Lanczos + unsharp và b�
 """
 from __future__ import annotations
 
+import threading
+
 import warnings
 from functools import lru_cache
 from pathlib import Path
@@ -38,6 +40,9 @@ def engine() -> str:
     return "Real-ESRGAN x4plus (GPU)" if _model() is not None else "Lanczos (dự phòng)"
 
 
+_GPU_LOCK = threading.Lock()
+
+
 def _esrgan_x4(img: Image.Image, tile: int = 384, pad: int = 16) -> Image.Image:
     """tile=384 là mức nhanh nhất trên 6GB VRAM: ô to hơn tràn sang RAM chung, chậm hơn nhiều."""
     import torch
@@ -48,7 +53,7 @@ def _esrgan_x4(img: Image.Image, tile: int = 384, pad: int = 16) -> Image.Image:
     # Ghi thẳng từng ô ra uint8 (cùng phép làm tròn như trước) thay vì giữ cả ảnh 6144x4096 dạng float32.
     out = np.empty((h * 4, w * 4, 3), dtype=np.uint8)
     t = torch.from_numpy(arr).permute(2, 0, 1).unsqueeze(0)
-    with torch.no_grad():
+    with _GPU_LOCK, torch.no_grad():          # nhiều cuốn song song: GPU 6GB chỉ chạy 1 ảnh một lúc
         for y in range(0, h, tile):
             for x in range(0, w, tile):
                 y0, x0 = max(0, y - pad), max(0, x - pad)

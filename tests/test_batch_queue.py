@@ -40,7 +40,7 @@ class BatchQueueTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.file = Path(self.tmp.name) / ".hang_doi.json"
         self.tasks = FakeTasks()
-        self.q = BatchQueue(self.tasks, self.file, args, lambda p: (2, 3))
+        self.q = BatchQueue(self.tasks, self.file, args, lambda p: (2, 2))
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -103,3 +103,39 @@ class BatchQueueTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class QueueResultTest(unittest.TestCase):
+    def _run(self, ok, total, status="success"):
+        with tempfile.TemporaryDirectory() as tmp:
+            tasks = FakeTasks()
+            q = BatchQueue(tasks, Path(tmp) / "q.json", args, lambda p: (ok, total))
+            q.add({"keyword": "a"})
+            tasks.tasks["t1"].status = status
+            q.tick()
+            return q.snapshot()["items"][0]["status"]
+
+    def test_status_follows_books_made(self):
+        self.assertEqual(self._run(3, 3), "done")
+        self.assertEqual(self._run(1, 3), "partial")
+        self.assertEqual(self._run(0, 1), "failed")               # chạy hết mà 0 cuốn đạt: không được ghi "Xong"
+        self.assertEqual(self._run(0, 0, "failed"), "failed")
+
+
+class SameBookTest(unittest.TestCase):
+    def test_repeat_presses_merge_and_different_books_queue_separately(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tasks = FakeTasks()
+            tasks.tasks["x"] = FakeTask("run")                       # một batch đang chạy: các việc sau phải chờ
+            q = BatchQueue(tasks, Path(tmp) / "q.json", lambda p: (["redo"], "d"), lambda p: (1, 1))
+            q.add({"action": "redo", "concept": "A", "pages": ["m03"]})
+            q.add({"action": "redo", "concept": "A", "pages": ["m03", "m07"]})   # bấm lại cùng cuốn
+            q.add({"action": "redo", "concept": "B", "pages": ["cover"]})        # cuốn khác
+            q.add({"action": "finish", "concept": "A"})
+            q.add({"action": "finish", "concept": "A", "redo_previews": True})
+            items = q.snapshot()["items"]
+            self.assertEqual([(i["params"]["action"], i["params"]["concept"]) for i in items],
+                             [("redo", "A"), ("redo", "B"), ("finish", "A")])
+            self.assertEqual(items[0]["params"]["pages"], ["m03", "m07"])    # gộp trang, không vẽ trùng
+            self.assertTrue(items[2]["params"]["redo_previews"])
+            self.assertEqual(tasks.started, [])                      # chưa chạy gì khi batch khác đang chạy
