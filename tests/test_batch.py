@@ -166,6 +166,25 @@ class BatchTest(unittest.TestCase):
         self.assertEqual(len(calls), 2)
         self.assertTrue(any(l.startswith("⏸ Tất cả tài khoản hết lượt") for l in logs))
 
+    def test_ip_refusal_discards_book_and_is_terminal(self):
+        def gen(*a, **kw):
+            return {"missing": ["m03"],
+                    "failed": {"m03": "IP/TM_REJECTED: copyrighted third-party character"},
+                    "drift_flags": []}
+
+        c = cfg(self.root)
+        c.update(imagegen={}, chatgpt_automation_dir=str(self.root))
+        d = self.root / "Wall Calendar (Blank)" / "kw" / "b1"
+        layout.ensure_system(d)
+        layout.concept_file(d).write_text("{}", encoding="utf-8")
+        with mock.patch.object(pipeline, "generate_concept", gen), \
+                mock.patch.object(pipeline.plan, "write_plan", lambda d: None), \
+                mock.patch.object(pipeline, "upscale_concept", lambda *a, **k: []):
+            result = pipeline.produce_images(d, c, on_event=lambda *_: None)
+        self.assertEqual(result["stage"], "ip_rejected")
+        self.assertTrue(result["terminal"])
+        self.assertIn("Bỏ cuốn", result["reason"])
+
     def test_ideation_waits_when_chat_quota_is_gone(self):
         from calforge.llm.chatgpt_web import NoAccountLeft
         real = self.idea

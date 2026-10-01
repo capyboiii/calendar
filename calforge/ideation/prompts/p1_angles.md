@@ -17,8 +17,8 @@ Propose the {{n}} strongest calendar concept(s) ("angles") for this keyword — 
 
 RULES
 1. Buyer-first: name a specific buyer and why they'd hang it or gift it.
-2. Design subjects that can remain visually consistent across 12 images. Choose people, facial visibility, viewpoints and subject details to suit the idea.
-3. Be honest in ai_feasibility: score only the visual feasibility of producing 12 consistent images.
+2. Deliver the central subject buyers came for: When the subject is a person, performer, artist or character, depict them visibly with charismatic presence, expressive facial features, authentic styling, and dynamic viewpoints (e.g. portraits, stage charisma, candid moments, 3/4 angles, side profiles, mid-action expressions). Do NOT artificially avoid faces, hide people behind objects, or reduce human subjects to faceless hands, backs, or still-life props unless the concept is explicitly an object-only series.
+3. Visual consistency & feasibility: For human subjects, consistency across 12 images means a cohesive aesthetic, styling, wardrobe, and persona—not an identical clone. In ai_feasibility, well-defined portrait, performer and character concepts have high feasibility (score 4-5); do NOT downgrade feasibility simply because a concept portrays people's faces or likeness.
 4. months_sketch: exactly 12 in order Jan..Dec; each = a month theme that expresses this angle's central idea + a concrete focal subject that shows it, fitting that month's season (use a real holiday only when it serves the central idea) (e.g. "Mar: new life — a hen with freshly hatched chicks"); no duplicates, no generic landscapes.
 5. content_type — pick ONE that adds real value: bible_verse_kjv | practical_tip | fun_fact | affirmation | quote | none.
 6. grid_function — pick ONE that fits the buyer: standard | notes_column | family_columns | prayer_list | moon_phases | tracker.

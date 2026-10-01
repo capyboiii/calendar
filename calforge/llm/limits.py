@@ -7,6 +7,7 @@ Ba nguồn tín hiệu (bất kỳ nguồn nào báo là đủ):
 3. Gửi tin nhắn không đi mà trang đang hiện thông báo giới hạn -> coi là hết lượt, không phải lỗi tạm.
 
 Phân loại:
+- "ip_refused": từ chối vì quyền bên thứ ba / nhãn hiệu / bản quyền -> bỏ hẳn cuốn, không thử lại.
 - "quota": tài khoản hết lượt / bị giới hạn tốc độ / hệ thống quá tải -> tài khoản NGHỈ; hết cả 5 tài khoản thì
   batch tạm dừng, chờ rồi thử lại (calforge/pipeline.py _wait_for_quota). Không tính vào số lần thử của ảnh.
 - "refused": nội dung bị từ chối -> ảnh đó hỏng, không thử lại trên tài khoản khác.
@@ -14,7 +15,9 @@ Phân loại:
 """
 from __future__ import annotations
 
+import re
 import time
+import unicodedata
 
 # Hết lượt / giới hạn tốc độ / quá tải. Viết thường, khoảng trắng đã gộp. Thêm câu mới vào đây khi gặp.
 QUOTA_PAT = (
@@ -46,6 +49,58 @@ QUOTA_PAT = (
 QUOTA_WEAK = ("try again in", "please try again in", "come back later", "come back after", "wait until",
               "thử lại sau vài", "quay lại sau")
 
+# Từ chối vì quyền sở hữu trí tuệ của bên thứ ba. Kiểm tra nhóm này trước REFUSE_PAT để workflow
+# phân biệt được lỗi kết thúc vĩnh viễn của cuốn với một lời từ chối nội dung chung.
+IP_REFUSE_PAT = (
+    # English
+    "third-party content", "third party content", "third-party intellectual property",
+    "third party intellectual property", "third-party ip", "third party ip", "third-party rights",
+    "third party rights", "copyrighted character", "copyrighted characters", "copyright-protected",
+    "protected by copyright", "copyright infringement", "infringe copyright", "infringes copyright",
+    "may infringe", "trademarked character", "trademarked characters", "trademark infringement",
+    "protected trademark", "registered trademark", "intellectual property rights", "someone else's ip",
+    "another party's intellectual property", "rights of others", "licensed character", "licensed characters",
+    # Vietnamese
+    "nội dung của bên thứ ba", "quyền của bên thứ ba", "quyền sở hữu trí tuệ của bên thứ ba",
+    "sở hữu trí tuệ của bên thứ ba", "tài sản trí tuệ của bên thứ ba", "vi phạm bản quyền",
+    "xâm phạm bản quyền", "được bảo hộ bản quyền", "nhân vật có bản quyền", "nhân vật được bảo hộ",
+    "vi phạm nhãn hiệu", "xâm phạm nhãn hiệu", "nhãn hiệu đã đăng ký", "thương hiệu đã đăng ký",
+    "vi phạm thương hiệu", "xâm phạm thương hiệu", "quyền sở hữu trí tuệ", "nhân vật được cấp phép",
+)
+
+IP_TERMS = (
+    "third party", "copyright", "trademark", "intellectual property", "licensed character",
+    "rights of others", "someone else's ip", "another party's", "ben thu ba", "ban quyen",
+    "nhan hieu", "thuong hieu", "so huu tri tue", "tai san tri tue", "nhan vat duoc cap phep",
+)
+
+IP_REFUSAL_SIGNALS = (
+    "can't", "cannot", "unable", "won't", "not able", "not permitted", "not allowed", "decline",
+    "refuse", "sorry", "may violate", "might violate", "could violate", "violates", "violation",
+    "infringe", "infringement", "policy", "policies", "protected", "restricted", "avoid creating",
+    "rat tiec", "khong the", "khong duoc", "tu choi", "co the vi pham", "vi pham", "xam pham",
+    "chinh sach", "quy dinh", "duoc bao ho", "khong ho tro", "khong the giup", "khong the tao",
+)
+
+
+def _normalized(text: str) -> tuple[str, str]:
+    """Trả về bản thường đã gộp dấu câu và bản không dấu để chịu được mọi locale/UI của ChatGPT."""
+    low = unicodedata.normalize("NFKC", text or "").lower().replace("’", "'").replace("`", "'")
+    low = re.sub(r"[‐‑‒–—−-]+", " ", low)
+    low = " ".join(low.split())
+    ascii_text = "".join(c for c in unicodedata.normalize("NFKD", low) if not unicodedata.combining(c))
+    return low, ascii_text.replace("đ", "d")
+
+
+def is_ip_refusal(text: str) -> bool:
+    """Có cả chủ đề IP/TM và ngữ cảnh từ chối/vi phạm; tránh loại nhầm câu nhắc IP trung tính."""
+    low, plain = _normalized(text)
+    if any(p in low for p in IP_REFUSE_PAT):
+        # Các cụm IP trực tiếp vẫn cần ngữ cảnh lỗi. Ví dụ "use licensed third-party content" không phải từ chối.
+        return any(s in low or s in plain for s in IP_REFUSAL_SIGNALS)
+    return (any(term in low or term in plain for term in IP_TERMS)
+            and any(signal in low or signal in plain for signal in IP_REFUSAL_SIGNALS))
+
 # Từ chối nội dung
 REFUSE_PAT = (
     "i can't help with that", "i cannot help with that", "i'm unable to create", "i can't create",
@@ -71,8 +126,10 @@ NOTICE_JS = f"""() => Array.from(document.querySelectorAll('{NOTICE_SELECTOR}'))
 
 
 def classify(text: str) -> str:
-    """Chữ trên trang -> "quota" | "refused" | "error" | ""."""
-    low = " ".join((text or "").lower().split())
+    """Chữ trên trang -> "ip_refused" | "quota" | "refused" | "error" | ""."""
+    low, _plain = _normalized(text)
+    if is_ip_refusal(text):
+        return "ip_refused"
     for pats, kind in ((QUOTA_PAT, "quota"), (REFUSE_PAT, "refused"), (QUOTA_WEAK, "quota"), (TEMP_PAT, "error")):
         if any(p in low for p in pats):
             return kind

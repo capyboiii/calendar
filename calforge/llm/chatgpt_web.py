@@ -55,10 +55,25 @@ INSERT_JS = """(el, txt) => {
 
 
 class _WebChat:
-    def __init__(self, page, timeout_s: float, settle_s: float = 4.0):
+    def __init__(self, page, timeout_s: float, settle_s: float = 4.0, no_response_grace_s: float = 30.0,
+                 no_start_grace_s: float = 90.0):
         self.page = page
         self.timeout_s = timeout_s
         self.settle_s = settle_s
+        self.no_response_grace_s = no_response_grace_s
+        self.no_start_grace_s = no_start_grace_s
+
+    @staticmethod
+    def _complete_json(codes: list[str]) -> bool:
+        """UI đôi khi giữ nút Stop dù JSON cuối đã hoàn chỉnh; chỉ nhận sớm khi parse được trọn khối JSON."""
+        for code in reversed(codes or []):
+            try:
+                value = json.loads(code)
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if isinstance(value, (dict, list)):
+                return True
+        return False
 
     def _find(self, selectors, timeout_ms=30_000):
         per = max(1500, timeout_ms // len(selectors))
@@ -138,10 +153,16 @@ class _WebChat:
         deadline = started + self.timeout_s
         last_text, stable_since = None, time.monotonic()
         next_beat = started + 15
+        saw_reply_activity = False
+        stopped_without_reply_since = None
+        no_activity_since = started
         while True:
             st = self._state()
-            if st["assistant"] > before["assistant"] and not st["busy"]:
-                if st["text"] != last_text:
+            if st.get("busy") or st["assistant"] > before["assistant"]:
+                saw_reply_activity = True
+            reply_changed = st["text"] != last_text
+            if st["assistant"] > before["assistant"] and (not st["busy"] or self._complete_json(st["codes"])):
+                if reply_changed:
                     last_text, stable_since = st["text"], time.monotonic()
                 elif time.monotonic() - stable_since >= self.settle_s and last_text.strip():
                     break
@@ -150,6 +171,38 @@ class _WebChat:
                 if limited:
                     raise QuotaExceeded(limited)
             now = time.monotonic()
+            has_reply_text = st["assistant"] > before["assistant"] and bool(st["text"].strip())
+            if has_reply_text:
+                from .limits import classify, page_notice
+
+                kind = classify(st["text"] + " " + page_notice(self.page))
+                if kind == "quota":
+                    raise QuotaExceeded(st["text"][-200:])
+                if kind in ("error", "refused", "ip_refused") and not st.get("codes"):
+                    raise SendFailed(f"[{label}] ChatGPT trả {kind}: {st['text'][-200:]}")
+            elif not st.get("busy"):
+                from .limits import classify, page_notice
+
+                notice = page_notice(self.page)
+                kind = classify(notice)
+                if kind == "quota":
+                    raise QuotaExceeded(notice[-200:])
+                if kind in ("error", "refused", "ip_refused"):
+                    raise SendFailed(f"[{label}] ChatGPT hiện thông báo {kind}: {notice[-200:]}")
+            if saw_reply_activity and not st.get("busy") and not has_reply_text:
+                stopped_without_reply_since = stopped_without_reply_since or now
+                if now - stopped_without_reply_since >= self.no_response_grace_s:
+                    from .limits import classify, page_notice
+
+                    notice = page_notice(self.page)
+                    kind = classify((st.get("text") or "") + " " + notice)
+                    detail = (notice or st.get("text") or "không đọc được nội dung phản hồi")[-200:]
+                    raise SendFailed(f"[{label}] ChatGPT đã dừng nhưng không có câu trả lời đọc được"
+                                     f" ({kind or 'lỗi giao diện'}: {detail})")
+            else:
+                stopped_without_reply_since = None
+            if not saw_reply_activity and now - no_activity_since >= self.no_start_grace_s:
+                raise SendFailed(f"[{label}] ChatGPT không bắt đầu trả lời sau {self.no_start_grace_s:.0f}s")
             if now >= next_beat:  # nhịp báo mỗi 15s để biết còn đang chờ, không phải treo
                 state = "ChatGPT đang soạn" if st.get("busy") else "chờ ChatGPT phản hồi"
                 print(f"   [chat] {state}... ({now - started:.0f}s)", flush=True)
@@ -193,17 +246,19 @@ class _RotatingChat:
         self.chat: _WebChat | None = None
         self.profile = None
         self.failed: set[str] = set()                        # không mở được trong phiên này
+        self.max_request_accounts = len(self.order)          # một prompt lỗi phản hồi chỉ thử mỗi tài khoản 1 lần
 
-    def _open_next(self) -> None:
+    def _open_next(self, exclude: set[str] | None = None) -> None:
         """Mượn tài khoản kế tiếp qua bộ điều phối (không đụng tài khoản đang vẽ / đang nghỉ chat) và mở chat.
         Mọi tài khoản đang bận vẽ thì CHỜ (luồng vẽ sẽ nhường chỗ sau ảnh đang vẽ); chỉ báo NoAccountLeft khi
         mọi tài khoản đều hết lượt chat hoặc không mở được."""
         from .pool import CHAT, get_pool
+        exclude = exclude or set()
         self.close()
         pool = get_pool()
         while True:
             for name in list(self.order):
-                if name in self.failed or pool.acquire(CHAT, only=name) is None:
+                if name in self.failed or name in exclude or pool.acquire(CHAT, only=name) is None:
                     continue
                 self.order.remove(name)
                 self.order.append(name)                     # lần sau bắt đầu từ tài khoản khác
@@ -233,15 +288,18 @@ class _RotatingChat:
                     self.failed.add(name)
                     pool.rest(name, CHAT, 600, f"không mở được Chrome: {e}")
                     self.close()
-            usable = [n for n in self.order if n not in self.failed]
+            usable = [n for n in self.order if n not in self.failed and n not in exclude]
             if not usable or all(pool._resting(n, CHAT) for n in usable):
+                if exclude:
+                    raise RuntimeError("Không còn tài khoản chưa thử cho yêu cầu chat này")
                 raise NoAccountLeft("Không còn tài khoản ChatGPT nào dùng được cho bước chat (hết lượt)")
             pool.wait_change(5)                             # tài khoản đang bận vẽ: chờ luồng vẽ nhường
 
     def ask(self, prompt: str, label: str) -> str:
+        response_failed: set[str] = set()
         while True:
             if self.chat is None:
-                self._open_next()
+                self._open_next(response_failed)
             try:
                 return self.chat.ask(prompt, label)
             except QuotaExceeded as e:
@@ -251,8 +309,19 @@ class _RotatingChat:
                 pool.rest(self.profile, CHAT, pool.rest_s, str(e))
                 self.close()
             except SendFailed as e:
+                response_failed.add(self.profile)
                 print(f"[chat] {self.profile} không gửi được tin nhắn ({str(e)[:80]}) - chuyển tài khoản")
                 self.close()
+                if len(response_failed) >= self.max_request_accounts:
+                    raise RuntimeError(f"[{label}] Tất cả {self.max_request_accounts} tài khoản đều không trả lời đọc được") from e
+            except TimeoutError as e:
+                # Tab có thể đã đổi DOM / mất lượt trả lời sau khi nút Stop biến mất. Đừng làm hỏng cả batch:
+                # đóng tab và gửi lại nguyên prompt trên tài khoản kế tiếp.
+                response_failed.add(self.profile)
+                print(f"[chat] {self.profile} chờ phản hồi quá lâu ({str(e)[:80]}) - chuyển tài khoản")
+                self.close()
+                if len(response_failed) >= self.max_request_accounts:
+                    raise RuntimeError(f"[{label}] Tất cả {self.max_request_accounts} tài khoản đều timeout phản hồi") from e
 
     def close(self) -> None:
         if self.ctx is not None:

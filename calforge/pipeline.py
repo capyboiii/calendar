@@ -26,6 +26,7 @@ from .render.build import FORMATS, art_source, expected_pages, load_format, rend
 # ít chi tiết được renderer nội suy một lần rồi phủ text/vector chính xác lên trên.
 UPSCALE_JOBS = ["cover"] + [f"m{m:02d}" for m in range(1, 13)]
 RENDER_ART_JOBS = ["cover"] + [f"m{m:02d}" for m in range(1, 13)] + ["grid"]
+IP_REJECTED_MARK = "IP/TM_REJECTED:"
 
 
 def upscale_concept(concept_dir: Path, on_event=print, *, settle_s: float = 0.0) -> list[str]:
@@ -190,6 +191,10 @@ def produce(concept_dir: Path, cfg: dict, *, printify: bool = True, publish: boo
 
 def produce_images(concept_dir: Path, cfg: dict, *, on_event=print) -> dict | None:
     """Phần cần ChatGPT: gen ảnh (+ upscale chạy kèm). None = đủ ảnh; dict = status lỗi."""
+    previous = _read_status(concept_dir)
+    if previous.get("terminal") and previous.get("stage") == "ip_rejected":
+        on_event(f"  ↷ Bỏ qua {concept_dir.name}: cuốn đã bị loại vì TM/bản quyền bên thứ ba")
+        return previous
     ig = cfg["imagegen"]
     on_event(f"===== Sản xuất: {concept_dir.name} =====")
     plan.write_plan(concept_dir)
@@ -204,6 +209,11 @@ def produce_images(concept_dir: Path, cfg: dict, *, on_event=print) -> dict | No
                                        headless=ig.get("headless", False), timeout_s=ig.get("timeout_s", 420),
                                        max_attempts=ig.get("max_attempts", 3), on_event=on_event)
             except RuntimeError as e:          # ảnh neo không gen được
+                if IP_REJECTED_MARK in str(e):
+                    reason = str(e).split(IP_REJECTED_MARK, 1)[-1].strip()
+                    on_event(f"  ✘ BỎ CUỐN: vi phạm TM/bản quyền bên thứ ba - {reason[:180]}")
+                    return _status(concept_dir, stage="ip_rejected", ok=False, terminal=True,
+                                   reason=f"Bỏ cuốn: ChatGPT từ chối vì TM/bản quyền hoặc quyền bên thứ ba. {reason}"[:500])
                 if QUOTA_MARK not in str(e):
                     raise
                 res = {"missing": ["anchor"], "failed": {"anchor": str(e)}, "drift_flags": []}
@@ -213,6 +223,13 @@ def produce_images(concept_dir: Path, cfg: dict, *, on_event=print) -> dict | No
         waited += cfg.get("quota_wait_s", 1800)
     if early.done:
         on_event(f"  ✔ Đã upscale sẵn {len(early.done)} artwork trong lúc chờ gen ảnh")
+    ip_failures = [str(v) for v in res["failed"].values() if IP_REJECTED_MARK in str(v)]
+    if ip_failures:
+        detail = ip_failures[0].split(IP_REJECTED_MARK, 1)[-1].strip()
+        on_event(f"  ✘ BỎ CUỐN: vi phạm TM/bản quyền bên thứ ba - {detail[:180]}")
+        return _status(concept_dir, stage="ip_rejected", ok=False, terminal=True,
+                       reason=f"Bỏ cuốn: ChatGPT từ chối vì TM/bản quyền hoặc quyền bên thứ ba. {detail}"[:500],
+                       failed=res["failed"])
     if res["missing"]:
         return _status(concept_dir, stage="images", ok=False,
                        reason=f"còn thiếu ảnh: {', '.join(res['missing'])} - chạy lại khi tài khoản có lượt",
@@ -616,7 +633,8 @@ def _run_batch(keyword, cfg, kdir, batch, backend, common, finisher, pick, wait,
     try:
         # 1) Cuốn đã có ý tưởng từ lần chạy trước nhưng chưa xong: làm nốt trước.
         for rel in list(batch["concepts"]):
-            if layout.is_book(kdir / rel) and not _finished_ok(kdir / rel):
+            if (layout.is_book(kdir / rel) and not _finished_ok(kdir / rel)
+                    and not _read_status(kdir / rel).get("terminal")):
                 submit(kdir / rel)
 
         # 2) Lên ý + sản xuất theo lượt cho đủ số còn thiếu.

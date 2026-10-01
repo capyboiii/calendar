@@ -23,6 +23,19 @@ const S = {
 };
 
 const $ = (id) => document.getElementById(id);
+const STYLE_LABEL = {
+  styled_photography: 'Styled photography',
+  papercut_collage: 'Layered papercut',
+  mid_century_retro: 'Mid-century poster',
+};
+
+function batchStyle(selection) {
+  const families = Object.keys(STYLE_LABEL);
+  return {
+    family: selection === 'random' ? families[Math.floor(Math.random() * families.length)] : selection,
+    family_selection: selection,
+  };
+}
 
 document.addEventListener('DOMContentLoaded', () => {
   bindEvents();
@@ -129,6 +142,7 @@ async function loadProjects() {
   try {
     const data = await api('/api/projects');
     S.projects = data.projects || [];
+    renderStyleSamples();
     renderResults();
     loadUnfinished();
     if (S.openBook) {
@@ -138,6 +152,49 @@ async function loadProjects() {
   } catch (err) {
     $('results').innerHTML = `<p class="empty">Không tải được danh sách lịch: ${esc(err.message)}</p>`;
   }
+}
+
+function renderStyleSamples() {
+  const families = Object.keys(STYLE_LABEL);
+  const candidates = S.projects.flatMap((project) => project.concepts || [])
+    .filter((book) => families.includes(book.family) && book.cover)
+    .sort((a, b) => {
+      const doneA = bookState(a) === 'done' ? 1 : 0;
+      const doneB = bookState(b) === 'done' ? 1 : 0;
+      if (doneA !== doneB) return doneB - doneA;
+      const timeA = Date.parse(((a.status || {}).updated || '').replace(' ', 'T')) || 0;
+      const timeB = Date.parse(((b.status || {}).updated || '').replace(' ', 'T')) || 0;
+      return timeB - timeA;
+    });
+  const samples = {};
+  candidates.forEach((book) => { if (!samples[book.family]) samples[book.family] = book.cover; });
+
+  families.forEach((family) => {
+    const box = document.querySelector(`[data-style-family="${family}"] .style-sample`);
+    if (!box) return;
+    box.replaceChildren();
+    box.classList.toggle('has-image', !!samples[family]);
+    if (samples[family]) {
+      const img = document.createElement('img');
+      img.src = thumbUrl(samples[family], 160);
+      img.alt = '';
+      img.loading = 'lazy';
+      box.appendChild(img);
+    }
+  });
+
+  const random = document.querySelector('[data-style-family="random"] .style-sample');
+  if (!random) return;
+  random.replaceChildren();
+  families.forEach((family) => {
+    if (!samples[family]) return;
+    const img = document.createElement('img');
+    img.src = thumbUrl(samples[family], 100);
+    img.alt = '';
+    img.loading = 'lazy';
+    random.appendChild(img);
+  });
+  random.classList.toggle('has-image', random.childElementCount > 0);
 }
 
 async function loadAccounts() {
@@ -170,7 +227,8 @@ async function startBatch() {
     return;
   }
   const product = (document.querySelector('input[name="product"]:checked') || {}).value || 'wall_grid';
-  const params = { keyword, batch_size: countValue(), product };   // phong cách: máy tự chia đều
+  const selection = (document.querySelector('input[name="family"]:checked') || {}).value || 'random';
+  const params = { keyword, batch_size: countValue(), product, ...batchStyle(selection) };
   if (product === 'wall_grid') {
     params.grid_mode = (document.querySelector('input[name="grid_mode"]:checked') || {}).value || 'ai_page';
     if (params.grid_mode === 'ai_page') {
@@ -232,8 +290,10 @@ function renderQueue() {
     }
     const mode = p.product === 'wall_grid' ? (p.grid_mode === 'background' ? ' · AI vẽ nền'
       : ` · AI vẽ cả trang${p.mockup_mode === 'ai' ? ' · AI mockup' : ''}`) : '';
+    const style = STYLE_LABEL[p.family];
+    const styleText = style ? ` · ${p.family_selection === 'random' ? 'Ngẫu nhiên: ' : ''}${style}` : '';
     return `<strong>${esc(p.keyword)}</strong>
-    <span class="muted">${p.batch_size || 1} cuốn · ${PRODUCT_LABEL[p.product] || ''}${mode}</span>`;
+    <span class="muted">${p.batch_size || 1} cuốn · ${PRODUCT_LABEL[p.product] || ''}${mode}${styleText}</span>`;
   };
   const wl = $('queueWaiting');
   wl.innerHTML = '';
@@ -419,15 +479,17 @@ function renderProgress() {
 function bookState(b) {
   const st = b.status || {};
   if (st.ok && (st.stage === 'listing' || st.stage === 'printify')) return 'done';
+  if (st.stage === 'ip_rejected') return 'rejected';
   if (st.ok === false) return 'error';
   return 'pending';
 }
 
-const STATE_LABEL = { done: 'Xong', error: 'Bị dở', pending: 'Chưa xong' };
+const STATE_LABEL = { done: 'Xong', rejected: 'Bỏ · TM/bản quyền', error: 'Bị dở', pending: 'Chưa xong' };
 
 function friendlyReason(st) {
   const stage = (st || {}).stage;
   const raw = (st || {}).reason || '';
+  if (stage === 'ip_rejected') return raw || 'Bỏ cuốn: ChatGPT từ chối vì TM/bản quyền hoặc quyền bên thứ ba.';
   if (stage === 'images') return 'ChatGPT chưa vẽ đủ tranh (thường do tài khoản hết lượt). Chờ một lúc rồi bấm "Làm tiếp".';
   if (stage === 'render') return 'Lỗi khi dàn trang in. Bấm "Làm tiếp"; nếu vẫn lỗi, gửi phần chi tiết cho người kỹ thuật.';
   if (stage === 'printify') return 'Chưa đưa lên được Printify. Kiểm tra mạng rồi bấm "Làm tiếp".';
@@ -479,7 +541,7 @@ function bookCard(c, keyword) {
       <span class="pill ${state}">${STATE_LABEL[state]}</span>
     </div>
     ${c.product === 'wall_premade' ? '<p class="kind-tag">Wall Calendar</p>' : ''}
-    ${state === 'error' ? `<p class="why">${esc(friendlyReason(c.status))}</p>` : ''}`;
+    ${(state === 'error' || state === 'rejected') ? `<p class="why">${esc(friendlyReason(c.status))}</p>` : ''}`;
   el.addEventListener('click', () => { S.openBook = c.path; renderBook(c, keyword); $('bookModal').hidden = false; });
   return el;
 }
@@ -491,8 +553,8 @@ function renderBook(c, keyword) {
   $('bookState').textContent = STATE_LABEL[state];
   $('bookState').className = `pill ${state}`;
   const err = $('bookError');
-  err.hidden = state !== 'error';
-  err.textContent = state === 'error' ? friendlyReason(c.status) : '';
+  err.hidden = state !== 'error' && state !== 'rejected';
+  err.textContent = (state === 'error' || state === 'rejected') ? friendlyReason(c.status) : '';
 
   const g = $('bookGallery');
   g.innerHTML = (c.previews || []).length
@@ -514,7 +576,7 @@ function renderBook(c, keyword) {
     link.textContent = `PDF in tại nhà ${pdf.label}"`;
     a.appendChild(link);
   });
-  if (state !== 'done') {
+  if (state !== 'done' && state !== 'rejected') {
     a.appendChild(button('Làm tiếp', 'btn-accent', () => continueBook(c)));
   }
   if ((c.pdfs || []).length) {            // đã có trang in: làm lại mockup không cần ChatGPT

@@ -17,10 +17,12 @@ class RotationTest(unittest.TestCase):
     def _rot(self, behaviours):
         rot = cw._RotatingChat.__new__(cw._RotatingChat)
         rot.order, rot.ctx, rot.chat, rot.profile = [f"acc{i}" for i in range(len(behaviours))], None, None, None
+        rot.max_request_accounts = len(behaviours)
         opened = []
 
-        def open_next():
+        def open_next(exclude=None):
             name = rot.order.pop(0)
+            self.assertNotIn(name, exclude or set())
             rot.profile, rot.chat = name, _FakeChat(behaviours[len(opened)])
             opened.append(name)
 
@@ -37,6 +39,21 @@ class RotationTest(unittest.TestCase):
         rot, opened = self._rot([cw.QuotaExceeded("limit"), "answer"])
         self.assertEqual(rot.ask("p", "p1"), "answer")
         self.assertEqual(opened, ["acc0", "acc1"])
+
+    def test_response_timeout_moves_to_next_account(self):
+        rot, opened = self._rot([TimeoutError("reply DOM disappeared"), "answer"])
+        self.assertEqual(rot.ask("p", "p2"), "answer")
+        self.assertEqual(opened, ["acc0", "acc1"])
+
+    def test_all_response_timeouts_stop_after_each_account_once(self):
+        rot, opened = self._rot([TimeoutError("lost response"), TimeoutError("lost response")])
+        with self.assertRaisesRegex(RuntimeError, "Tất cả 2 tài khoản"):
+            rot.ask("same original prompt", "p2")
+        self.assertEqual(opened, ["acc0", "acc1"])
+
+    def test_complete_json_is_accepted_with_stale_busy_button(self):
+        self.assertTrue(cw._WebChat._complete_json(['{"angles": []}']))
+        self.assertFalse(cw._WebChat._complete_json(['{"angles":']))
 
 
 if __name__ == "__main__":
@@ -73,6 +90,41 @@ class LimitMessagesTest(unittest.TestCase):
             self.assertEqual(classify(m), "quota", m)
         self.assertEqual(classify("I can't create that image because it violates our content policy. "
                                   "You can try again in a new chat with a different request."), "refused")
+        ip_messages = [
+            "I can't create copyrighted characters because this may infringe third-party intellectual property rights.",
+            "This request uses trademarked characters and protected third-party content.",
+            "Sorry, but the image we generated may violate our policies on similarity to third-party content.",
+            "The generated image might violate our policy regarding resemblance to third party content.",
+            "I’m unable to help create imagery that is too similar to copyrighted third‑party material.",
+            "I cannot comply because this could infringe another party's intellectual property rights.",
+            "This character is protected by copyright, so I’m not able to generate that image.",
+            "I can't reproduce a registered trademark or licensed character.",
+            "This request may constitute trademark infringement, so I must decline.",
+            "To avoid violating the rights of others, I can’t generate this image.",
+            "Sorry — this looks too much like someone else's IP, so I cannot create it.",
+            "Tôi không thể tạo nhân vật có bản quyền vì có thể vi phạm quyền sở hữu trí tuệ của bên thứ ba.",
+            "Yêu cầu này có thể xâm phạm nhãn hiệu đã đăng ký.",
+            ("Rất tiếc, nhưng hình ảnh chúng ta tạo ra có thể vi phạm các quy định của chúng tôi về sự tương đồng "
+             "với nội dung của bên thứ ba. Nếu bạn cho rằng chúng tôi đã hiểu sai, vui lòng thử lại hoặc chỉnh sửa "
+             "câu lệnh của bạn."),
+            "Rất tiếc, hình ảnh này có thể quá giống với nội dung của bên thứ ba nên tôi không thể tạo.",
+            "Tôi không thể hỗ trợ yêu cầu này vì nhân vật được bảo hộ bản quyền.",
+            "Yêu cầu có thể vi phạm thương hiệu hoặc nhãn hiệu đã đăng ký nên tôi phải từ chối.",
+            "Để tránh xâm phạm quyền của bên thứ ba, tôi không thể tạo hình ảnh này.",
+            "Hình ảnh có sự tương đồng với tài sản trí tuệ của bên thứ ba và không được phép tạo.",
+            # Không dấu, xuống dòng, chữ hoa và dấu gạch khác nhau vẫn phải bắt được.
+            "RAT TIEC — hinh anh co the VI PHAM\nquyen SO HUU TRI TUE cua BEN THU BA.",
+        ]
+        for message in ip_messages:
+            self.assertEqual(classify(message), "ip_refused", message)
+        non_ip_messages = [
+            "Use licensed third-party content supplied by the customer.",
+            "The article discusses copyright and trademark law.",
+            "Create an original character and avoid text in the image.",
+            "Here are general intellectual property rights resources.",
+        ]
+        for message in non_ip_messages:
+            self.assertNotEqual(classify(message), "ip_refused", message)
         self.assertEqual(classify("Something went wrong while generating the response."), "error")
         self.assertEqual(classify("Get Plus - upgrade your plan for more features"), "")      # banner quảng cáo
         self.assertEqual(classify("Here is your calendar concept."), "")

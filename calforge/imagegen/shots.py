@@ -21,12 +21,14 @@ SHOTS: dict[str, str] = {
                  "the sky, canopy or ceiling.",
     "foreground_still_life": "FOREGROUND STILL LIFE: a small arrangement of objects tied to the month fills the "
                              "near foreground; the wider setting stays soft behind it.",
-    "hero_subject": "BOLD HERO SUBJECT: the focal subject is large, occupying roughly half the frame on one side, "
-                    "with a strong readable silhouette and open space on the other side.",
+    "hero_subject": "BOLD OFF-CENTER HERO SUBJECT: the focal subject is large and visually dominant, occupying "
+                    "roughly 45–65% of the frame with a strong readable silhouette. Use an off-center composition, "
+                    "but do not require or reserve blank space on the opposite side.",
     "natural_frame": "NATURAL FRAME: view the focal subject through a frame formed by nature (branches, leaves, "
                      "flowers, rocks or waves), not through architecture.",
-    "minimal_space": "MINIMAL NEGATIVE SPACE: one small focal subject in a large calm field of color; at least "
-                     "two thirds of the frame is quiet open space.",
+    "minimal_space": "CONTROLLED NEGATIVE SPACE: keep the focal subject visually prominent, occupying roughly "
+                     "40–55% of the frame, with roughly 35–45% intentional open space. The open area supports "
+                     "the composition but must not make the subject look small, distant or stranded.",
     "leading_lines": "LEADING LINES: a path, stream, row, fence or shoreline pulls the eye diagonally from the "
                      "near edge toward the focal subject.",
     "pattern_field": "PATTERN FIELD: repeated elements (petals, leaves, birds, shells, fruit) fill the frame "

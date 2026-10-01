@@ -42,6 +42,8 @@ class UiServerTest(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn(b"CalForge", data)
         self.assertIn(b"STUDIO", data)
+        self.assertEqual(data.count(b'class="style-sample'), 4)
+        self.assertIn(b'data-style-family="random"', data)
 
     def test_api_styles(self):
         status, data = self._get("/api/styles")

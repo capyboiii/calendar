@@ -15,6 +15,8 @@ from calforge.imagegen import driver
 from calforge.imagegen.driver import GenJob, QuotaExceeded, Refused, TempError, run_jobs
 from calforge.llm.pool import CHAT, IMAGE, AccountPool, browser_cap
 
+REAL_WORKER = driver._Worker
+
 
 class Tracker:
     """Ghi ai đang dùng tài khoản nào; phát hiện dùng chung / vượt trần."""
@@ -178,6 +180,41 @@ class RunJobsStressTest(unittest.TestCase):
         self.assertLess(time.monotonic() - t0, 10)
         self.assertTrue(all(j.error == "hết tài khoản còn lượt" for j in jobs))   # batch sẽ chờ rồi thử lại
         self.assertTrue(all(j.attempts == 0 for j in jobs))                         # hết lượt không tính lần thử
+
+    def test_third_party_refusal_cancels_queued_jobs_for_book(self):
+        calls = []
+
+        class IPWorker:
+            def __init__(self, *a, **k):
+                pass
+
+            def run_job(self, page, job):
+                calls.append(job.id)
+                raise driver.ThirdPartyIPRefused("third-party intellectual property rights")
+
+        pool = make_pool(n=1, cap=1)
+        jobs = self._jobs("tm", 4)
+        with mock.patch.object(driver, "_Worker", IPWorker):
+            result = run_jobs(jobs, Path("."), ["acc1"], max_attempts=3, on_event=lambda *_: None,
+                              pool=pool, open_page=fake_open)
+        self.assertEqual(calls, ["tm-0"])
+        self.assertTrue(all((j.error or "").startswith("IP/TM_REJECTED:") for j in result))
+
+    def test_ip_text_interrupts_wait_even_while_ui_is_busy(self):
+        refusal = ("Rất tiếc, nhưng hình ảnh chúng ta tạo ra có thể vi phạm các quy định của chúng tôi về "
+                   "sự tương đồng với nội dung của bên thứ ba.")
+        state = {"assistant": 0, "user": 1, "busy": True, "pending": True,
+                 "imgs": [], "pageImgs": [], "tail": refusal}
+
+        class Page:
+            def wait_for_timeout(self, _ms):
+                raise AssertionError("IP refusal must be raised before waiting")
+
+        worker = REAL_WORKER(Path("."), False, timeout_s=420)
+        before = {"assistant": 0, "user": 0, "imgs": [], "pageImgs": []}
+        with mock.patch.object(driver, "_eval", return_value=state):
+            with self.assertRaises(driver.ThirdPartyIPRefused):
+                worker._wait_image(Page(), before)
 
 
 if __name__ == "__main__":

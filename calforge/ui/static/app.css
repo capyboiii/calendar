@@ -147,6 +147,26 @@ h3 { font-size: 1.05rem; font-weight: 600; }
 .kind input { margin-top: 4px; accent-color: var(--primary); }
 .kind strong { display: block; }
 .kind small { color: var(--muted); font-size: .85rem; }
+.style-kind { align-items: center; min-height: 92px; }
+.style-kind input { align-self: flex-start; }
+.style-kind > span:last-child { min-width: 0; }
+.style-sample {
+  display: none;
+  flex: 0 0 64px;
+  width: 64px;
+  height: 64px;
+  overflow: hidden;
+  border-radius: 9px;
+  background: var(--surface-2);
+  border: 1px solid color-mix(in srgb, var(--line) 80%, transparent);
+  box-shadow: 0 2px 7px rgba(34, 32, 28, .12);
+}
+.style-sample.has-image { display: flex; }
+.style-sample img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.style-sample-random img { width: 33.333%; flex: 1 1 0; object-position: center; }
+@media (max-width: 620px) {
+  .style-sample { flex-basis: 56px; width: 56px; height: 56px; }
+}
 .kind-tag { padding: 0 14px 12px; font-size: .8rem; color: var(--muted); }
 .start-row { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 22px; align-items: flex-end; }
 .field { display: grid; gap: 6px; }
@@ -258,6 +278,7 @@ input[type="text"], input[type="number"], select {
 }
 .book:hover { transform: translateY(-2px); box-shadow: 0 10px 28px rgba(34, 32, 28, .12); }
 .book.error { border-color: #eccdc5; }
+.book.rejected { border-color: #dc9d91; background: #fff8f6; }
 .thumb { aspect-ratio: 4 / 3; background: var(--surface-2); display: grid; place-items: center; color: var(--muted); font-size: .9rem; }
 .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .book-meta { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; padding: 12px 14px 4px; }
@@ -268,6 +289,7 @@ input[type="text"], input[type="number"], select {
 .pill { flex: none; font-size: .75rem; font-weight: 600; padding: 3px 10px; border-radius: 999px; background: var(--surface-2); color: var(--muted); }
 .pill.done { background: var(--ok-soft); color: var(--ok); }
 .pill.error { background: var(--bad-soft); color: var(--bad); }
+.pill.rejected { background: #f6d8d2; color: #8f2f20; }
 .pill.pending { background: var(--warn-soft); color: var(--warn); }
 
 /* ---------- modal ---------- */

@@ -273,6 +273,9 @@ def run_args(params: dict) -> tuple[list[str], str]:
     if params.get("grid_preset"):
         cmd_args += ["--grid-preset", params["grid_preset"]]
     if params.get("family"):
+        from ..ideation.catalog import family_ids
+        if params["family"] not in family_ids():
+            raise ValueError("Phong cách tranh không hợp lệ.")
         cmd_args += ["--family", params["family"]]
     if params.get("product") in products.PRODUCTS:
         cmd_args += ["--product", params["product"]]

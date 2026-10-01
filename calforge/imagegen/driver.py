@@ -103,6 +103,10 @@ class QuotaExceeded(RuntimeError): ...
 class Refused(RuntimeError): ...
 
 
+class ThirdPartyIPRefused(Refused):
+    """ChatGPT từ chối vì TM, bản quyền hoặc quyền sở hữu trí tuệ của bên thứ ba."""
+
+
 class TempError(RuntimeError): ...
 
 
@@ -323,6 +327,10 @@ class _Worker:
         while time.monotonic() < deadline or (drawing and time.monotonic() < hard_deadline):
             st = _eval(page, STATE_JS)
             new_turn = st["assistant"] > before["assistant"]
+            # IP/TM là lỗi kết thúc của cả cuốn: bắt ngay khi text xuất hiện, kể cả giao diện còn giữ
+            # spinner/aria-busy. Nếu chờ cờ "đang vẽ" biến mất, một UI bị kẹt có thể làm phí đủ 420 giây.
+            if classify(st.get("tail", "")) == "ip_refused":
+                raise ThirdPartyIPRefused(st["tail"][-300:])
             drawing = generating(st) if new_turn else bool(st.get("pending"))
             big = _new_images(st, before) if new_turn else []
             if not big:
@@ -351,6 +359,8 @@ class _Worker:
                     raise QuotaExceeded(st["tail"][-200:])
                 if wants_source(st["tail"]):
                     raise WantsSourceImage(st["tail"][-200:])
+                if kind == "ip_refused":
+                    raise ThirdPartyIPRefused(st["tail"][-300:])
                 if kind == "refused":
                     raise Refused(st["tail"][-200:])
                 if kind == "error" or time.monotonic() - quiet_since > 45:
@@ -434,6 +444,8 @@ def run_jobs(jobs: list[GenJob], profiles_dir: Path, profiles: list[str], *, hea
     lock = threading.Lock()
     state = {"remaining": len(jobs), "alive": 0}
     broken: set[str] = set()                          # không mở được Chrome trong lần chạy này
+    fatal_ip = threading.Event()                      # một job dính IP/TM => huỷ mọi job chưa gửi của cuốn
+    fatal_ip_detail = {"text": ""}
 
     def finish(job: GenJob) -> None:
         with lock:
@@ -494,6 +506,12 @@ def run_jobs(jobs: list[GenJob], profiles_dir: Path, profiles: list[str], *, hea
                     on_event(f"[{profile}] {job.id}: bỏ sau {job.attempts} lần: {job.error[:160]}")
                     finish(job)
             return False
+        except ThirdPartyIPRefused as e:
+            job.error = f"IP/TM_REJECTED: {str(e)[:260]}"
+            fatal_ip_detail["text"] = str(e)[:260]
+            fatal_ip.set()
+            on_event(f"[{profile}] {job.id}: BỎ CUỐN - ChatGPT từ chối vì TM/bản quyền bên thứ ba: {str(e)[:160]}")
+            finish(job)
         except Refused as e:
             job.error = f"bị từ chối: {str(e)[:200]}"
             on_event(f"[{profile}] {job.id}: {job.error}")
@@ -514,7 +532,7 @@ def run_jobs(jobs: list[GenJob], profiles_dir: Path, profiles: list[str], *, hea
         w = _Worker(profiles_dir / profile, headless, timeout_s)
         try:
             with opener(profile) as page:
-                while not pool.should_yield(profile):
+                while not pool.should_yield(profile) and not fatal_ip.is_set():
                     try:
                         job = q.get_nowait()
                     except queue.Empty:
@@ -533,6 +551,15 @@ def run_jobs(jobs: list[GenJob], profiles_dir: Path, profiles: list[str], *, hea
 
     threads: list[threading.Thread] = []
     while True:
+        if fatal_ip.is_set():
+            # Không gửi thêm prompt nào của cuốn này. Các job đã chạy đồng thời sẽ tự kết thúc rồi thoát.
+            while True:
+                try:
+                    cancelled = q.get_nowait()
+                except queue.Empty:
+                    break
+                cancelled.error = f"IP/TM_REJECTED: {fatal_ip_detail['text']}"
+                finish(cancelled)
         with lock:
             remaining, alive = state["remaining"], state["alive"]
         if remaining <= 0 and alive == 0:
