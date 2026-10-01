@@ -185,6 +185,22 @@ class BatchTest(unittest.TestCase):
         self.assertTrue(result["terminal"])
         self.assertIn("Bỏ cuốn", result["reason"])
 
+    def test_resume_does_not_reopen_terminal_only_batch(self):
+        kdir = self.root / "Wall Calendar (Blank)" / "kw"
+        cdir = kdir / "b1"
+        layout.ensure_system(cdir)
+        layout.concept_file(cdir).write_text("{}", encoding="utf-8")
+        pipeline._status(cdir, stage="ip_rejected", ok=False, terminal=True, reason="TM")
+        batch = {"target": 1, "product": "wall_grid", "concepts": ["b1"], "failed_ideas": [],
+                 "errors": [], "started": "x", "finished": "y"}
+        layout.batch_file(kdir).write_text(json.dumps(batch), encoding="utf-8")
+        with self.patched():
+            rows = pipeline.run("kw", cfg(self.root), auto_pick=1, resume=True, retry_wait_s=0)
+        self.assertEqual(rows[0]["stage"], "ip_rejected")
+        self.assertEqual(self.produced, [])
+        saved = json.loads(layout.batch_file(kdir).read_text(encoding="utf-8"))
+        self.assertEqual(saved["finished"], "y")
+
     def test_ideation_waits_when_chat_quota_is_gone(self):
         from calforge.llm.chatgpt_web import NoAccountLeft
         real = self.idea

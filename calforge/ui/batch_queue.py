@@ -20,7 +20,7 @@ PARTIAL = "partial"          # chạy xong nhưng chỉ đạt một phần số
 
 class BatchQueue:
     def __init__(self, tasks, state_file: Path, build_args, report):
-        """tasks: TaskManager; build_args(params) -> (cmd_args, desc); report(params) -> (ok, total)."""
+        """tasks: TaskManager; report(params) -> (ok, total[, retryable])."""
         self.tasks, self.file, self.build_args, self.report = tasks, Path(state_file), build_args, report
         self.lock = threading.RLock()
         self.items: list[dict] = []
@@ -31,6 +31,14 @@ class BatchQueue:
                 it.update(status=WAITING, task_id=None)
                 if not it["params"].get("action"):      # batch: làm nốt đúng batch đó, không mở batch N cuốn mới
                     it["params"] = {**it["params"], "resume": True}
+            elif it["status"] not in (WAITING, RUNNING) and "retryable" not in it:
+                # Nâng cấp dữ liệu hàng đợi cũ: ẩn nút thử lại nếu giờ chỉ còn cuốn terminal/TM.
+                try:
+                    result = self.report(it["params"])
+                    ok, total = result[:2]
+                    it["retryable"] = bool(result[2]) if len(result) > 2 else (not total or ok < total)
+                except Exception:  # noqa: BLE001 - dữ liệu lịch sử hỏng không được ngăn UI khởi động
+                    it["retryable"] = True
         self._save()
 
     # ---- lưu trạng thái -------------------------------------------------------------------------------------
@@ -149,7 +157,9 @@ class BatchQueue:
                 if t is not None and t.status == "running":
                     return
                 status = t.status if t is not None else "failed"
-                ok, total = self.report(cur["params"])
+                result = self.report(cur["params"])
+                ok, total = result[:2]
+                retryable = bool(result[2]) if len(result) > 2 else (not total or ok < total)
                 if status == "stopped" or cur.get("user_stopped"):
                     final = STOPPED
                 elif status != "success" or (total and ok == 0):
@@ -158,14 +168,22 @@ class BatchQueue:
                     final = PARTIAL
                 else:
                     final = DONE
-                cur.update(finished_at=time.strftime("%Y-%m-%d %H:%M:%S"), ok=ok, total=total, status=final)
+                cur.update(finished_at=time.strftime("%Y-%m-%d %H:%M:%S"), ok=ok, total=total,
+                           retryable=retryable, status=final)
                 self._save()
             if self.paused or self.tasks.running():
                 return
             nxt = next((i for i in self.items if i["status"] == WAITING), None)
             if not nxt:
                 return
-            cmd_args, desc = self.build_args(nxt["params"])
+            try:
+                # Trạng thái trên đĩa có thể đổi trong lúc chờ (ví dụ cuốn vừa bị loại vì TM).
+                cmd_args, desc = self.build_args(nxt["params"])
+            except (OSError, ValueError) as e:
+                nxt.update(status=FAILED, task_id=None, ok=0, total=1, retryable=False,
+                           error=str(e), finished_at=time.strftime("%Y-%m-%d %H:%M:%S"))
+                self._save()
+                return
             nxt.update(status=RUNNING, task_id=self.tasks.start_task(cmd_args, desc, "run", nxt["params"]),
                        started_at=time.strftime("%Y-%m-%d %H:%M:%S"), user_stopped=False)
             self._save()

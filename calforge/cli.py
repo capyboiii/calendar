@@ -196,6 +196,8 @@ def cmd_produce(args, cfg):
 
     st = produce(_concept_dir(args.concept), cfg, printify=not args.no_printify, publish=args.publish)
     _print_status([{"concept": args.concept, **st}])
+    if not st.get("ok"):
+        sys.exit(1)
 
 
 def cmd_finish(args, cfg):

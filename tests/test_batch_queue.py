@@ -106,20 +106,26 @@ if __name__ == "__main__":
 
 
 class QueueResultTest(unittest.TestCase):
-    def _run(self, ok, total, status="success"):
+    def _run(self, ok, total, status="success", retryable=None):
         with tempfile.TemporaryDirectory() as tmp:
             tasks = FakeTasks()
-            q = BatchQueue(tasks, Path(tmp) / "q.json", args, lambda p: (ok, total))
+            result = (ok, total) if retryable is None else (ok, total, retryable)
+            q = BatchQueue(tasks, Path(tmp) / "q.json", args, lambda p: result)
             q.add({"keyword": "a"})
             tasks.tasks["t1"].status = status
             q.tick()
-            return q.snapshot()["items"][0]["status"]
+            return q.snapshot()["items"][0]
 
     def test_status_follows_books_made(self):
-        self.assertEqual(self._run(3, 3), "done")
-        self.assertEqual(self._run(1, 3), "partial")
-        self.assertEqual(self._run(0, 1), "failed")               # chạy hết mà 0 cuốn đạt: không được ghi "Xong"
-        self.assertEqual(self._run(0, 0, "failed"), "failed")
+        self.assertEqual(self._run(3, 3)["status"], "done")
+        self.assertEqual(self._run(1, 3)["status"], "partial")
+        self.assertEqual(self._run(0, 1)["status"], "failed")       # chạy hết mà 0 cuốn đạt: không được ghi "Xong"
+        self.assertEqual(self._run(0, 0, "failed")["status"], "failed")
+
+    def test_terminal_only_partial_has_no_retry(self):
+        item = self._run(2, 3, retryable=False)
+        self.assertEqual(item["status"], "partial")
+        self.assertFalse(item["retryable"])
 
 
 class SameBookTest(unittest.TestCase):
@@ -139,3 +145,26 @@ class SameBookTest(unittest.TestCase):
             self.assertEqual(items[0]["params"]["pages"], ["m03", "m07"])    # gộp trang, không vẽ trùng
             self.assertTrue(items[2]["params"]["redo_previews"])
             self.assertEqual(tasks.started, [])                      # chưa chạy gì khi batch khác đang chạy
+
+
+class StaleWaitingItemTest(unittest.TestCase):
+    def test_item_that_becomes_invalid_does_not_block_queue_forever(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tasks = FakeTasks()
+            blocked = {"bad": False}
+
+            def build(params):
+                if params["keyword"] == "bad" and blocked["bad"]:
+                    raise ValueError("Cuốn đã bị loại vì TM")
+                return ["run", params["keyword"]], "d"
+
+            q = BatchQueue(tasks, Path(tmp) / "q.json", build, lambda p: (1, 1, False))
+            tasks.tasks["x"] = FakeTask("run")
+            q.add({"keyword": "bad"})
+            q.add({"keyword": "good"})
+            blocked["bad"] = True
+            tasks.tasks["x"].status = "success"
+            q.tick()
+            self.assertEqual(q.snapshot()["items"][0]["status"], "failed")
+            q.tick()
+            self.assertEqual(tasks.started, ["good"])

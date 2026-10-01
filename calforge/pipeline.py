@@ -128,7 +128,7 @@ def _status(concept_dir: Path, **kw) -> dict:
     f = layout.status_file(concept_dir)
     st = json.loads(f.read_text(encoding="utf-8")) if f.exists() else {}
     if kw.get("ok"):  # bước đã qua: xoá lỗi của lần chạy trước để status không báo sai
-        for stale in ("reason", "failed", "issues"):
+        for stale in ("reason", "failed", "issues", "terminal"):
             if stale not in kw:
                 st.pop(stale, None)
     st.update(kw, updated=time.strftime("%Y-%m-%d %H:%M:%S"))
@@ -445,12 +445,13 @@ def batch_report(kdir: Path, batch: dict) -> list[dict]:
         except (OSError, json.JSONDecodeError):
             pass
         rows.append({"concept": rel, "title": title, "ok": _finished_ok(cdir), "stage": st.get("stage", "chưa chạy"),
+                     "terminal": bool(st.get("terminal")),
                      "reason": st.get("reason") or st.get("note") or "", "updated": st.get("updated", "")})
     for aid in batch.get("failed_ideas", []):
-        rows.append({"concept": aid, "title": aid, "ok": False, "stage": "ideation",
+        rows.append({"concept": aid, "title": aid, "ok": False, "stage": "ideation", "terminal": False,
                      "reason": "concept không qua kiểm tra sau các vòng sửa", "updated": ""})
     for err in batch.get("errors", []):
-        rows.append({"concept": "", "title": "(lên ý tưởng)", "ok": False, "stage": "ideation", "reason": err,
+        rows.append({"concept": "", "title": "(lên ý tưởng)", "ok": False, "stage": "ideation", "terminal": False, "reason": err,
                      "updated": ""})
     done = sum(r["ok"] for r in rows)
     md = [f"# Báo cáo batch {kdir.name}", "",
@@ -581,12 +582,15 @@ def _run_locked(keyword, cfg, kdir, pick, auto_pick, product, resume, backend, c
         batch = None            # batch dở của loại lịch khác: không làm tiếp nhầm loại, mở batch mới
     if batch and batch.get("finished") and resume:
         # "Làm nốt phần thiếu": mở lại batch đã kết thúc để làm các cuốn hỏng/thiếu, KHÔNG mở batch N cuốn mới
-        missing = batch["target"] - sum(1 for rel in batch["concepts"] if _finished_ok(kdir / rel))
+        retryable = sum(1 for rel in batch["concepts"]
+                        if not _finished_ok(kdir / rel) and not _read_status(kdir / rel).get("terminal"))
+        shortage = max(0, batch["target"] - len(batch["concepts"]))
+        missing = retryable + shortage
         if missing > 0:
             batch["finished"] = ""
-            on_event(f"▶ Làm nốt batch trước: còn {missing}/{batch['target']} cuốn chưa xong")
+            on_event(f"▶ Làm nốt batch trước: còn {missing} phần có thể làm tiếp")
         else:
-            on_event("▶ Batch trước đã đủ cuốn - không còn gì để làm nốt")
+            on_event("▶ Batch trước không còn phần nào có thể làm tiếp (cuốn TM/bản quyền đã bị loại)")
             return batch_report(kdir, batch)
     if batch and not batch.get("finished"):
         on_event(f"▶ Tiếp tục batch dở: {len(batch['concepts'])}/{batch['target']} cuốn đã có ý tưởng")

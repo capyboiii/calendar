@@ -152,20 +152,24 @@ h3 { font-size: 1.05rem; font-weight: 600; }
 .style-kind > span:last-child { min-width: 0; }
 .style-sample {
   display: none;
-  flex: 0 0 64px;
-  width: 64px;
-  height: 64px;
+  flex: 0 0 78px;
+  width: 78px;
+  height: 78px;
   overflow: hidden;
   border-radius: 9px;
   background: var(--surface-2);
   border: 1px solid color-mix(in srgb, var(--line) 80%, transparent);
   box-shadow: 0 2px 7px rgba(34, 32, 28, .12);
+  cursor: zoom-in;
+  transition: transform .15s, box-shadow .15s;
 }
 .style-sample.has-image { display: flex; }
+.style-sample.has-image:hover { transform: scale(1.04); box-shadow: 0 5px 14px rgba(34, 32, 28, .2); }
+.style-sample:focus-visible { outline: 3px solid color-mix(in srgb, var(--primary) 40%, transparent); outline-offset: 2px; }
 .style-sample img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .style-sample-random img { width: 33.333%; flex: 1 1 0; object-position: center; }
 @media (max-width: 620px) {
-  .style-sample { flex-basis: 56px; width: 56px; height: 56px; }
+  .style-sample { flex-basis: 64px; width: 64px; height: 64px; }
 }
 .kind-tag { padding: 0 14px 12px; font-size: .8rem; color: var(--muted); }
 .start-row { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 22px; align-items: flex-end; }

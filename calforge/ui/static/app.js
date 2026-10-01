@@ -174,9 +174,12 @@ function renderStyleSamples() {
     if (!box) return;
     box.replaceChildren();
     box.classList.toggle('has-image', !!samples[family]);
+    box.tabIndex = samples[family] ? 0 : -1;
+    box.title = samples[family] ? 'Bấm để xem ảnh mẫu lớn' : '';
     if (samples[family]) {
       const img = document.createElement('img');
       img.src = thumbUrl(samples[family], 160);
+      img.dataset.full = thumbUrl(samples[family], 1600);
       img.alt = '';
       img.loading = 'lazy';
       box.appendChild(img);
@@ -190,11 +193,35 @@ function renderStyleSamples() {
     if (!samples[family]) return;
     const img = document.createElement('img');
     img.src = thumbUrl(samples[family], 100);
+    img.dataset.full = thumbUrl(samples[family], 1600);
     img.alt = '';
     img.loading = 'lazy';
     random.appendChild(img);
   });
   random.classList.toggle('has-image', random.childElementCount > 0);
+  random.tabIndex = random.childElementCount ? 0 : -1;
+  random.title = random.childElementCount ? 'Bấm vào từng ảnh để xem lớn' : '';
+
+  document.querySelectorAll('.style-sample.has-image').forEach((box) => {
+    const open = (img) => {
+      if (!img) return;
+      $('lightboxImg').src = img.dataset.full;
+      $('lightbox').hidden = false;
+    };
+    box.onclick = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const radio = box.closest('.style-kind').querySelector('input[name="family"]');
+      radio.checked = true;
+      radio.dispatchEvent(new Event('change', { bubbles: true }));
+      open(event.target.closest('img') || box.querySelector('img'));
+    };
+    box.onkeydown = (event) => {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      event.preventDefault();
+      box.click();
+    };
+  });
 }
 
 async function loadAccounts() {
@@ -323,8 +350,8 @@ function renderQueue() {
       : i.status === 'partial' ? '<span class="tag part">Xong một phần</span>'
         : i.status === 'stopped' ? '<span class="tag">Đã dừng</span>' : '<span class="tag bad">Lỗi</span>';
     li.innerHTML = `${tag} ${label(i)}<span class="grow"></span>
-      <span class="muted">${esc(res)}${res ? ' · ' : ''}${esc((i.finished_at || '').slice(5, 16))}</span>`;
-    if (i.status !== 'done' || (i.total && i.ok < i.total)) {
+      <span class="muted">${esc(i.error || res)}${(i.error || res) ? ' · ' : ''}${esc((i.finished_at || '').slice(5, 16))}</span>`;
+    if ((i.status !== 'done' || (i.total && i.ok < i.total)) && i.retryable !== false) {
       const again = i.params.action ? 'Thử lại' : 'Làm nốt phần thiếu';
       li.appendChild(button(again, 'btn-small btn-accent', async () => {
         try {
@@ -402,15 +429,17 @@ function finishTask(status) {
   $('btnStart').disabled = false;
   loadProjects().then(() => {
     const proj = S.projects.find((p) => p.keyword === slug(kw));
-    const rows = ((proj && proj.batch) || {}).report || [];
+    const batch = (proj && proj.batch) || {};
+    const rows = batch.report || [];
     const ok = rows.filter((r) => r.ok).length;
+    const total = Number(batch.target) || rows.length;
     if (single && status === 'success') toast(`Xong "${single.title || ''}".`, 'success', 8000);
     else if (single && status !== 'stopped') {
       toast(`"${single.title || ''}" chưa xong - mở cuốn đó xem lý do, hoặc bấm Thử lại ở Hàng đợi.`, 'error', 12000);
     } else if (status === 'stopped' && S.queue.paused) toast('Đã tạm dừng hàng đợi. Bấm Tiếp tục để làm tiếp.', 'info', 8000);
     else if (status === 'stopped') toast('Đã dừng batch này. Hàng đợi (nếu có) chạy batch kế tiếp.', 'info', 8000);
-    else if (rows.length && ok === rows.length) toast(`Xong! ${ok} cuốn lịch "${kw}" đã sẵn sàng.`, 'success', 10000);
-    else if (rows.length) toast(`Xong ${ok}/${rows.length} cuốn. Cuốn lỗi có ghi lý do và nút "Làm tiếp".`, 'info', 12000);
+    else if (rows.length && ok === total) toast(`Xong! ${ok} cuốn lịch "${kw}" đã sẵn sàng.`, 'success', 10000);
+    else if (rows.length) toast(`Xong ${ok}/${total} cuốn. Mở cuốn chưa đạt để xem lý do và thao tác phù hợp.`, 'info', 12000);
     else if (status === 'success') toast('Đã xong.', 'success');
     else toast('Có lỗi khi chạy. Mở "Chi tiết" hoặc thử lại.', 'error', 10000);
   });
@@ -580,8 +609,9 @@ function renderBook(c, keyword) {
     a.appendChild(button('Làm tiếp', 'btn-accent', () => continueBook(c)));
   }
   if ((c.pdfs || []).length) {            // đã có trang in: làm lại mockup không cần ChatGPT
-    a.appendChild(button('Làm lại ảnh quảng cáo', '', () => finishBook(c, true)));
+    if (state !== 'rejected') a.appendChild(button('Làm lại ảnh quảng cáo', '', () => finishBook(c, true)));
   }
+  $('btnRedo').hidden = state === 'rejected';
   loadBookPages(c);
   const L = c.listing || {};
   const lb = $('bookListing');
@@ -845,7 +875,7 @@ function shopExported(book) {
 
 async function openShopPicker(format = 'printify') {
   SHOP.format = format;
-  const label = format === 'calendaria' ? 'Calendaria' : 'Printify';
+  const label = format === 'calendaria' ? 'Crayonahub' : 'Printify';
   $('shopTitle').textContent = `Chọn cuốn xuất CSV ${label}`;
   $('shopModal').hidden = false;
   $('shopFilter').value = '';

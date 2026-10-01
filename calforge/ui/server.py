@@ -249,14 +249,17 @@ def run_args(params: dict) -> tuple[list[str], str]:
     kind = params.get("action") or "run"
     if kind == "produce":
         target = _book_arg(params)
+        _reject_terminal_book(target)
         return ["produce", str(target), "--no-printify"], f"Làm tiếp: {target.name}"
     if kind == "finish":
         target = _book_arg(params)
+        _reject_terminal_book(target)
         args = ["finish", str(target)] + (["--redo-previews"] if params.get("redo_previews") else [])
         return args, (f"Làm lại ảnh quảng cáo: {target.name}" if params.get("redo_previews")
                       else f"Hoàn thiện: {target.name}")
     if kind == "redo":
         target = _book_arg(params)
+        _reject_terminal_book(target)
         pages = [p for p in (params.get("pages") or []) if isinstance(p, str)]
         if not pages:
             raise ValueError("Chưa chọn trang nào để vẽ lại.")
@@ -289,20 +292,43 @@ def run_args(params: dict) -> tuple[list[str], str]:
     return cmd_args, desc
 
 
-def _batch_result(params: dict) -> tuple[int, int]:
-    """(số cuốn đạt, tổng) theo báo cáo batch gần nhất của chủ đề đó; việc một cuốn thì theo status của cuốn."""
+def _reject_terminal_book(target: Path) -> None:
+    """Cuốn đã bị loại do TM/bản quyền là trạng thái cuối: mọi nút chạy lại đều phải từ chối."""
+    try:
+        st = json.loads(layout.status_file(target).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    if st.get("terminal"):
+        raise ValueError(st.get("reason") or "Cuốn này đã bị loại và không thể chạy lại.")
+
+
+def _batch_result(params: dict) -> tuple[int, int, bool]:
+    """(số đạt, tổng, còn việc có thể làm lại) cho hàng đợi."""
     if (params.get("action") or "run") != "run":
         try:
             st = json.loads(layout.status_file(_book_arg(params)).read_text(encoding="utf-8"))
         except (OSError, ValueError):
-            return 0, 1
-        return (1 if st.get("ok") and st.get("stage") in ("listing", "printify") else 0), 1
+            return 0, 1, True
+        ok = bool(st.get("ok") and st.get("stage") in ("listing", "printify"))
+        return (1 if ok else 0), 1, bool(not ok and not st.get("terminal"))
     from ..ideation.pipeline import slugify
     cfg = config.load()
     kdir = products.root(cfg["projects_dir"], params.get("product") or products.DEFAULT) / slugify(params["keyword"])
     b = _read_batch(kdir) or {}
     rows = b.get("report") or []
-    return sum(1 for r in rows if r.get("ok")), int(b.get("target") or len(rows))
+    target = int(b.get("target") or len(rows))
+    concepts = list(b.get("concepts") or [])
+    retryable = len(concepts) < target
+    for rel in concepts:
+        try:
+            st = json.loads(layout.status_file(kdir / rel).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            retryable = True
+            continue
+        done = bool(st.get("ok") and st.get("stage") in ("listing", "printify"))
+        if not done and not st.get("terminal"):
+            retryable = True
+    return sum(1 for r in rows if r.get("ok")), target, retryable
 
 
 _QUEUE = None
