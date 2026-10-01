@@ -9,7 +9,7 @@ from unittest import mock
 from PIL import Image
 
 from calforge import layout
-from calforge.publish import r2, shop_csv
+from calforge.publish import calendaria_csv, r2, shop_csv
 
 
 class FakeS3:
@@ -113,6 +113,36 @@ class ShopCsvTest(unittest.TestCase):
     def test_missing_keys_is_clear_error(self):
         with self.assertRaises(r2.R2Error):
             r2.settings({"r2": {"bucket": "b"}})
+
+    def test_calendaria_csv_matches_import_template(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cat = make_book(root, "cats", "Cat Days")
+            cfg = {"projects_dir": str(root), "r2": {"account_id": "a", "access_key_id": "k",
+                    "secret_access_key": "s", "bucket": "b", "public_url": "https://cdn.x.com/"}}
+            s3 = FakeS3()
+            with mock.patch.object(r2, "client", lambda _r2: s3):
+                result = calendaria_csv.publish_all(cfg, on_event=lambda *_: None, only=[cat])
+            with open(result["csv"], encoding="utf-8-sig", newline="") as stream:
+                reader = csv.DictReader(stream)
+                rows = list(reader)
+                self.assertEqual(reader.fieldnames, calendaria_csv.HEADER)
+            variants = [row for row in rows if row["Variant SKU"]]
+            images = [row for row in rows if not row["Variant SKU"]]
+            self.assertEqual(len(variants), 5)
+            self.assertEqual([row["Option2 Value"] for row in variants],
+                             ["Spiral", "Printable", "Spiral", "Spiral", "Printable"])
+            self.assertEqual(variants[0]["Option3 Name"], "Paper")
+            self.assertEqual([row["Option3 Value"] for row in variants],
+                             ["Matte", "N/A", "Matte", "Glossy", "N/A"])
+            self.assertEqual([row["Variant Price"] for row in variants],
+                             ["29.95", "7.95", "39.95", "42.95", "7.95"])
+            self.assertEqual(variants[0]["Product Category"], "Calendaria")
+            self.assertEqual(variants[0]["Title"], "Cat Days 2027 Wall Calendar | Gift")
+            self.assertEqual(variants[1]["Variant File"].endswith("/in_tai_nha_11x8.5.pdf"), True)
+            self.assertTrue(all(not row["Variant Design"] for row in rows))
+            self.assertEqual(len(images), 4)
+            self.assertTrue(all(row["Image Src"] for row in images))
 
 
 if __name__ == "__main__":

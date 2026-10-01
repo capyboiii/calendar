@@ -228,6 +228,8 @@ def _shop_books() -> list[dict]:
             "product": products.product_id(concept), "cover": _vrel(previews[0]) if previews else "",
             "pushed_at": st.get("pushed_at", ""), "exported_at": st.get("exported_at", ""),
             "exported_csv": st.get("exported_csv", ""),
+            "calendaria_exported_at": st.get("calendaria_exported_at", ""),
+            "calendaria_exported_csv": st.get("calendaria_exported_csv", ""),
             "done_at": time.strftime("%Y-%m-%d %H:%M", time.localtime(layout.status_file(b).stat().st_mtime)),
         })
     out.sort(key=lambda x: x["done_at"], reverse=True)
@@ -476,6 +478,10 @@ class StudioHandler(SimpleHTTPRequestHandler):
 
             elif action == "shop":
                 cmd_args = ["shop"]
+                export_format = params.get("format", "printify")
+                if export_format not in ("printify", "calendaria"):
+                    return self._send_json({"error": "Định dạng CSV không hợp lệ"}, status=HTTPStatus.BAD_REQUEST)
+                cmd_args += ["--format", export_format]
                 books = params.get("books")
                 if books is not None:
                     root = (ROOT / config.load()["projects_dir"]).resolve()

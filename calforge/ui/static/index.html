@@ -126,7 +126,8 @@
         <span class="count" id="bookCount"></span>
         <span class="grow"></span>
         <button class="btn btn-small btn-ghost" id="btnR2Settings">Khoá R2</button>
-        <button class="btn btn-small btn-primary" id="btnShop">Đẩy R2 + xuất CSV</button>
+        <button class="btn btn-small btn-ghost" id="btnShop">Đẩy R2 + CSV Printify</button>
+        <button class="btn btn-small btn-primary" id="btnCalendaria">Đẩy R2 + CSV Calendaria</button>
       </div>
       <p class="hint" id="shopResult" hidden></p>
       <div class="notice" id="unfinishedNotice" hidden>
@@ -206,7 +207,7 @@
   <div class="modal" id="shopModal" hidden>
     <div class="modal-card wide">
       <button class="modal-x" data-close aria-label="Đóng">✕</button>
-      <h2>Chọn cuốn đưa lên web</h2>
+      <h2 id="shopTitle">Chọn cuốn đưa lên web</h2>
       <p class="lead">Máy đẩy ảnh + file của các cuốn đã chọn lên R2, rồi xuất 1 file CSV gồm đúng các cuốn đó.</p>
       <div class="shop-tools">
         <button class="btn btn-small btn-ghost" data-pick="new">Chọn cuốn chưa xuất</button>

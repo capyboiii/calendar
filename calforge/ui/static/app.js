@@ -65,21 +65,22 @@ function bindEvents() {
   $('btnBulkGo').addEventListener('click', startBulkLogin);
   $('btnR2Settings').addEventListener('click', openR2);
   $('btnR2Save').addEventListener('click', saveR2);
-  $('btnShop').addEventListener('click', openShopPicker);
+  $('btnShop').addEventListener('click', () => openShopPicker('printify'));
+  $('btnCalendaria').addEventListener('click', () => openShopPicker('calendaria'));
   $('btnShopGo').addEventListener('click', () => {
     const books = [...SHOP.picked];
     $('shopModal').hidden = true;
-    runShop(books);
+    runShop(books, SHOP.format);
   });
   $('shopFilter').addEventListener('input', renderShopBooks);
   document.querySelectorAll('[data-pick]').forEach((b) => b.addEventListener('click', () => {
     const mode = b.dataset.pick;
     const shown = shopVisible();
     if (mode === 'none') shown.forEach((x) => SHOP.picked.delete(x.path));
-    else shown.forEach((x) => { if (mode === 'all' || !x.exported_at) SHOP.picked.add(x.path); });
+    else shown.forEach((x) => { if (mode === 'all' || !shopExported(x)) SHOP.picked.add(x.path); });
     if (mode === 'new') {
-      shown.forEach((x) => { if (x.exported_at) SHOP.picked.delete(x.path); });
-      const n = shown.filter((x) => !x.exported_at).length;
+      shown.forEach((x) => { if (shopExported(x)) SHOP.picked.delete(x.path); });
+      const n = shown.filter((x) => !shopExported(x)).length;
       toast(n ? `Đã chọn ${n} cuốn chưa xuất.` : 'Không có cuốn nào chưa xuất: mọi cuốn đều đã xuất CSV rồi.', 'info');
     }
     renderShopBooks();
@@ -774,9 +775,16 @@ async function saveR2() {
 }
 
 // ---- Chọn cuốn đẩy R2 + xuất CSV -----------------------------------------------------------------------------
-const SHOP = { books: [], picked: new Set() };
+const SHOP = { books: [], picked: new Set(), format: 'printify' };
 
-async function openShopPicker() {
+function shopExported(book) {
+  return SHOP.format === 'calendaria' ? book.calendaria_exported_at : book.exported_at;
+}
+
+async function openShopPicker(format = 'printify') {
+  SHOP.format = format;
+  const label = format === 'calendaria' ? 'Calendaria' : 'Printify';
+  $('shopTitle').textContent = `Chọn cuốn xuất CSV ${label}`;
   $('shopModal').hidden = false;
   $('shopFilter').value = '';
   $('shopBooks').innerHTML = '<p class="empty">Đang tải…</p>';
@@ -786,7 +794,7 @@ async function openShopPicker() {
     $('shopBooks').innerHTML = `<p class="empty">${esc(err.message)}</p>`;
     return;
   }
-  SHOP.picked = new Set(SHOP.books.filter((b) => !b.exported_at).map((b) => b.path));   // mặc định: cuốn mới
+  SHOP.picked = new Set(SHOP.books.filter((b) => !shopExported(b)).map((b) => b.path));
   renderShopBooks();
 }
 
@@ -813,7 +821,8 @@ function renderShopBooks() {
     }
     const row = document.createElement('label');
     row.className = 'shop-book';
-    const state = b.exported_at ? `<span class="tag">Đã xuất ${esc(b.exported_at.slice(5, 16))}</span>`
+    const exportedAt = shopExported(b);
+    const state = exportedAt ? `<span class="tag">Đã xuất ${esc(exportedAt.slice(5, 16))}</span>`
       : b.pushed_at ? '<span class="tag">Đã đẩy R2, chưa xuất CSV</span>' : '<span class="tag new">Mới</span>';
     row.innerHTML = `<input type="checkbox" ${SHOP.picked.has(b.path) ? 'checked' : ''}>
       ${b.cover ? `<img src="${thumbUrl(b.cover, 120)}" alt="" loading="lazy">` : '<img alt="">'}
@@ -829,20 +838,20 @@ function renderShopBooks() {
 
 function updateShopPicked() {
   const n = SHOP.picked.size;
-  const again = SHOP.books.filter((b) => SHOP.picked.has(b.path) && b.exported_at).length;
+  const again = SHOP.books.filter((b) => SHOP.picked.has(b.path) && shopExported(b)).length;
   $('shopPicked').textContent = n ? `Đã chọn ${n} cuốn${again ? ` (${again} cuốn đã xuất trước đây, sẽ xuất lại)` : ''}` : 'Chưa chọn cuốn nào';
   $('btnShopGo').disabled = !n;
   $('btnShopGo').textContent = n ? `Đẩy R2 + xuất CSV (${n} cuốn)` : 'Đẩy R2 + xuất CSV';
 }
 
-async function runShop(books) {
-  const btn = $('btnShop');
+async function runShop(books, format = 'printify') {
+  const btn = format === 'calendaria' ? $('btnCalendaria') : $('btnShop');
   btn.disabled = true;
   const box = $('shopResult');
   box.hidden = false;
   box.textContent = 'Đang đẩy lên R2…';
   try {
-    const data = await api('/api/action', { action: 'shop', params: books ? { books } : {} });
+    const data = await api('/api/action', { action: 'shop', params: { books, format } });
     const poll = setInterval(async () => {
       const t = await api(`/api/task?id=${data.task_id}`).catch(() => null);
       if (!t) return;

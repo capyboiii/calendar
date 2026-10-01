@@ -266,7 +266,10 @@ def cmd_printify(args, cfg):
 
 def cmd_shop(args, cfg):
     from .publish.r2 import R2Error
-    from .publish.shop_csv import publish_all
+    if args.format == "calendaria":
+        from .publish.calendaria_csv import publish_all
+    else:
+        from .publish.shop_csv import publish_all
 
     try:
         only = [Path(b) for b in args.book] if args.book else None
@@ -426,6 +429,7 @@ def main(argv=None):
 
     p = sub.add_parser("shop", help="đẩy các cuốn đã xong lên R2 + xuất CSV sản phẩm cho cuốn chưa xuất")
     p.add_argument("--book", action="append", help="chỉ cuốn này (thư mục cuốn, lặp lại được); bỏ trống = mọi cuốn")
+    p.add_argument("--format", choices=("printify", "calendaria"), default="printify", help="mẫu CSV cần xuất")
     p.set_defaults(func=cmd_shop)
 
     p = sub.add_parser("ui", help="mở giao diện web CalForge Studio")
