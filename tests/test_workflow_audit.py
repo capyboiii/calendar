@@ -91,7 +91,7 @@ class WorkflowAuditTest(unittest.TestCase):
             with open(selected["csv"], encoding="utf-8-sig", newline="") as stream:
                 rows = list(csv.DictReader(stream))
             variants = [row for row in rows if row["Variant SKU"]]
-            self.assertEqual(len(variants), 5)
+            self.assertEqual(len(variants), 4)
             self.assertTrue(all(all(row[f"Option{i} Value"] for i in range(1, 4)) for row in variants))
 
 

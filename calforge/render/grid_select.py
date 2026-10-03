@@ -20,6 +20,7 @@ FAMILY_HINT = {
     "mid_century_retro": "playful_editorial",
     "papercut_collage": "organic_capsules",
     "styled_photography": "quiet_luxury",
+    "anime_illustration": "playful_editorial",
 }
 
 

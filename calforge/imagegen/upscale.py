@@ -85,13 +85,18 @@ def upscale_to(src: Path, dst: Path, min_w: int, min_h: int, texture_mix: float 
             img.save(dst)
         return {"engine": "không cần phóng", "scale": 1.0}
     used = engine()
+    big = None
     if _model() is not None and not has_alpha:
-        big = _esrgan_x4(img).resize(target, Image.LANCZOS)
-        if texture_mix > 0:
-            soft = img.resize(target, Image.LANCZOS)
-            big = Image.blend(big, soft, texture_mix)
-            used += f", trộn {texture_mix:.0%} Lanczos giữ vân giấy"
-    else:
+        try:
+            big = _esrgan_x4(img).resize(target, Image.LANCZOS)
+            if texture_mix > 0:
+                soft = img.resize(target, Image.LANCZOS)
+                big = Image.blend(big, soft, texture_mix)
+                used += f", trộn {texture_mix:.0%} Lanczos giữ vân giấy"
+        except Exception as e:  # noqa: BLE001 - GPU hết bộ nhớ / driver lỗi: làm nét cách thường, không hỏng cuốn
+            big = None
+            used = f"Lanczos (GPU lỗi: {type(e).__name__})"
+    if big is None:                                     # không có GPU / ảnh có nền trong suốt / GPU vừa lỗi
         big = img.resize(target, Image.LANCZOS).filter(ImageFilter.UnsharpMask(radius=2, percent=70, threshold=3))
         used = "Lanczos" if has_alpha else used
     if Path(dst).suffix.lower() in (".jpg", ".jpeg"):   # ảnh in: JPG q95 không lấy mẫu màu thấp, nhẹ ~5 lần PNG

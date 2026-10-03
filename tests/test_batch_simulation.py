@@ -261,6 +261,8 @@ class Sim:
             (pdir / n).mkdir(parents=True)
         self.pool = AccountPool(pdir, names, cap=cap, launch_gap_s=0)
         self.pool.rest_s = 0.3
+        self.pool.throttle_window_s, self.pool.throttle_hold_s = 0.5, 0.3     # thời gian nén như rest_s
+        self.pool._notify = lambda msg: None
         self.world = World(seed, self.pool, **world_kw)
         self.cfg = {"projects_dir": str(root / "projects"), "profiles_dir": str(pdir), "year": 2027, "market": "US",
                     "angles_per_keyword": 1, "max_repairs": 2, "auto_pick": 1,
@@ -280,10 +282,10 @@ class Sim:
             import json as _j
             from calforge import products as _p
             concept = _j.loads(layout.concept_file(cdir).read_text(encoding="utf-8"))
-            if _p.ai_mockups(concept):                       # "AI gen mockup": code ghép 4 ảnh rồi AI dựng bối cảnh (THẬT)
+            if _p.ai_mockups(concept):                       # "AI gen mockup": code ghép 5 ảnh rồi AI dựng bối cảnh (THẬT)
                 layout.listing(cdir).mkdir(parents=True, exist_ok=True)
                 for name in ("01_front_cover_spiral", "02_open_spread_flat", "03_three_open_spreads",
-                             "05_wall_page_turn"):
+                             "04_two_wall_spreads", "06_three_books"):
                     f = layout.listing(cdir) / f"{name}.jpg"
                     if not f.exists():
                         Image.new("RGB", (1600, 1067), "gray").save(f)
@@ -293,6 +295,7 @@ class Sim:
 
         patches = [
             mock.patch.object(poolmod, "get_pool", lambda cfg=None: self.pool),
+            mock.patch.object(poolmod, "peek_pool", lambda: self.pool),
             mock.patch.object(pipeline.config, "make_backend", lambda cfg: FakeBackend(w)),
             mock.patch.object(catalog, "family_quota", lambda *a, **k: None),
             mock.patch.object(driver, "_Worker", make_worker(w)),
@@ -469,7 +472,8 @@ class AiMockupBatchSimulationTest(unittest.TestCase):
                 for b in sim.books("koi"):
                     names = sorted(p.stem for p in layout.listing(b).glob("*.jpg"))
                     self.assertEqual(names, ["01_front_cover_spiral", "02_open_spread_flat",
-                                             "03_three_open_spreads", "05_wall_page_turn"])   # 4 ảnh, không có 04
+                                             "03_three_open_spreads", "04_two_wall_spreads",
+                                             "06_three_books"])                            # 5 ảnh, không có 05
                     res = sim.mockup_results.get(b.name) or {}
                     st = _j.loads(layout.tech(b, "mockup_ai.json").read_text(encoding="utf-8"))                         if layout.tech(b, "mockup_ai.json").exists() else {}
                     for n in res.get("ai", []):                                 # ảnh AI ghi nhận đúng

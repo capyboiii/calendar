@@ -234,6 +234,9 @@ class NoAccountLeft(RuntimeError):
     """Mọi tài khoản đều hết lượt / không mở được: batch nên CHỜ rồi thử lại, không coi là hỏng."""
 
 
+MAX_REQUEST_ACCOUNTS = 5
+
+
 class _RotatingChat:
     """Phiên chat xoay vòng tài khoản: tài khoản đang dùng hết lượt / không mở được thì tự sang
     tài khoản kế tiếp và hỏi lại câu đó (prompt của pipeline tự đủ ngữ cảnh nên hỏi lại được)."""
@@ -246,7 +249,9 @@ class _RotatingChat:
         self.chat: _WebChat | None = None
         self.profile = None
         self.failed: set[str] = set()                        # không mở được trong phiên này
-        self.max_request_accounts = len(self.order)          # một prompt lỗi phản hồi chỉ thử mỗi tài khoản 1 lần
+        # một prompt lỗi phản hồi chỉ thử mỗi tài khoản 1 lần, và không quá MAX_REQUEST_ACCOUNTS tài khoản (có 40 tài
+        # khoản cũng không đem một prompt hỏng đi thử cả 40)
+        self.max_request_accounts = min(len(self.order), MAX_REQUEST_ACCOUNTS)
 
     def _open_next(self, exclude: set[str] | None = None) -> None:
         """Mượn tài khoản kế tiếp qua bộ điều phối (không đụng tài khoản đang vẽ / đang nghỉ chat) và mở chat.
@@ -263,13 +268,13 @@ class _RotatingChat:
                 self.order.remove(name)
                 self.order.append(name)                     # lần sau bắt đầu từ tài khoản khác
                 udir = self.backend.profiles_dir / name
+                self.profile = name                         # đã mượn: mở Chrome hỏng thì close() phải TRẢ lại
                 try:
                     from .browser import launch_options
                     with pool.launch_gate():
                         self.ctx = self.pw.chromium.launch_persistent_context(
                             user_data_dir=str(udir), channel="chrome", viewport={"width": 1400, "height": 950},
                             **launch_options(self.backend.headless))
-                    self.profile = name
                     page = self.ctx.pages[0] if self.ctx.pages else self.ctx.new_page()
                     if self.backend.headless in ("hidden", None):
                         from .browser import hide_offscreen_from_taskbar
@@ -284,9 +289,24 @@ class _RotatingChat:
                     print(f"[chat] dùng tài khoản {name}")
                     return
                 except Exception as e:  # noqa: BLE001 - chưa đăng nhập / profile hỏng: không thử lại trong phiên
-                    print(f"[chat] bỏ qua {name}: {str(e)[:120]}")
                     self.failed.add(name)
-                    pool.rest(name, CHAT, 600, f"không mở được Chrome: {e}")
+                    kind = ""
+                    try:                                   # trang hiện màn hình đăng nhập / báo bị khoá = tài khoản chết
+                        from ..imagegen.driver import account_state
+                        pg = self.ctx.pages[0] if self.ctx and self.ctx.pages else None
+                        kind = account_state(pg)[0] if pg is not None else ""
+                    except Exception:  # noqa: BLE001
+                        kind = ""
+                    if kind:
+                        pool.drop(name, kind, str(e))
+                        print(f"[chat] ✘ TÀI KHOẢN CHẾT: {name} "
+                              + ("bị khoá - cần thay tài khoản" if kind == "banned" else
+                                 "bị đăng xuất, giao diện là màn hình đăng nhập - cần đăng nhập lại")
+                              + ". Đã bỏ khỏi batch")
+                    else:
+                        print(f"[chat] bỏ qua {name}: {str(e)[:120]}")
+                        pool.rest(name, CHAT, 600, f"không mở được Chrome: {e}")
+                        pool.trouble(name, f"chat không mở được: {e}")
                     self.close()
             usable = [n for n in self.order if n not in self.failed and n not in exclude]
             if not usable or all(pool._resting(n, CHAT) for n in usable):
@@ -311,6 +331,7 @@ class _RotatingChat:
             except SendFailed as e:
                 response_failed.add(self.profile)
                 print(f"[chat] {self.profile} không gửi được tin nhắn ({str(e)[:80]}) - chuyển tài khoản")
+                self._drop_if_dead(str(e))
                 self.close()
                 if len(response_failed) >= self.max_request_accounts:
                     raise RuntimeError(f"[{label}] Tất cả {self.max_request_accounts} tài khoản đều không trả lời đọc được") from e
@@ -319,9 +340,37 @@ class _RotatingChat:
                 # đóng tab và gửi lại nguyên prompt trên tài khoản kế tiếp.
                 response_failed.add(self.profile)
                 print(f"[chat] {self.profile} chờ phản hồi quá lâu ({str(e)[:80]}) - chuyển tài khoản")
+                self._drop_if_dead(str(e))
                 self.close()
                 if len(response_failed) >= self.max_request_accounts:
                     raise RuntimeError(f"[{label}] Tất cả {self.max_request_accounts} tài khoản đều timeout phản hồi") from e
+            except Exception as e:  # noqa: BLE001 - Chrome sập giữa chừng, ô chat bị che, trang đổi DOM...
+                # Lỗi của tab / tài khoản đang dùng, không phải của prompt: đóng tab, hỏi lại trên tài khoản kế tiếp.
+                response_failed.add(self.profile)
+                print(f"[chat] {self.profile} lỗi trang ({type(e).__name__}: {str(e).splitlines()[0][:80] if str(e) else ''})"
+                      " - chuyển tài khoản")
+                self._drop_if_dead(str(e))
+                self.close()
+                if len(response_failed) >= self.max_request_accounts:
+                    raise RuntimeError(f"[{label}] Tất cả {self.max_request_accounts} tài khoản đều lỗi trang: "
+                                       f"{type(e).__name__}: {str(e)[:120]}") from e
+
+    def _drop_if_dead(self, why: str) -> None:
+        """Tab vừa lỗi: nếu trang đang hiện màn hình đăng nhập / báo bị khoá thì tài khoản CHẾT -> bỏ hẳn."""
+        page = getattr(self.chat, "page", None)
+        if page is None or self.profile is None:
+            return
+        try:
+            from ..imagegen.driver import account_state
+            kind = account_state(page)[0]
+        except Exception:  # noqa: BLE001
+            return
+        if kind:
+            from .pool import get_pool
+            get_pool().drop(self.profile, kind, why)
+            print(f"[chat] ✘ TÀI KHOẢN CHẾT: {self.profile} "
+                  + ("bị khoá - cần thay tài khoản" if kind == "banned" else
+                     "bị đăng xuất, giao diện là màn hình đăng nhập - cần đăng nhập lại") + ". Đã bỏ khỏi batch")
 
     def close(self) -> None:
         if self.ctx is not None:
@@ -352,9 +401,7 @@ class ChatGPTWebBackend:
 
     def rotation_order(self) -> list[str]:
         """Bắt đầu từ tài khoản ngay sau tài khoản dùng lần trước, để việc rải đều."""
-        last = None
-        if self.state_file and self.state_file.exists():
-            last = json.loads(self.state_file.read_text(encoding="utf-8")).get("last")
+        last = self._read_state().get("last")
         if last in self.profiles:
             i = self.profiles.index(last) + 1
             return self.profiles[i:] + self.profiles[:i]
@@ -363,11 +410,26 @@ class ChatGPTWebBackend:
     def mark_used(self, name: str) -> None:
         if not self.state_file:
             return
-        st = json.loads(self.state_file.read_text(encoding="utf-8")) if self.state_file.exists() else {}
+        st = self._read_state()
         st["last"] = name
-        st.setdefault("count", {})[name] = st.get("count", {}).get(name, 0) + 1
-        self.state_file.parent.mkdir(parents=True, exist_ok=True)
-        self.state_file.write_text(json.dumps(st, indent=2), encoding="utf-8")
+        counts = st.get("count") if isinstance(st.get("count"), dict) else {}
+        counts[name] = int(counts.get(name, 0) or 0) + 1
+        st["count"] = counts
+        try:                                   # file xoay vòng chỉ để rải đều tài khoản: không ghi được cũng không sao
+            self.state_file.parent.mkdir(parents=True, exist_ok=True)
+            self.state_file.write_text(json.dumps(st, indent=2), encoding="utf-8")
+        except OSError:
+            pass
+
+    def _read_state(self) -> dict:
+        """File xoay vòng tài khoản; hỏng / cụt thì coi như chưa có (không làm sập bước lên ý tưởng)."""
+        if not self.state_file:
+            return {}
+        try:
+            st = json.loads(self.state_file.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+        return st if isinstance(st, dict) else {}
 
     @contextmanager
     def session(self, workdir: Path):

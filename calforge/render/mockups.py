@@ -105,6 +105,24 @@ MOCKUPS = {
              lines=dict(top=[(575.1, 640.9), (1124.9, 667.1)], right=[(1124.9, 664.1), (1107.5, 1099.8)],
                         bottom=[(553.8, 1069.0), (1107.5, 1099.8)], left=[(575.1, 650.9), (553.8, 1069.0)])),
     ]),
+    # 2 tờ lịch mở treo tường (chỉ dùng cho "AI gen mockup"): tờ trái tháng 1, tờ phải tháng 2. Tường sáng gần bằng
+    # giấy -> mép hình học (đo bằng gradient), lỗ treo trên/dưới đo trực tiếp, 02/10/2026.
+    "two_wall_spreads": dict(file="two_wall_spreads.webp", seam="band", metal=9, metal_thr=10, edges="geo", sheets=[
+        dict(month=1, kind="spread", lines=box((177.5, 52.5), (616, 52.5), (616, 723), (177.5, 723)),
+             through=[(397, 65.5, 5.5), (396, 709.5, 5.5)]),
+        dict(month=2, kind="spread", lines=box((672.5, 342.5), (1112, 342.5), (1112, 1009), (672.5, 1009)),
+             through=[(887.5, 354.5, 5.5), (887.5, 995.5, 5.5)]),
+    ]),
+    # 3 cuốn nằm trên nền xanh (ảnh 2000px, chỉ dùng cho "AI gen mockup"): bìa, trang lịch tháng 4 (lò xo mép trên),
+    # tranh tháng 4 (lò xo mép dưới). Góc đo theo bao lồi mặt giấy, tâm lỗ treo đo trực tiếp, 02/10/2026.
+    "three_books": dict(file="three_books.webp", edges="geo", metal=46, metal_thr=18, sheets=[
+        dict(source="front_cover", kind="page", lines=box((81, 348), (868, 236), (960, 843), (145, 966)),
+             through=[(554.2, 879.4, 12)]),
+        dict(source="m04_grid", kind="page", lines=box((1115, 286), (1926, 391), (1861, 1011), (1023, 888)),
+             through=[(1432.1, 923.2, 12)]),
+        dict(source="m04_month", kind="page", metal_edge="bottom", through=[(1017.5, 1069.5, 11)],
+             lines=box((608, 1010), (1447, 1088), (1398, 1733), (528, 1643))),
+    ]),
 }
 
 
@@ -476,6 +494,9 @@ def _save(out_path: Path, img) -> None:
 
 # 5 ảnh preview cho listing, theo thứ tự hiển thị: bìa, tờ mở, 3 tờ trên bàn, treo tường, để bàn
 PREVIEWS = ["front_cover_spiral", "open_spread_flat", "three_open_spreads", "wall_spread", "wall_page_turn"]
+# "AI gen mockup": 04 = 2 tờ treo tường (thay ảnh treo tường mở đôi), 05 lật trang bị bỏ, 06 = 3 cuốn -> vẫn 5 ảnh
+AI_MOCKUP_PREVIEWS = ["front_cover_spiral", "open_spread_flat", "three_open_spreads", "two_wall_spreads",
+                      "wall_page_turn", "three_books"]
 # lịch grid in sẵn: bìa (dùng lại), treo tường thẳng, treo tường chéo, 3 tờ trên bàn, 2 cuốn gập
 PREMADE_PREVIEWS = ["front_cover_spiral", "premade_wall_straight", "premade_wall_angled", "premade_three_spreads",
                     "premade_two_closed"]
@@ -519,8 +540,10 @@ def previews(concept_dir: Path, on_event=print) -> list[Path]:
     for i, name in enumerate(preview_names(concept), 1):
         out = out_dir / f"{i:02d}_{name}.jpg"
         if name in skipped_previews(concept):
-            out.unlink(missing_ok=True)         # chế độ AI mockup chỉ còn 4 ảnh
+            out.unlink(missing_ok=True)         # chế độ AI mockup bỏ ảnh lật trang
             continue
+        if name == "two_wall_spreads":          # cuốn làm trước 02/10: ảnh treo tường cũ ở cùng số thứ tự
+            (out_dir / f"{i:02d}_wall_spread.jpg").unlink(missing_ok=True)
         try:                                    # một tấm lỗi không chặn các tấm còn lại
             deps = _dependencies(name, pages)
             missing = [p.name for p in deps if not p.is_file()]
@@ -550,13 +573,15 @@ class PreviewError(RuntimeError):
 
 def preview_names(concept: dict) -> list[str]:
     from .. import products
+    if products.ai_mockups(concept):
+        return AI_MOCKUP_PREVIEWS
     return PREVIEWS if products.ai_grid(concept) else PREMADE_PREVIEWS
 
 
 def skipped_previews(concept: dict) -> set[str]:
-    """Preview không làm cho cuốn này (giữ số thứ tự các ảnh còn lại): AI mockup bỏ ảnh treo tường mở đôi."""
+    """Preview không làm cho cuốn này (giữ số thứ tự các ảnh còn lại): AI mockup bỏ ảnh lật trang."""
     from .. import products
-    return {"wall_spread"} if products.ai_mockups(concept) else set()
+    return {"wall_page_turn"} if products.ai_mockups(concept) else set()
 
 
 def missing_previews(concept_dir: Path) -> list[str]:

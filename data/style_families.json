@@ -1,11 +1,13 @@
 {
-  "_note": "Ba style artwork được phép cho dự án mới. P1 phải chọn đúng một style trong danh sách này; code ưu tiên style ít dùng hơn khi các phương án có chất lượng tương đương.",
+  "_note": "Bốn style artwork được phép cho dự án mới. P1 phải chọn đúng một style trong danh sách này; code ưu tiên style ít dùng hơn khi các phương án có chất lượng tương đương.",
   "families": [
     {"id": "styled_photography", "name": "Styled photography",
      "description": "photorealistic editorial still lifes or environments with believable materials and natural light; no illustrated or painterly treatment"},
     {"id": "papercut_collage", "name": "Layered papercut",
      "description": "clearly cut paper layers, tactile edges and controlled cast shadows; contemporary dimensional collage"},
     {"id": "mid_century_retro", "name": "Mid-century poster",
-     "description": "bold 1950s-60s poster geometry, simplified silhouettes and restrained screenprint texture"}
+     "description": "bold 1950s-60s poster geometry, simplified silhouettes and restrained screenprint texture"},
+    {"id": "anime_illustration", "name": "Anime illustration",
+     "description": "original Japanese-animation-inspired illustration: clean confident line art, flat cel shading with one soft shadow tone, expressive simplified shapes and luminous hand-painted backgrounds with clear skies and soft natural light; original subjects and settings only, never resembling any existing series, film, studio style or character"}
   ]
 }

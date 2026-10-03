@@ -114,6 +114,13 @@ def _artwork_lightness_rule(style: dict) -> str:
     if family == "mid_century_retro":
         return common + (" For mid-century poster, use crisp sunlit color blocking; deep inks suit outlines and "
                          "graphic accents.")
+    if family == "anime_illustration":
+        return common + (
+            " For anime illustration, use clean line art, flat cel shading with one soft shadow tone and a bright, "
+            "luminous painted background in clear daylight or warm golden light. Every subject and setting is an "
+            "original design: do not imitate or resemble any existing anime or manga series, film, studio or "
+            "character."
+        )
     return common
 
 
@@ -151,6 +158,16 @@ def _grid_text_rule(palette: dict) -> str:
     )
 
 
+# Người phụ / đám đông: AI hay "nhân bản" một khuôn mặt (kể cả mặt nhân vật chính) cho cả hậu cảnh. 03/10/2026.
+BACKGROUND_PEOPLE = (
+    "BACKGROUND PEOPLE: every person in the image is a distinct individual. Background and secondary figures "
+    "(crowds, audiences, band members, passers-by) must each have a clearly different face, age, hairstyle, skin "
+    "tone, body type, clothing and pose; never repeat or clone the main subject's face or outfit on anyone else, "
+    "and never show two identical people. If several people appear, make them read as unrelated individuals. "
+    "Prefer fewer, well-defined background figures over a large repeated crowd."
+)
+
+
 def anchor_prompt(concept: dict) -> str:
     """Ảnh neo style sạch, không chữ; mọi ảnh tháng và cover riêng bám theo."""
     st = concept["style"]
@@ -161,6 +178,7 @@ def anchor_prompt(concept: dict) -> str:
         _artwork_lightness_rule(st),
         "",
         _scene_block(concept["cover"]["scene"], _single_motif(st.get("recurring_motif", ""))),
+        BACKGROUND_PEOPLE,
         f"Collection visual rhythm (shared look, not a fixed camera setup): {_composition_system(st)}",
         PRINT_SAFETY,
         PAPER,
@@ -209,6 +227,7 @@ def cover_prompt(concept: dict, with_reference: bool = True) -> str:
         "15% and 85% of the canvas width, never pushed toward one side. Keep lettering away from the top binding "
         "strip and the bottom-center hanging hole.",
         _scene_block(cov["scene"], _single_motif(st.get("recurring_motif", ""))),
+        BACKGROUND_PEOPLE,
         f"Collection visual rhythm (shared look, not a fixed camera setup): {_composition_system(st)}",
         COVER_PRINT_SAFETY,
         PAPER,
@@ -237,6 +256,7 @@ def month_prompt(concept: dict, month: dict, with_reference: bool = True) -> str
     lines += [
         f"Shot type for this month: {shots.SHOTS[shots.month_shot(concept, month)]}",
         _scene_block(month["scene"], month.get("motif_placement", ""), month.get("composition_note", "")),
+        BACKGROUND_PEOPLE,
     ]
     if month.get("theme"):
         lines.append(f"The picture should make a viewer feel this, without any written words: {month['theme'].strip()}")

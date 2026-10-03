@@ -1,11 +1,12 @@
 """Xuất CSV theo mẫu Printify (printify-orders-template.csv, 23 cột) cho các cuốn đã đẩy lên R2.
 
-Mỗi dòng = một bản Spiral của một cuốn (khổ × finish, lọc theo "spiral_finishes": lịch tự thiết kế grid 11x8.5 Matte,
-14x11.5 Matte + Glossy; lịch grid in sẵn 11x8.5 Matte, 14x11.5 Glossy):
+Mỗi dòng = một bản Spiral của một cuốn (khổ × finish, lọc theo "spiral_finishes": mỗi khổ một loại giấy -> 2 biến thể/cuốn:
+lịch tự thiết kế grid 11x8.5 Matte, 14x11.5 Matte; lịch grid in sẵn 11x8.5 Matte, 14x11.5 Glossy):
     External ID = SKU   Label = tên cuốn   Quantity = 1   Print area front = ảnh bìa PNG khổ đó (R2)
 Sau 23 cột mẫu thêm 26 cột "Page NN <trang>" = link PNG từng trang của khổ đó (front_cover ... back_cover);
 Wall Calendar (grid in sẵn) để trống 12 cột grid (trang grid chỉ dùng cho PDF digital).
-Cuối cùng 5 cột "Preview 1..5" = ảnh quảng cáo (dùng chung mọi khổ/finish của cuốn đó).
+Rồi 5 cột "Preview 1..5" = ảnh quảng cáo (dùng chung mọi khổ/finish của cuốn đó).
+Cuối cùng 3 cột listing: "Title" (tiêu đề SEO), "Description (HTML)" (mô tả, có phần Details), "Tags".
 Các cột mẫu tool không có (người nhận, địa chỉ, Print Provider/Blueprint/Variant ID, vùng in khác) để trống.
 """
 from __future__ import annotations
@@ -26,7 +27,9 @@ TEMPLATE = ["External ID", "Label", "Shipping method", "First name", "Last name"
 # ngoài mẫu Printify: 26 trang in của khổ đó, mỗi cột một trang, đúng thứ tự cuốn lịch
 PAGE_COLS = [f"Page {i:02d} {n}" for i, n in enumerate(r2.PAGE_ORDER, 1)]
 PREVIEW_COLS = [f"Preview {i}" for i in range(1, 6)]     # 5 ảnh quảng cáo, Preview 1 = ảnh bìa
-HEADER = TEMPLATE + PAGE_COLS + PREVIEW_COLS
+# nội dung listing (giống CSV Calendaria): tiêu đề SEO, mô tả HTML (có phần Details), tag cách nhau dấu phẩy
+LISTING_COLS = ["Title", "Description (HTML)", "Tags"]
+HEADER = TEMPLATE + PAGE_COLS + PREVIEW_COLS + LISTING_COLS
 
 DEFAULT_SHOP = {
     # theo tên sản phẩm Printify: lịch tự thiết kế grid in trên bản "Blank" (tự cung cấp trang lịch),
@@ -49,9 +52,10 @@ DEFAULT_SHOP = {
         {"format": "Spiral", "finish": "Glossy", "sku": "SG", "price": 32.95, "compare": 42.95},
         {"format": "Printable", "finish": "Digital", "sku": "PD", "price": 7.95, "compare": 12.95},
     ],
-    # finish bản Spiral được bán theo loại lịch + khổ (bản Printable luôn có ở mọi khổ)
+    # finish bản Spiral được bán theo loại lịch + khổ (bản Printable luôn có ở mọi khổ). Mỗi khổ MỘT loại giấy
+    # -> mỗi cuốn đúng 2 biến thể in: 11x8.5 và 14x11.5 (người dùng chốt 03/10/2026; giữ đuôi SKU cũ cho khớp shop)
     "spiral_finishes": {
-        "wall_grid": {"11x8.5": ["Matte"], "14x11.5": ["Matte", "Glossy"]},
+        "wall_grid": {"11x8.5": ["Matte"], "14x11.5": ["Matte"]},
         "wall_premade": {"11x8.5": ["Matte"], "14x11.5": ["Glossy"]},
     },
     # hệ thống nhập CSV giới hạn 20 file design/biến thể (lịch có 26 trang) -> tạm bỏ trống cột Variant Design;
@@ -85,6 +89,8 @@ def _book_rows(cdir: Path, shop: dict) -> list[dict]:
     handle = r2.slug(listing["title"], 200)
     code = hashlib.sha1(handle.encode()).hexdigest()[:5].upper()
     initials = "".join(w[0] for w in handle.split("-")[:3]).upper()
+    # cuốn mới: SKU gốc lưu sẵn (= tên thư mục); cuốn cũ: tính từ tên như trước để SKU đã đăng bán không đổi
+    base_sku = layout.book_sku(cdir) or f"{shop['sku_prefix'].get(product, 'CAL')}-{initials}-{code}"
     rows = []
     for size in shop["sizes"]:
         label = layout.SIZE_LABEL[size["format_id"]]
@@ -96,11 +102,13 @@ def _book_rows(cdir: Path, shop: dict) -> list[dict]:
                 continue                             # chỉ bản Spiral, finish được bán ở khổ này
             row = dict.fromkeys(HEADER, "")
             row.update({
-                "External ID": f"{shop['sku_prefix'].get(product, 'CAL')}-{initials}-{code}-{size['sku']}{v['sku']}",
+                "External ID": f"{base_sku}-{size['sku']}{v['sku']}",
                 "Label": listing["title"], "Quantity": "1", "Print area front": cover,
                 **{col: (files.get(f"{label}/{n}.png") or {}).get("url", "")
                    for col, n in zip(PAGE_COLS, r2.PAGE_ORDER) if n in pages},
                 **dict(zip(PREVIEW_COLS, previews)),
+                "Title": listing["title"], "Description (HTML)": listing.get("description", ""),
+                "Tags": ", ".join(listing.get("tags", [])),
             })
             rows.append(row)
     return rows
@@ -131,18 +139,28 @@ def publish_all(cfg: dict, on_event=print, only: list[Path] | None = None) -> di
         chosen = {Path(b).resolve() for b in only}
         books = [b for b in books if b.resolve() in chosen]
     s3 = r2.client(r2.settings(cfg))
-    pushed, failed = [], []
+    pushed, failed, successful = [], [], []
     for b in books:
         try:
             before = r2.read_state(b).get("pushed_at")
             st = r2.push_book(b, cfg, on_event, s3=s3)
+            successful.append(b)
             if st.get("pushed_at") != before:
                 pushed.append(b.name)
         except Exception as e:  # noqa: BLE001 - một cuốn lỗi không chặn các cuốn khác
             failed.append(f"{b.name}: {e}")
             on_event(f"  ✘ {b.name}: {e}")
-    todo = [b for b in books if r2.read_state(b).get("files")
+    # chỉ cuốn đẩy R2 TRỌN VẸN lần này mới vào CSV (đẩy dở thì link thiếu / cũ - lần sau đẩy xong mới xuất)
+    todo = [b for b in successful if r2.read_state(b).get("files")
             and (only is not None or not r2.read_state(b).get("exported_at"))]
+    rows_by_book = {}
+    for b in list(todo):
+        try:
+            rows_by_book[b] = _book_rows(b, shop)
+        except Exception as e:  # noqa: BLE001 - listing hỏng: bỏ cuốn đó, không làm hỏng cả file CSV
+            todo.remove(b)
+            failed.append(f"{b.name}: không dựng được dòng CSV ({type(e).__name__}: {e})")
+            on_event(f"  ✘ {b.name}: không dựng được dòng CSV - {e}")
     csv_path = None
     if todo:
         out_dir = root / "_xuat_csv"
@@ -152,7 +170,7 @@ def publish_all(cfg: dict, on_event=print, only: list[Path] | None = None) -> di
             w = csv.DictWriter(f, fieldnames=HEADER)
             w.writeheader()
             for b in todo:
-                for row in _book_rows(b, shop):
+                for row in rows_by_book[b]:
                     w.writerow(row)
         stamp = time.strftime("%Y-%m-%d %H:%M:%S")
         for b in todo:

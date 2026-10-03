@@ -51,7 +51,7 @@
         <label class="kind style-kind" data-style-family="random">
           <input type="radio" name="family" value="random" checked>
           <span class="style-sample style-sample-random" aria-hidden="true"></span>
-          <span><strong>Ngẫu nhiên</strong><small>Bốc một trong 3 phong cách cho mỗi batch</small></span>
+          <span><strong>Ngẫu nhiên</strong><small>Bốc một trong 4 phong cách cho mỗi batch</small></span>
         </label>
         <label class="kind style-kind" data-style-family="styled_photography">
           <input type="radio" name="family" value="styled_photography">
@@ -67,6 +67,11 @@
           <input type="radio" name="family" value="mid_century_retro">
           <span class="style-sample" aria-hidden="true"></span>
           <span><strong>Mid-century poster</strong><small>Poster retro, hình khối và texture in lụa</small></span>
+        </label>
+        <label class="kind style-kind" data-style-family="anime_illustration">
+          <input type="radio" name="family" value="anime_illustration">
+          <span class="style-sample" aria-hidden="true"></span>
+          <span><strong>Anime illustration</strong><small>Nét sạch, tô bóng phẳng, nền vẽ sáng trong</small></span>
         </label>
       </fieldset>
       <fieldset class="kinds" id="gridModePicker">
@@ -88,7 +93,7 @@
         </label>
         <label class="kind">
           <input type="radio" name="mockup_mode" value="ai">
-          <span><strong>AI gen mockup</strong><small>4 ảnh, bối cảnh riêng cho từng cuốn (+4 lượt vẽ)</small></span>
+          <span><strong>AI gen mockup</strong><small>5 ảnh, bối cảnh riêng cho từng cuốn (+5 lượt vẽ)</small></span>
         </label>
       </fieldset>
       <div class="start-row">
@@ -237,7 +242,7 @@
         <button class="btn btn-small btn-ghost" data-pick="all">Chọn tất cả</button>
         <button class="btn btn-small btn-ghost" data-pick="none">Bỏ chọn</button>
         <span class="grow"></span>
-        <input id="shopFilter" type="search" placeholder="Tìm tên / chủ đề…" autocomplete="off">
+        <input id="shopFilter" type="search" placeholder="Tìm SKU / tên / chủ đề…" autocomplete="off">
       </div>
       <div class="shop-books" id="shopBooks"><p class="empty">Đang tải…</p></div>
       <div class="shop-foot">

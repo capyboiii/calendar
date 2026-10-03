@@ -341,8 +341,9 @@ def run_ideation(keyword: str, backend: Backend, projects_root: Path, *, year: i
                         own, f"p2_concept_{angle['id']}", prompt,
                         lambda c: validate_concept(c, year, market), max_repairs)
                 with _ASSIGN:
-                    if cdir is None:   # thư mục mang tên cuốn (dễ đọc); mã góc ghi trong _he_thong/angle_id.txt
-                        cdir = layout.new_book_dir(kdir, (concept or {}).get("title") or angle["title"], angle["id"])
+                    if cdir is None:   # thư mục mang mã SKU (dễ tìm); mã góc ghi trong _he_thong/angle_id.txt
+                        cdir = layout.new_book_dir(kdir, (concept or {}).get("title") or angle["title"], angle["id"],
+                                                   product if product in products.PRODUCTS else products.DEFAULT)
                 if errors:
                     layout.ensure_system(cdir)
                     layout.tech(cdir).mkdir(parents=True, exist_ok=True)

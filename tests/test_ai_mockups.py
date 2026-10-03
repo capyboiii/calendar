@@ -1,4 +1,4 @@
-"""AI gen mockup: chỉ "AI vẽ cả trang"; 4 ảnh (bỏ 04); ảnh kèm đúng thứ tự; hỏng thì giữ mockup code; gen lại khi đổi."""
+"""AI gen mockup: chỉ "AI vẽ cả trang"; 5 ảnh (bỏ 04, thêm 06 ba cuốn); ảnh kèm đúng thứ tự; hỏng thì giữ mockup code; gen lại khi đổi."""
 import json
 import os
 import tempfile
@@ -11,11 +11,15 @@ from PIL import Image
 
 from calforge import layout, products
 from calforge.imagegen import ai_mockups, driver
-from calforge.imagegen.mockup_prompts import COVER_PROMPT, SCENE_PROMPT
+from calforge.imagegen.mockup_prompts import BOOKS_PROMPT, COVER_PROMPT, SCENE_PROMPT, WALL_PROMPT
 from calforge.render import mockups
 from calforge.ui import server
 
 from tests import fixtures
+
+
+ALL = ["01_front_cover_spiral", "02_open_spread_flat", "03_three_open_spreads", "04_two_wall_spreads",
+       "06_three_books"]
 
 
 def book(root: Path, mockup_mode="ai", grid_mode="ai_page") -> Path:
@@ -27,7 +31,9 @@ def book(root: Path, mockup_mode="ai", grid_mode="ai_page") -> Path:
     layout.raw(c).mkdir(parents=True)
     Image.new("RGB", (1536, 1024), "red").save(layout.raw(c) / "cover.png")
     layout.listing(c).mkdir(parents=True)
-    for name in ["01_front_cover_spiral", "02_open_spread_flat", "03_three_open_spreads", "05_wall_page_turn"]:
+    for m in ("m01", "m04"):
+        Image.new("RGB", (1536, 1024), "green").save(layout.raw(c) / f"{m}.png")
+    for name in ALL:
         Image.new("RGB", (1600, 1067), "gray").save(layout.listing(c) / f"{name}.jpg")     # mockup code
     return c
 
@@ -67,8 +73,7 @@ class AiMockupTest(unittest.TestCase):
         c = book(self.root)
         fake = FakeRun()
         res = self.run_ai(c, fake)
-        self.assertEqual(sorted(res["ai"]), sorted(["01_front_cover_spiral", "02_open_spread_flat",
-                                                   "03_three_open_spreads", "05_wall_page_turn"]))
+        self.assertEqual(sorted(res["ai"]), ALL)
         jobs = {j.id: j for j in fake.calls[0]}
         cover = jobs["01_front_cover_spiral"]
         self.assertTrue(cover.prompt.startswith(COVER_PROMPT) and "1:1" in cover.prompt)
@@ -76,6 +81,16 @@ class AiMockupTest(unittest.TestCase):
         spread = jobs["02_open_spread_flat"]
         self.assertTrue(spread.prompt.startswith(SCENE_PROMPT) and "1:1" in spread.prompt)
         self.assertEqual([Path(a).parent.name for a in spread.attach], ["mockup_goc"])   # mockup code của cuốn
+        books = jobs["06_three_books"]
+        self.assertEqual(books.prompt, BOOKS_PROMPT)
+        self.assertIn("1:1", books.prompt)
+        self.assertEqual([(Path(a).parent.name, Path(a).name) for a in books.attach],
+                         [(layout.raw(c).name, "m04.png"), ("mockup_goc", "06_three_books.jpg")])   # IMAGE 1, 2
+        wall = jobs["04_two_wall_spreads"]
+        self.assertEqual(wall.prompt, WALL_PROMPT)
+        self.assertIn("1:1", wall.prompt)
+        self.assertEqual([(Path(a).parent.name, Path(a).name) for a in wall.attach],
+                         [(layout.raw(c).name, "m01.png"), ("mockup_goc", "04_two_wall_spreads.jpg")])   # IMAGE 1, 2
         self.assertIsNone(fake.accept)
         with Image.open(layout.listing(c) / "02_open_spread_flat.jpg") as im:
             self.assertEqual(im.getpixel((10, 10))[2] > 200, True)                    # đã thay bằng ảnh AI
@@ -90,20 +105,36 @@ class AiMockupTest(unittest.TestCase):
         self.assertEqual((layout.listing(c) / "03_three_open_spreads.jpg").read_bytes(), before)
         self.assertEqual(ai_mockups.pending(c), ["03_three_open_spreads"])          # lần sau gen AI lại đúng ảnh đó
 
+    def test_three_books_without_april_art_keeps_code_mockup(self):
+        c = book(self.root)
+        (layout.raw(c) / "m04.png").unlink()
+        before = (layout.listing(c) / "06_three_books.jpg").read_bytes()
+        fake = FakeRun()
+        res = self.run_ai(c, fake)
+        self.assertEqual(res["kept_code"], ["06_three_books"])
+        self.assertNotIn("06_three_books", [j.id for j in fake.calls[0]])
+        self.assertEqual((layout.listing(c) / "06_three_books.jpg").read_bytes(), before)
+        self.assertEqual(ai_mockups.pending(c), ["06_three_books"])               # có tranh rồi thì gen lại sau
+
     def test_code_regenerated_preview_triggers_ai_again(self):
         c = book(self.root)
         self.run_ai(c, FakeRun())
         time.sleep(0.02)
-        Image.new("RGB", (1600, 1067), "gray").save(layout.listing(c) / "05_wall_page_turn.jpg")   # trang in đổi
-        self.assertEqual(ai_mockups.pending(c), ["05_wall_page_turn"])
+        Image.new("RGB", (1600, 1067), "gray").save(layout.listing(c) / "04_two_wall_spreads.jpg")   # trang in đổi
+        self.assertEqual(ai_mockups.pending(c), ["04_two_wall_spreads"])
 
     def test_only_ai_page_books_get_ai_mockups_and_drop_preview_4(self):
         with tempfile.TemporaryDirectory() as tmp:
             ai = book(Path(tmp))
             concept = json.loads(layout.concept_file(ai).read_text(encoding="utf-8"))
             self.assertTrue(products.ai_mockups(concept))
-            self.assertEqual(mockups.skipped_previews(concept), {"wall_spread"})
-            self.assertNotIn("04_wall_spread.jpg", mockups.missing_previews(ai))    # 4 ảnh là đủ
+            self.assertEqual(mockups.skipped_previews(concept), {"wall_page_turn"})
+            self.assertEqual(mockups.missing_previews(ai), [])                      # 5 ảnh: 01 02 03 04 06, không có 05
+            self.assertEqual(mockups.sheet_pages(mockups.MOCKUPS["two_wall_spreads"]["sheets"][1]),
+                             ["m02_month", "m02_grid"])
+            (layout.listing(ai) / "06_three_books.jpg").unlink()
+            self.assertEqual(mockups.missing_previews(ai), ["06_three_books.jpg"])
+            self.assertEqual(mockups.sheet_pages(mockups.MOCKUPS["three_books"]["sheets"][1]), ["m04_grid"])
         for mode, grid in (("ai", "background"), ("template", "ai_page")):
             c = {**fixtures.concept(), "product": "wall_grid"}
             c["style"].update(grid_mode=grid, mockup_mode=mode)

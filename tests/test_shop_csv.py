@@ -61,8 +61,13 @@ class ShopCsvTest(unittest.TestCase):
                 with open(res["csv"], encoding="utf-8") as f:
                     head = next(csv.reader(f))
                 self.assertEqual(len(shop_csv.TEMPLATE), 23)
-                self.assertEqual(head, shop_csv.TEMPLATE + shop_csv.PAGE_COLS + shop_csv.PREVIEW_COLS)
-                self.assertEqual((head[23], head[48], head[-1]), ("Page 01 front_cover", "Page 26 back_cover", "Preview 5"))
+                self.assertEqual(head, shop_csv.TEMPLATE + shop_csv.PAGE_COLS + shop_csv.PREVIEW_COLS
+                                 + ["Title", "Description (HTML)", "Tags"])
+                self.assertEqual(head[:23], shop_csv.TEMPLATE)                     # 23 cột mẫu Printify giữ nguyên
+                self.assertEqual((head[23], head[48], head[53]), ("Page 01 front_cover", "Page 26 back_cover", "Preview 5"))
+                for r in rows:                                                      # nội dung listing đủ ở mọi dòng
+                    self.assertTrue(r["Title"].endswith("2027 Wall Calendar | Gift"))
+                    self.assertEqual((r["Description (HTML)"], r["Tags"]), ("<p>Hi</p>", "a, b"))
                 for r in rows:
                     size = "14x11.5" if "-14" in r["External ID"] else "11x8.5"
                     premade = r["External ID"].startswith("WCP")
@@ -73,8 +78,8 @@ class ShopCsvTest(unittest.TestCase):
                             self.assertTrue(r[c].endswith(f"/{size}/{c[8:]}.png"))
                 cat = [r for r in rows if r["Label"].startswith("Cat Days")]
                 dog = [r for r in rows if r["Label"].startswith("Dog Days")]
-                # chỉ bản Spiral: blank 11 Matte, 14 Matte+Glossy; in sẵn 11 Matte, 14 Glossy
-                self.assertEqual([r["External ID"][-4:] for r in cat], ["11SM", "14SM", "14SG"])
+                # chỉ bản Spiral, mỗi khổ 1 biến thể: blank 11 Matte, 14 Matte; in sẵn 11 Matte, 14 Glossy
+                self.assertEqual([r["External ID"][-4:] for r in cat], ["11SM", "14SM"])
                 self.assertEqual([r["External ID"][-4:] for r in dog], ["11SM", "14SG"])
                 self.assertTrue(cat[0]["External ID"].startswith("WCB-") and dog[0]["External ID"].startswith("WCP-"))
                 self.assertTrue(cat[0]["Print area front"].endswith("/11x8.5/front_cover.png"))
@@ -129,14 +134,14 @@ class ShopCsvTest(unittest.TestCase):
                 self.assertEqual(reader.fieldnames, calendaria_csv.HEADER)
             variants = [row for row in rows if row["Variant SKU"]]
             images = [row for row in rows if not row["Variant SKU"]]
-            self.assertEqual(len(variants), 5)
+            self.assertEqual(len(variants), 4)                 # mỗi khổ: 1 bản in lò xo + 1 bản in tại nhà
             self.assertEqual([row["Option2 Value"] for row in variants],
-                             ["Spiral", "Printable", "Spiral", "Spiral", "Printable"])
+                             ["Spiral", "Printable", "Spiral", "Printable"])
             self.assertEqual(variants[0]["Option3 Name"], "Paper")
             self.assertEqual([row["Option3 Value"] for row in variants],
-                             ["Matte", "N/A", "Matte", "Glossy", "N/A"])
+                             ["Matte", "N/A", "Matte", "N/A"])
             self.assertEqual([row["Variant Price"] for row in variants],
-                             ["29.95", "7.95", "39.95", "42.95", "7.95"])
+                             ["29.95", "7.95", "39.95", "7.95"])
             self.assertEqual(variants[0]["Product Category"], "Calendaria")
             self.assertEqual(variants[0]["Title"], "Cat Days 2027 Wall Calendar | Gift")
             self.assertEqual(variants[1]["Variant File"].endswith("/in_tai_nha_11x8.5.pdf"), True)

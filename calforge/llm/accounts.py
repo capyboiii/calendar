@@ -80,7 +80,9 @@ def list_accounts(cfg: dict | None = None) -> list[dict[str, Any]]:
             continue
 
         locked = is_profile_locked(d)
-        has_session = has_chatgpt_session(d)
+        from .pool import DEAD_LABEL, read_dead
+        dead = read_dead(d)                               # batch phát hiện tài khoản chết (bị đăng xuất / bị khoá)
+        has_session = has_chatgpt_session(d) and not dead
         mtime = d.stat().st_mtime
 
         accounts.append({
@@ -88,6 +90,8 @@ def list_accounts(cfg: dict | None = None) -> list[dict[str, Any]]:
             "path": str(d),
             "is_locked": locked,
             "has_session": has_session,
+            "dead": ({"kind": dead["kind"], "label": DEAD_LABEL.get(dead["kind"], dead["kind"]),
+                      "at": dead.get("at", "")} if dead else None),
             "use_count": counts.get(d.name, 0),
             "is_last_used": (d.name == last_used),
             "modified_at": time.strftime("%Y-%m-%d %H:%M", time.localtime(mtime)),

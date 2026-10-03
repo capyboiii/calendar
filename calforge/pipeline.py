@@ -126,14 +126,30 @@ def _listing_is_current(concept_dir: Path) -> bool:
 
 def _status(concept_dir: Path, **kw) -> dict:
     f = layout.status_file(concept_dir)
-    st = json.loads(f.read_text(encoding="utf-8")) if f.exists() else {}
+    try:                                   # status.json hỏng (tắt máy lúc đang ghi): coi như chưa có, không làm sập batch
+        st = json.loads(f.read_text(encoding="utf-8")) if f.exists() else {}
+        if not isinstance(st, dict):
+            st = {}
+    except (OSError, ValueError):
+        st = {}
     if kw.get("ok"):  # bước đã qua: xoá lỗi của lần chạy trước để status không báo sai
         for stale in ("reason", "failed", "issues", "terminal"):
             if stale not in kw:
                 st.pop(stale, None)
     st.update(kw, updated=time.strftime("%Y-%m-%d %H:%M:%S"))
-    f.write_text(json.dumps(st, ensure_ascii=False, indent=2), encoding="utf-8")
+    _write_json(f, st)
     return st
+
+
+def _write_json(f: Path, data: dict) -> None:
+    """Ghi qua file tạm rồi đổi tên: tắt máy / hết đĩa giữa chừng không để lại file JSON cụt."""
+    f.parent.mkdir(parents=True, exist_ok=True)
+    tmp = f.with_name(f.name + f".{threading.get_ident()}.tmp")
+    try:
+        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.replace(f)
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 REDO_PAGES = ["cover"] + [f"m{m:02d}" for m in range(1, 13)] + ["grid"]
@@ -143,6 +159,8 @@ def redo_pages(concept_dir: Path, pages: list[str], on_event=print) -> list[str]
     """Chuẩn bị vẽ lại các trang hỏng: cất ảnh AI cũ (+ bản upscale) vào _he_thong/ky_thuat/anh_cu/ để lượt sản xuất
     sau gen lại đúng các trang đó; mọi bước sau (upscale, render, mockup) tự làm lại vì ảnh mới hơn. Cuốn đã xuất CSV
     được đánh dấu chưa xuất để lần Đẩy R2 + xuất CSV sau có bản mới. Trả về các trang đã cất."""
+    if _read_status(concept_dir).get("terminal"):
+        raise ValueError("Cuốn đã bị loại (TM/bản quyền, nội dung nhạy cảm hoặc vi phạm chính sách), không vẽ lại.")
     concept = json.loads(layout.concept_file(concept_dir).read_text(encoding="utf-8"))
     allowed = products.art_jobs(concept)
     bad = [p for p in pages if p not in allowed]
@@ -159,10 +177,9 @@ def redo_pages(concept_dir: Path, pages: list[str], on_event=print) -> list[str]
                 moved.append(jid)
     from .publish import r2
     st = r2.read_state(concept_dir)
-    if st.get("exported_at"):
-        st.pop("exported_at", None)
-        st.pop("exported_csv", None)
-        r2.write_state(concept_dir, st)
+    for key in ("exported_at", "exported_csv", "calendaria_exported_at", "calendaria_exported_csv"):
+        st.pop(key, None)
+    r2.write_state(concept_dir, st)
     _status(concept_dir, stage="images", ok=False, reason=f"đang vẽ lại: {', '.join(pages)}")
     on_event(f"↻ Vẽ lại {len(pages)} trang: {', '.join(pages)} (ảnh cũ cất ở ky_thuat/anh_cu)")
     return moved
@@ -176,7 +193,9 @@ def needs_finishing(concept_dir: Path) -> bool:
         st = json.loads(layout.status_file(concept_dir).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return False
-    if st.get("ok") and st.get("stage") in ("listing", "printify"):
+    if not isinstance(st, dict) or not isinstance(concept, dict):
+        return False
+    if st.get("terminal") or (st.get("ok") and st.get("stage") in ("listing", "printify")):
         return False
     return all(plan.job_done(concept_dir, j) is not None for j in products.art_jobs(concept))
 
@@ -193,7 +212,7 @@ def produce_images(concept_dir: Path, cfg: dict, *, on_event=print) -> dict | No
     """Phần cần ChatGPT: gen ảnh (+ upscale chạy kèm). None = đủ ảnh; dict = status lỗi."""
     previous = _read_status(concept_dir)
     if previous.get("terminal") and previous.get("stage") == "ip_rejected":
-        on_event(f"  ↷ Bỏ qua {concept_dir.name}: cuốn đã bị loại vì TM/bản quyền bên thứ ba")
+        on_event(f"  ↷ Bỏ qua {concept_dir.name}: cuốn đã bị loại vì TM/bản quyền, nội dung nhạy cảm hoặc vi phạm chính sách")
         return previous
     ig = cfg["imagegen"]
     on_event(f"===== Sản xuất: {concept_dir.name} =====")
@@ -211,24 +230,27 @@ def produce_images(concept_dir: Path, cfg: dict, *, on_event=print) -> dict | No
             except RuntimeError as e:          # ảnh neo không gen được
                 if IP_REJECTED_MARK in str(e):
                     reason = str(e).split(IP_REJECTED_MARK, 1)[-1].strip()
-                    on_event(f"  ✘ BỎ CUỐN: vi phạm TM/bản quyền bên thứ ba - {reason[:180]}")
+                    on_event(f"  ✘ BỎ CUỐN: ChatGPT từ chối (TM/bản quyền, nội dung nhạy cảm hoặc vi phạm chính sách) - {reason[:180]}")
                     return _status(concept_dir, stage="ip_rejected", ok=False, terminal=True,
-                                   reason=f"Bỏ cuốn: ChatGPT từ chối vì TM/bản quyền hoặc quyền bên thứ ba. {reason}"[:500])
+                                   reason=f"Bỏ cuốn: ChatGPT từ chối vì TM/bản quyền, nội dung nhạy cảm hoặc vi phạm chính sách. {reason}"[:500])
                 if QUOTA_MARK not in str(e):
                     raise
                 res = {"missing": ["anchor"], "failed": {"anchor": str(e)}, "drift_flags": []}
         quota = res["missing"] and any(QUOTA_MARK in str(v) for v in res["failed"].values())
-        if not quota or not _wait_for_quota(cfg, waited, on_event, "gen ảnh"):
+        if not quota:
             break
-        waited += cfg.get("quota_wait_s", 1800)
+        slept = _wait_for_quota(cfg, waited, on_event, "gen ảnh")
+        if not slept:
+            break
+        waited += slept
     if early.done:
         on_event(f"  ✔ Đã upscale sẵn {len(early.done)} artwork trong lúc chờ gen ảnh")
     ip_failures = [str(v) for v in res["failed"].values() if IP_REJECTED_MARK in str(v)]
     if ip_failures:
         detail = ip_failures[0].split(IP_REJECTED_MARK, 1)[-1].strip()
-        on_event(f"  ✘ BỎ CUỐN: vi phạm TM/bản quyền bên thứ ba - {detail[:180]}")
+        on_event(f"  ✘ BỎ CUỐN: ChatGPT từ chối (TM/bản quyền, nội dung nhạy cảm hoặc vi phạm chính sách) - {detail[:180]}")
         return _status(concept_dir, stage="ip_rejected", ok=False, terminal=True,
-                       reason=f"Bỏ cuốn: ChatGPT từ chối vì TM/bản quyền hoặc quyền bên thứ ba. {detail}"[:500],
+                       reason=f"Bỏ cuốn: ChatGPT từ chối vì TM/bản quyền, nội dung nhạy cảm hoặc vi phạm chính sách. {detail}"[:500],
                        failed=res["failed"])
     if res["missing"]:
         return _status(concept_dir, stage="images", ok=False,
@@ -247,6 +269,9 @@ def finish_book(concept_dir: Path, cfg: dict, *, printify: bool = True, publish:
                 on_event=print) -> dict:
     """Phần máy tự làm, không cần ChatGPT: render 2 khổ + PDF, ảnh preview, listing, Printify.
     Batch chạy phần này ở luồng nền trong lúc cuốn sau đang gen ảnh."""
+    previous = _read_status(concept_dir)
+    if previous.get("terminal"):
+        return previous
     concept = json.loads(layout.concept_file(concept_dir).read_text(encoding="utf-8"))
     product = products.get(concept)
     digital = []
@@ -285,7 +310,7 @@ def finish_book(concept_dir: Path, cfg: dict, *, printify: bool = True, publish:
         if lacking and not preview_error:
             preview_error = f"thiếu {', '.join(lacking)}"
         if products.ai_mockups(concept) and not lacking:
-            # "AI gen mockup": ChatGPT dựng bối cảnh cho 4 ảnh; ảnh nào hỏng thì giữ mockup code (không chặn cuốn)
+            # "AI gen mockup": ChatGPT dựng bối cảnh cho 5 ảnh; ảnh nào hỏng thì giữ mockup code (không chặn cuốn)
             try:
                 from .imagegen.ai_mockups import ai_previews
                 res = ai_previews(concept_dir, cfg, on_event)
@@ -328,18 +353,40 @@ def finish_book(concept_dir: Path, cfg: dict, *, printify: bool = True, publish:
 RETRY_STAGES = {"images", "crash"}   # thiếu ảnh (hết lượt) hoặc lỗi bất ngờ: đáng thử lại một lần
 
 
-def _wait_for_quota(cfg: dict, waited: float, on_event, what: str) -> bool:
-    """Cả 5 tài khoản hết lượt: TẠM DỪNG (không làm hỏng cuốn) rồi thử lại. False = đã chờ quá lâu, thôi."""
+def _parallel(cfg: dict) -> dict:
+    """Số luồng của batch: theo cấu hình nếu ghi rõ, không thì tự tính theo số Chrome chạy được."""
+    from .llm import pool as poolmod
+    p = poolmod.peek_pool()
+    cap = min(p.cap, len(p.names)) if p is not None and p.names else poolmod.planned_cap(cfg)
+    return poolmod.auto_parallel(cfg, cap)
+
+
+def _wait_for_quota(cfg: dict, waited: float, on_event, what: str) -> float:
+    """Mọi tài khoản hết lượt: TẠM DỪNG (không làm hỏng cuốn) rồi thử lại. Trả về số giây đã chờ; 0 = đã chờ quá
+    lâu, thôi."""
     wait = cfg.get("quota_wait_s", 1800)
     if waited + wait > cfg.get("quota_max_wait_h", 24) * 3600:
         on_event(f"  ✘ Đã chờ {waited / 3600:.1f} giờ mà tài khoản vẫn hết lượt {what} - dừng chờ")
-        return False
+        return 0.0
+    # Tài khoản nghỉ ngắn (lỗi trang / mạng 2 phút) thì chỉ chờ tới lúc tài khoản đầu tiên hết nghỉ, không chờ đủ 30 phút
+    from .llm import pool as poolmod
+    p = poolmod.peek_pool()
+    if p is not None and p.names and not p.alive_names():
+        on_event("  ✘ MỌI TÀI KHOẢN ĐỀU CHẾT (bị đăng xuất / bị khoá) - dừng, cần đăng nhập lại tài khoản rồi chạy tiếp")
+        return 0.0
+    if p is not None:
+        try:
+            wake = p.next_wake(poolmod.CHAT if what == "chat" else poolmod.IMAGE)
+        except Exception:  # noqa: BLE001
+            wake = 0.0
+        if 0 < wake < wait:
+            wait = wake + min(2.0, wait * 0.1)
     resume = time.strftime("%H:%M", time.localtime(time.time() + wait))
     on_event(f"⏸ Tất cả tài khoản hết lượt {what} - tạm dừng, thử lại lúc {resume} "
              f"(đã chờ {waited / 60:.0f} phút)")
     time.sleep(wait)
     on_event(f"▶ Hết giờ chờ - thử lại {what}")
-    return True
+    return float(wait) or 1e-9
 
 
 class _Finisher:
@@ -349,7 +396,7 @@ class _Finisher:
     def __init__(self, cfg: dict, on_event, **kw):
         from concurrent.futures import ThreadPoolExecutor
         self.cfg, self.on_event, self.kw = cfg, on_event, kw
-        self.pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="hau_ky")
+        self.pool = ThreadPoolExecutor(max_workers=_parallel(cfg)["finish_workers"], thread_name_prefix="hau_ky")
         self.jobs = []
 
     def submit(self, cdir: Path) -> None:
@@ -379,8 +426,12 @@ def _safe_call(fn, cdir: Path, cfg: dict, on_event=print, **kw) -> dict:
         return fn(cdir, cfg, on_event=on_event, **kw)
     except Exception as e:  # noqa: BLE001 - một cuốn hỏng không được giết cả batch
         on_event(f"  ✘ {cdir.name}: lỗi bất ngờ - {type(e).__name__}: {e}")
-        return _status(cdir, stage="crash", ok=False, reason=f"{type(e).__name__}: {e}"[:500],
-                       traceback=traceback.format_exc()[-4000:])
+        st = {"stage": "crash", "ok": False, "reason": f"{type(e).__name__}: {e}"[:500]}
+        try:
+            return _status(cdir, traceback=traceback.format_exc()[-4000:], **st)
+        except Exception as e2:  # noqa: BLE001 - không ghi được status (hết đĩa...): vẫn không được giết batch
+            on_event(f"  ✘ {cdir.name}: không ghi được trạng thái - {type(e2).__name__}: {e2}")
+            return st
 
 
 def _safe_pipelined(cdir: Path, cfg: dict, finisher: "_Finisher", on_event=print) -> None:
@@ -418,14 +469,15 @@ def _load_batch(kdir: Path) -> dict | None:
 
 def _save_batch(kdir: Path, batch: dict) -> None:
     layout.ensure_system(kdir)
-    _batch_file(kdir).write_text(json.dumps(batch, ensure_ascii=False, indent=2), encoding="utf-8")
+    _write_json(_batch_file(kdir), batch)
 
 
 def _read_status(cdir: Path) -> dict:
     try:
-        return json.loads(layout.status_file(cdir).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        st = json.loads(layout.status_file(cdir).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
         return {}
+    return st if isinstance(st, dict) else {}             # file hỏng kiểu "null" / "[]" cũng coi như chưa có
 
 
 def _finished_ok(cdir: Path) -> bool:
@@ -617,8 +669,11 @@ def _run_batch(keyword, cfg, kdir, batch, backend, common, finisher, pick, wait,
     import threading
     from concurrent.futures import ThreadPoolExecutor
 
-    lookahead = max(1, int(cfg.get("idea_lookahead", 3)))
-    books = ThreadPoolExecutor(max_workers=max(1, int(cfg.get("book_workers", 3))), thread_name_prefix="cuon")
+    par = _parallel(cfg)
+    lookahead = par["idea_lookahead"]
+    books = ThreadPoolExecutor(max_workers=par["book_workers"], thread_name_prefix="cuon")
+    on_event(f"▶ Phân luồng: {par['book_workers']} cuốn vẽ cùng lúc, {par['p2_parallel']} concept viết song song, "
+             f"{par['finish_workers']} luồng hậu kỳ")
     waiting = {"n": 0}
     cv = threading.Condition()
     futures = []
@@ -664,11 +719,12 @@ def _run_batch(keyword, cfg, kdir, batch, backend, common, finisher, pick, wait,
             on_event(f"▶ Lượt lên ý: {n} cuốn (còn thiếu {left}/{batch['target']})")
             try:
                 res = run_ideation(keyword, backend, Path(cfg["projects_dir"]), pick=pick, auto_pick=n,
-                                   keyword_root=kdir.parent, p2_parallel=cfg.get("p2_parallel", 3), **common)
+                                   keyword_root=kdir.parent, p2_parallel=par["p2_parallel"], **common)
             except NoAccountLeft:
                 # hết lượt chat ở mọi tài khoản: chờ rồi làm lại đúng lượt này (sổ hỏi/đáp giữ phần đã có)
-                if _wait_for_quota(cfg, idea_waited, on_event, "chat"):
-                    idea_waited += cfg.get("quota_wait_s", 1800)
+                slept = _wait_for_quota(cfg, idea_waited, on_event, "chat")
+                if slept:
+                    idea_waited += slept
                     continue
                 batch["errors"].append("hết lượt chat ở mọi tài khoản quá lâu")
                 _save_batch(kdir, batch)

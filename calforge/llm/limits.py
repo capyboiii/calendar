@@ -7,7 +7,8 @@ Ba nguồn tín hiệu (bất kỳ nguồn nào báo là đủ):
 3. Gửi tin nhắn không đi mà trang đang hiện thông báo giới hạn -> coi là hết lượt, không phải lỗi tạm.
 
 Phân loại:
-- "ip_refused": từ chối vì quyền bên thứ ba / nhãn hiệu / bản quyền -> bỏ hẳn cuốn, không thử lại.
+- "ip_refused": từ chối vì quyền bên thứ ba / nhãn hiệu / bản quyền, hoặc vì quy định về ảnh khỏa thân / tình dục /
+  khiêu dâm -> bỏ hẳn cuốn, không thử lại.
 - "quota": tài khoản hết lượt / bị giới hạn tốc độ / hệ thống quá tải -> tài khoản NGHỈ; hết cả 5 tài khoản thì
   batch tạm dừng, chờ rồi thử lại (calforge/pipeline.py _wait_for_quota). Không tính vào số lần thử của ảnh.
 - "refused": nội dung bị từ chối -> ảnh đó hỏng, không thử lại trên tài khoản khác.
@@ -101,11 +102,41 @@ def is_ip_refusal(text: str) -> bool:
     return (any(term in low or term in plain for term in IP_TERMS)
             and any(signal in low or signal in plain for signal in IP_REFUSAL_SIGNALS))
 
+# Từ chối vì quy định về ảnh khỏa thân / tình dục / khiêu dâm: cũng bỏ hẳn cuốn như IP/TM (ý tưởng cuốn đó không
+# gen được, thử lại chỉ tốn lượt). So trên bản không dấu.
+ADULT_TERMS = (
+    "khoa than", "khieu dam", "noi dung tinh duc", "ve tinh duc", "tinh duc hoac",
+    "nudity", "sexual content", "sexually explicit", "sexuality", "erotic", "pornograph",
+)
+
+
+def is_adult_refusal(text: str) -> bool:
+    """Có cả chủ đề khỏa thân/tình dục và ngữ cảnh từ chối/vi phạm."""
+    low, plain = _normalized(text)
+    return (any(term in plain for term in ADULT_TERMS)
+            and any(signal in low or signal in plain for signal in IP_REFUSAL_SIGNALS))
+
+
+# Tài khoản bị khoá / vô hiệu hoá (so trên bản không dấu): không thử lại, nghỉ hẳn, báo người dùng thay tài khoản.
+BANNED_PAT = (
+    "account has been deactivated", "account was deactivated", "account deactivated", "account has been suspended",
+    "account suspended", "account has been disabled", "account has been banned", "your account was flagged",
+    "access terminated", "deleted or deactivated", "tai khoan cua ban da bi vo hieu", "tai khoan da bi vo hieu",
+    "tai khoan cua ban da bi dinh chi", "tai khoan da bi dinh chi", "tai khoan cua ban da bi khoa",
+)
+
+
+def is_banned(text: str) -> bool:
+    _low, plain = _normalized(text)
+    return any(p in plain for p in BANNED_PAT)
+
+
 # Từ chối nội dung
 REFUSE_PAT = (
     "i can't help with that", "i cannot help with that", "i'm unable to create", "i can't create",
     "i cannot create", "i'm not able to generate", "i can't generate", "i cannot generate",
-    "content policy", "usage policies", "violates", "not able to help with", "i won't be able to",
+    "content policy", "content policies", "usage policies", "violates", "may violate our", "might violate our",
+    "not able to help with", "i won't be able to",
     "tôi không thể tạo", "vi phạm chính sách",
 )
 
@@ -128,8 +159,8 @@ NOTICE_JS = f"""() => Array.from(document.querySelectorAll('{NOTICE_SELECTOR}'))
 def classify(text: str) -> str:
     """Chữ trên trang -> "ip_refused" | "quota" | "refused" | "error" | ""."""
     low, _plain = _normalized(text)
-    if is_ip_refusal(text):
-        return "ip_refused"
+    if is_ip_refusal(text) or is_adult_refusal(text):
+        return "ip_refused"                       # cả hai loại đều là lỗi kết thúc của cuốn
     for pats, kind in ((QUOTA_PAT, "quota"), (REFUSE_PAT, "refused"), (QUOTA_WEAK, "quota"), (TEMP_PAT, "error")):
         if any(p in low for p in pats):
             return kind

@@ -104,7 +104,7 @@ class Refused(RuntimeError): ...
 
 
 class ThirdPartyIPRefused(Refused):
-    """ChatGPT từ chối vì TM, bản quyền hoặc quyền sở hữu trí tuệ của bên thứ ba."""
+    """ChatGPT từ chối vì TM, bản quyền, quyền sở hữu trí tuệ của bên thứ ba, hoặc quy định ảnh khỏa thân/tình dục."""
 
 
 class TempError(RuntimeError): ...
@@ -145,7 +145,43 @@ def open_home(page, url: str, tries: int = 4, wait_ms: int = 1500, net_wait_ms: 
 
 
 LOGGED_OUT = "tài khoản bị đăng xuất"
+BANNED = "tài khoản bị khoá"
+BODY_TEXT_JS = "() => (document.body ? document.body.innerText : '').slice(0, 4000)"
+# lỗi hết lượt mang dấu hiệu bị CHẶN TỐC ĐỘ (không phải hết lượt theo gói): tính vào việc giảm số Chrome
+RATE_HINTS = ("429", "too many", "rate limit", "rate_limit", "slow down", "unusual activity", "suspicious",
+              "quá nhiều", "bất thường", "chặn lúc gửi")
 NAV_MAX = 6               # một ảnh gặp lỗi trang/mạng quá bấy nhiêu lần (trên nhiều tài khoản) thì mới tính là lần hỏng
+
+
+def _login_screen(page) -> bool:
+    from ..llm.bulk_login import LOGIN_STATE_JS
+    try:
+        st = page.evaluate(LOGIN_STATE_JS)
+    except Exception:  # noqa: BLE001
+        return False
+    if not isinstance(st, dict) or st.get("appReady"):
+        return False
+    return bool(st.get("hasLoginBtn")) or "auth" in (getattr(page, "url", "") or "")
+
+
+def account_state(page) -> tuple[str, str]:
+    """Trang ChatGPT cho thấy tài khoản CHẾT? -> ("banned" | "logged_out" | "", chi tiết).
+    "logged_out" = giao diện là màn hình đăng nhập (còn nút Log in / Sign up, không có ô chat). Kiểm tra 2 lần cách
+    nhau vài giây để không bỏ nhầm tài khoản lúc trang đang tải dở."""
+    from ..llm.limits import is_banned
+    try:
+        body = page.evaluate(BODY_TEXT_JS)
+    except Exception:  # noqa: BLE001
+        body = ""
+    if isinstance(body, str) and is_banned(body):
+        return "banned", " ".join(body.split())[:160]
+    if not _login_screen(page):
+        return "", ""
+    try:
+        page.wait_for_timeout(3000)
+    except Exception:  # noqa: BLE001
+        pass
+    return ("logged_out", "trang ChatGPT hiện màn hình đăng nhập") if _login_screen(page) else ("", "")
 
 
 class WantsSourceImage(TempError):
@@ -197,6 +233,7 @@ class GenJob:
     accept: object = None              # hàm (Path) -> str | None: lý do loại ảnh, None = nhận
     attempts: int = 0
     nav_errors: int = 0                # số lần lỗi trang/mạng (không tính vào attempts cho tới NAV_MAX)
+    refusals: int = 0                  # số lần ChatGPT từ chối prompt này vì TM / nội dung nhạy cảm
     result: Path | None = None
     error: str | None = None
 
@@ -235,14 +272,11 @@ class _Worker:
                 return loc
             except Exception:  # noqa: BLE001
                 continue
-        # Không thấy ô chat: trang chưa tải xong / bị che / tài khoản bị đăng xuất - lỗi của trang, KHÔNG phải ảnh
-        from ..llm.bulk_login import LOGIN_STATE_JS
-        try:
-            st = page.evaluate(LOGIN_STATE_JS)
-            logged_out = bool(st.get("hasLoginBtn")) or "auth" in (page.url or "")
-        except Exception:  # noqa: BLE001
-            logged_out = False
-        if logged_out:
+        # Không thấy ô chat: trang chưa tải xong / bị che / tài khoản chết - lỗi của trang, KHÔNG phải ảnh
+        kind, detail = account_state(page)
+        if kind == "banned":
+            raise NavError(f"{BANNED}: {detail}")
+        if kind == "logged_out":
             raise NavError(f"{LOGGED_OUT}: trang ChatGPT đòi đăng nhập lại")
         raise NavError(f"không thấy ô chat {selectors[0]} (trang chưa tải xong / bị che)")
 
@@ -324,7 +358,8 @@ class _Worker:
         chosen, since, quiet_since, progressed = None, 0.0, None, False
         old_srcs = {im["src"] for im in before.get("pageImgs", []) + before.get("imgs", [])}
         drawing = False
-        while time.monotonic() < deadline or (drawing and time.monotonic() < hard_deadline):
+        # quá giờ mà vẫn đang vẽ, hoặc ảnh vừa ra đang chờ đứng yên: cho thêm tới hard_deadline
+        while time.monotonic() < deadline or ((drawing or chosen) and time.monotonic() < hard_deadline):
             st = _eval(page, STATE_JS)
             new_turn = st["assistant"] > before["assistant"]
             # IP/TM là lỗi kết thúc của cả cuốn: bắt ngay khi text xuất hiện, kể cả giao diện còn giữ
@@ -361,8 +396,8 @@ class _Worker:
                     raise WantsSourceImage(st["tail"][-200:])
                 if kind == "ip_refused":
                     raise ThirdPartyIPRefused(st["tail"][-300:])
-                if kind == "refused":
-                    raise Refused(st["tail"][-200:])
+                if kind == "refused":         # từ chối chung ("may violate our content policies"): xử lý như TM -
+                    raise ThirdPartyIPRefused(st["tail"][-300:])   # gửi lại 2 lần, vẫn bị thì bỏ cuốn (03/10/2026)
                 if kind == "error" or time.monotonic() - quiet_since > 45:
                     raise TempError(f"trả lời xong mà không có ảnh: {st['tail'][-160:]!r}")
             else:
@@ -423,6 +458,7 @@ def _correct_prompt(job: GenJob) -> None:
 
 
 NAV_REST_S = 120          # tài khoản mở trang lỗi nghỉ vẽ bấy nhiêu giây
+REFUSAL_TRIES = 3         # ChatGPT từ chối vì TM / nội dung nhạy cảm: gửi lại đúng prompt đó thêm 2 lần rồi mới bỏ cuốn
 
 
 def run_jobs(jobs: list[GenJob], profiles_dir: Path, profiles: list[str], *, headless=False,
@@ -487,17 +523,27 @@ def run_jobs(jobs: list[GenJob], profiles_dir: Path, profiles: list[str], *, hea
             q.put(job)
             pool.rest(profile, IMAGE, pool.rest_s, str(e))
             on_event(f"[{profile}] HẾT LƯỢT VẼ, nghỉ vẽ tài khoản này: {str(e)[:120]}")
+            if any(h in str(e).lower() for h in RATE_HINTS):
+                pool.trouble(profile, str(e))             # bị chặn tốc độ: nhiều tài khoản cùng bị thì giảm số Chrome
             return False
         except NavError as e:
-            logged_out = LOGGED_OUT in str(e)
-            pool.rest(profile, IMAGE, 3600 if logged_out else NAV_REST_S, str(e))   # tài khoản nghỉ, việc sang acc khác
+            dead_kind = "banned" if BANNED in str(e) else "logged_out" if LOGGED_OUT in str(e) else ""
+            if dead_kind:                                 # tài khoản CHẾT: bỏ hẳn, không phải lỗi mạng của việc này
+                pool.drop(profile, dead_kind, str(e))
+                job.attempts -= 1
+                q.put(job)
+                on_event(f"[{profile}] ✘ TÀI KHOẢN CHẾT: "
+                         + (f"{BANNED} - cần thay tài khoản" if dead_kind == "banned" else
+                            f"{LOGGED_OUT}, giao diện là màn hình đăng nhập - cần đăng nhập lại")
+                         + f". Đã bỏ tài khoản này khỏi batch, chuyển {job.id} sang tài khoản khác")
+                return False
+            pool.rest(profile, IMAGE, NAV_REST_S, str(e))   # tài khoản nghỉ, việc sang acc khác
+            pool.trouble(profile, str(e))
             job.nav_errors += 1
             if job.nav_errors < NAV_MAX:
                 job.attempts -= 1                     # lỗi trang / mạng, không phải lỗi ảnh: không tính lượt
                 q.put(job)
-                on_event(f"[{profile}] " + (f"{LOGGED_OUT} - cần đăng nhập lại; " if logged_out else
-                                            f"lỗi trang ChatGPT ({str(e)[:80]}); ")
-                         + f"chuyển {job.id} sang tài khoản khác")
+                on_event(f"[{profile}] lỗi trang ChatGPT ({str(e)[:80]}); chuyển {job.id} sang tài khoản khác")
             else:                                     # lỗi trang lặp mãi trên nhiều tài khoản: tính như lỗi thường
                 job.error = f"lỗi trang ChatGPT lặp lại: {str(e)[:200]}"
                 if job.attempts < max_attempts:
@@ -507,10 +553,18 @@ def run_jobs(jobs: list[GenJob], profiles_dir: Path, profiles: list[str], *, hea
                     finish(job)
             return False
         except ThirdPartyIPRefused as e:
+            job.refusals += 1
+            if job.refusals < REFUSAL_TRIES and not fatal_ip.is_set():
+                # ChatGPT đôi khi bắt nhầm: gửi lại ngay đúng prompt này (không tính vào số lần vẽ lỗi của ảnh)
+                on_event(f"[{profile}] {job.id}: ChatGPT từ chối (TM/bản quyền, nội dung nhạy cảm hoặc vi phạm chính sách) lần "
+                         f"{job.refusals}/{REFUSAL_TRIES} - gửi lại prompt: {str(e)[:120]}")
+                job.attempts -= 1
+                return handle(profile, w, page, job)
             job.error = f"IP/TM_REJECTED: {str(e)[:260]}"
             fatal_ip_detail["text"] = str(e)[:260]
             fatal_ip.set()
-            on_event(f"[{profile}] {job.id}: BỎ CUỐN - ChatGPT từ chối vì TM/bản quyền bên thứ ba: {str(e)[:160]}")
+            on_event(f"[{profile}] {job.id}: BỎ CUỐN - ChatGPT từ chối (TM/bản quyền, nội dung nhạy cảm hoặc vi phạm chính sách) "
+                     f"{job.refusals} lần liền: {str(e)[:160]}")
             finish(job)
         except Refused as e:
             job.error = f"bị từ chối: {str(e)[:200]}"
@@ -544,6 +598,7 @@ def run_jobs(jobs: list[GenJob], profiles_dir: Path, profiles: list[str], *, hea
             with lock:
                 broken.add(profile)
             pool.rest(profile, IMAGE, 600, f"không mở được Chrome: {e}")   # các cuốn khác khỏi thử lại liên tục
+            pool.trouble(profile, f"không mở được Chrome: {e}")
         finally:
             with lock:
                 state["alive"] -= 1

@@ -35,6 +35,8 @@ def _book_rows(cdir: Path, shop: dict) -> list[dict]:
     handle = r2.slug(listing["title"], 200)
     code = hashlib.sha1(handle.encode()).hexdigest()[:5].upper()
     initials = "".join(word[0] for word in handle.split("-")[:3]).upper()
+    # cuốn mới: SKU gốc lưu sẵn (= tên thư mục); cuốn cũ: tính từ tên như trước để SKU đã đăng bán không đổi
+    base_sku = layout.book_sku(cdir) or f"{shop['sku_prefix'].get(product, 'CAL')}-{initials}-{code}"
     finishes = shop["spiral_finishes"].get(product, {})
     rows: list[dict] = []
     first = True
@@ -46,11 +48,13 @@ def _book_rows(cdir: Path, shop: dict) -> list[dict]:
             continue
         for variant in shop["variants"]:
             printable = variant["format"].lower() == "printable"
+            if printable and not (files.get(layout.printable_file(cdir, size["format_id"]).name) or {}).get("url"):
+                continue
             if not printable and variant["finish"] not in finishes.get(label, [variant["finish"]]):
                 continue
             usd = float(variant["price"]) + (0 if printable else float(size.get("spiral_add", 0)))
             compare = float(variant["compare"]) + (0 if printable else float(size.get("spiral_add", 0)))
-            sku = f"{shop['sku_prefix'].get(product, 'CAL')}-{initials}-{code}-{size['sku']}{variant['sku']}"
+            sku = f"{base_sku}-{size['sku']}{variant['sku']}"
             row = dict.fromkeys(HEADER, "")
             row.update({
                 "Handle": handle, "Product Category": "Calendaria",
@@ -92,18 +96,27 @@ def publish_all(cfg: dict, on_event=print, only: list[Path] | None = None) -> di
         chosen = {Path(book).resolve() for book in only}
         books = [book for book in books if book.resolve() in chosen]
     s3 = r2.client(r2.settings(cfg))
-    pushed, failed = [], []
+    pushed, failed, successful = [], [], []
     for book in books:
         try:
             before = r2.read_state(book).get("pushed_at")
             state = r2.push_book(book, cfg, on_event, s3=s3)
+            successful.append(book)
             if state.get("pushed_at") != before:
                 pushed.append(book.name)
         except Exception as exc:  # one broken book must not block the others
             failed.append(f"{book.name}: {exc}")
             on_event(f"  ✘ {book.name}: {exc}")
-    todo = [book for book in books if r2.read_state(book).get("files") and
+    todo = [book for book in successful if r2.read_state(book).get("files") and
             (only is not None or not r2.read_state(book).get("calendaria_exported_at"))]
+    rows_by_book = {}
+    for book in list(todo):
+        try:
+            rows_by_book[book] = _book_rows(book, shop_settings(cfg))
+        except Exception as exc:  # noqa: BLE001 - listing hỏng: bỏ cuốn đó, không làm hỏng cả file CSV
+            todo.remove(book)
+            failed.append(f"{book.name}: không dựng được dòng CSV ({type(exc).__name__}: {exc})")
+            on_event(f"  ✘ {book.name}: không dựng được dòng CSV - {exc}")
     csv_path = None
     if todo:
         out_dir = root / "_xuat_csv"
@@ -113,7 +126,7 @@ def publish_all(cfg: dict, on_event=print, only: list[Path] | None = None) -> di
             writer = csv.DictWriter(stream, fieldnames=HEADER)
             writer.writeheader()
             for book in todo:
-                writer.writerows(_book_rows(book, shop_settings(cfg)))
+                writer.writerows(rows_by_book[book])
         stamp = time.strftime("%Y-%m-%d %H:%M:%S")
         for book in todo:
             state = r2.read_state(book)

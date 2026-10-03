@@ -31,6 +31,7 @@ class Task:
         self.description = description
         self.status = "running"  # running, success, failed
         self.logs: list[str] = []
+        self.log_offset = 0
         self.start_time = time.time()
         self.end_time: float | None = None
         self.return_code: int | None = None
@@ -42,6 +43,7 @@ class Task:
             self.logs.append(text)
             if len(self.logs) > 3000:
                 self.logs.pop(0)
+                self.log_offset += 1
 
     def to_dict(self, since: int = 0) -> dict[str, Any]:
         with self.lock:
@@ -54,8 +56,8 @@ class Task:
                 "start_time": self.start_time,
                 "end_time": self.end_time,
                 "return_code": self.return_code,
-                "logs": self.logs[since:],
-                "total_logs": len(self.logs),
+                "logs": self.logs[max(0, since - self.log_offset):],
+                "total_logs": self.log_offset + len(self.logs),
             }
 
 
@@ -210,6 +212,34 @@ def _unfinished_books() -> list[dict]:
     return out
 
 
+def _sku_of(b: Path) -> str:
+    """SKU gốc của cuốn: mã lưu sẵn (cuốn mới) hoặc mã tính lại đúng như lúc xuất CSV (cuốn cũ đã có listing)."""
+    sku = layout.book_sku(b)
+    if sku:
+        return sku
+    try:
+        from ..publish.shop_csv import shop_settings
+        from ..sku_rename import legacy_sku
+        return legacy_sku(b, shop_settings(config.load()))
+    except Exception:  # noqa: BLE001 - cuốn chưa có listing: chưa có SKU
+        return ""
+
+
+def _done_at(b: Path) -> str:
+    """Lúc cuốn làm xong: mốc "updated" trong status.json (ghi khi xong bước cuối). Không dùng giờ sửa file vì đổi
+    tên / sửa đường dẫn hàng loạt làm mọi cuốn cùng một giờ, mất thứ tự mới -> cũ."""
+    try:
+        st = json.loads(layout.status_file(b).read_text(encoding="utf-8"))
+        if isinstance(st, dict) and str(st.get("updated", ""))[:4].isdigit():
+            return str(st["updated"])[:16]
+    except (OSError, ValueError):
+        pass
+    try:
+        return time.strftime("%Y-%m-%d %H:%M", time.localtime(layout.status_file(b).stat().st_mtime))
+    except OSError:
+        return ""
+
+
 def _shop_books() -> list[dict]:
     """Các cuốn đã xong (đưa lên web được) + trạng thái R2/CSV, cho hộp chọn cuốn của nút Đẩy R2 + xuất CSV."""
     from ..publish import r2
@@ -225,12 +255,13 @@ def _shop_books() -> list[dict]:
         previews = sorted(layout.listing(b).glob("*.jpg"))
         out.append({
             "path": _rel(b), "title": concept.get("title") or b.name, "keyword": b.parent.name,
+            "sku": _sku_of(b),
             "product": products.product_id(concept), "cover": _vrel(previews[0]) if previews else "",
             "pushed_at": st.get("pushed_at", ""), "exported_at": st.get("exported_at", ""),
             "exported_csv": st.get("exported_csv", ""),
             "calendaria_exported_at": st.get("calendaria_exported_at", ""),
             "calendaria_exported_csv": st.get("calendaria_exported_csv", ""),
-            "done_at": time.strftime("%Y-%m-%d %H:%M", time.localtime(layout.status_file(b).stat().st_mtime)),
+            "done_at": _done_at(b),
         })
     out.sort(key=lambda x: x["done_at"], reverse=True)
     return out
@@ -239,7 +270,7 @@ def _shop_books() -> list[dict]:
 def _book_arg(params: dict) -> Path:
     root = (ROOT / config.load()["projects_dir"]).resolve()
     target = (ROOT / str(params.get("concept", ""))).resolve()
-    if not str(target).startswith(str(root)) or not layout.is_book(target):
+    if not target.is_relative_to(root) or not layout.is_book(target):   # chỉ nhận thư mục cuốn nằm TRONG projects
         raise ValueError("Không tìm thấy cuốn này.")
     return target
 
@@ -263,6 +294,10 @@ def run_args(params: dict) -> tuple[list[str], str]:
         pages = [p for p in (params.get("pages") or []) if isinstance(p, str)]
         if not pages:
             raise ValueError("Chưa chọn trang nào để vẽ lại.")
+        known = {"cover", "grid"} | {f"{k}{m:02d}" for k in "mg" for m in range(1, 13)}
+        bad = [p for p in pages if p not in known]
+        if bad:
+            raise ValueError(f"Trang không hợp lệ: {', '.join(bad)}")
         return ["redo", str(target), "--pages", ",".join(pages)], f"Vẽ lại {len(pages)} trang: {target.name}"
     keyword = str(params.get("keyword", "")).strip()
     if not keyword:
@@ -367,10 +402,34 @@ class StudioHandler(SimpleHTTPRequestHandler):
 
         return self._send_json({"error": "Not found"}, status=HTTPStatus.NOT_FOUND)
 
+    def _cross_site(self) -> str:
+        """Lý do chặn nếu yêu cầu POST đến từ trang web khác (CSRF): trang lạ mở trong trình duyệt không được tự bấm
+        "mở file", đổi khoá R2, chạy batch... trên máy chủ cục bộ này. Rỗng = cho qua."""
+        site = (self.headers.get("Sec-Fetch-Site") or "").lower()
+        if site and site not in ("same-origin", "none"):
+            return f"Sec-Fetch-Site={site}"
+        origin = self.headers.get("Origin")
+        if origin:
+            o = urllib.parse.urlparse(origin)
+            if o.hostname not in ("127.0.0.1", "localhost", "::1") or o.port != self.server.server_address[1]:
+                return f"Origin={origin}"
+        # trang lạ chỉ gửi được "simple request" (text/plain, form) mà không qua bước hỏi trước (preflight)
+        if "application/json" not in (self.headers.get("Content-Type") or "").lower():
+            return "Content-Type phải là application/json"
+        return ""
+
     def do_POST(self):
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
         if path.startswith("/api/"):
+            why = self._cross_site()
+            if why:
+                try:                                   # đọc bỏ phần thân để kết nối đóng gọn
+                    self.rfile.read(min(int(self.headers.get("Content-Length", 0) or 0), 1 << 20))
+                except (OSError, ValueError):
+                    pass
+                return self._send_json({"error": f"Từ chối yêu cầu không đến từ giao diện CalForge ({why})"},
+                                       status=HTTPStatus.FORBIDDEN)
             return self._handle_api_post(path)
         return self._send_json({"error": "Method not allowed"}, status=HTTPStatus.METHOD_NOT_ALLOWED)
 
@@ -575,6 +634,9 @@ class StudioHandler(SimpleHTTPRequestHandler):
                     return self._send_json({"error": "Not found"}, status=HTTPStatus.NOT_FOUND)
             except ValueError as e:
                 return self._send_json({"error": str(e)}, status=HTTPStatus.BAD_REQUEST)
+            except OSError as e:           # không ghi được hàng đợi (hết đĩa, file bị khoá): báo rõ, máy chủ không sập
+                return self._send_json({"error": f"Không lưu được hàng đợi: {e}"},
+                                       status=HTTPStatus.INTERNAL_SERVER_ERROR)
             return self._send_json(q.snapshot())
 
         if path == "/api/shutdown":
@@ -596,7 +658,8 @@ class StudioHandler(SimpleHTTPRequestHandler):
                 batch_queue().stopped_by_user(str(body.get("id", "")))
                 return self._send_json({"ok": TASK_MANAGER.stop_task(str(body.get("id", "")))})
             target = (ROOT / str(body.get("path", "")).lstrip("/\\")).resolve()
-            if not str(target).startswith(str(ROOT.resolve())) or not target.exists():
+            # CHỈ mở THƯ MỤC nằm trong tool: mở file bằng os.startfile = chạy file đó (python.exe, .bat...)
+            if not target.is_relative_to(ROOT.resolve()) or not target.is_dir():
                 return self._send_json({"error": "Không tìm thấy thư mục"}, status=HTTPStatus.NOT_FOUND)
             _open_in_explorer(target)
             return self._send_json({"ok": True})
@@ -719,6 +782,7 @@ class StudioHandler(SimpleHTTPRequestHandler):
 
                 concepts.append({
                     "id": c_dir.name,
+                    "sku": _sku_of(c_dir),
                     "path": str(c_dir.relative_to(ROOT)).replace("\\", "/"),
                     "title": (concept_data.get("cover") or {}).get("title") or c_dir.name,
                     "subtitle": (concept_data.get("cover") or {}).get("subtitle", ""),
@@ -757,7 +821,7 @@ class StudioHandler(SimpleHTTPRequestHandler):
             return self._send_json({"error": "Path required"}, status=HTTPStatus.BAD_REQUEST)
         
         target = (ROOT / rel_path).resolve()
-        if not str(target).startswith(str(ROOT.resolve())) or not target.is_dir():
+        if not _in_projects(target) or not target.is_dir():
             return self._send_json({"error": "Invalid concept path"}, status=HTTPStatus.BAD_REQUEST)
 
         concept_file = layout.concept_file(target)
@@ -833,7 +897,7 @@ class StudioHandler(SimpleHTTPRequestHandler):
         target = (ROOT / clean_rel).resolve()
         
         # Security check: must reside inside ROOT
-        if not str(target).startswith(str(ROOT.resolve())) or not target.is_file():
+        if not _in_projects(target) or not target.is_file():   # chỉ file lịch trong projects (không lộ khoá R2, cookie)
             return self._send_json({"error": "File not found or forbidden"}, status=HTTPStatus.NOT_FOUND)
 
         mime, _ = mimetypes.guess_type(str(target))
@@ -853,7 +917,7 @@ class StudioHandler(SimpleHTTPRequestHandler):
         """Ảnh thu nhỏ (JPEG) cho lưới kết quả; lưu tạm theo mtime để lần sau trả ngay."""
         rel_path = rel_path.split("?v=")[0]               # "?v=<mtime>": chỉ để trình duyệt không dùng ảnh cũ
         target = (ROOT / rel_path.lstrip("/\\")).resolve()
-        if not str(target).startswith(str(ROOT.resolve())) or not target.is_file():
+        if not _in_projects(target) or not target.is_file():   # chỉ file lịch trong projects (không lộ khoá R2, cookie)
             return self._send_json({"error": "File not found or forbidden"}, status=HTTPStatus.NOT_FOUND)
         width = max(120, min(width, 1600))
         cache = ROOT / ".cache" / "thumbs"
@@ -943,6 +1007,16 @@ def _book_outputs(c_dir: Path) -> dict:
             "pdfs": pdfs, "listing": listing}
 
 
+def _in_projects(target: Path) -> bool:
+    """File / thư mục nằm TRONG thư mục projects (lịch đã làm). Giao diện chỉ cần đọc ở đây; file khác của tool
+    (calforge.json có khoá R2, .chrome-profiles có cookie tài khoản...) không bao giờ được trả ra."""
+    try:
+        root = Path(config.load()["projects_dir"]).resolve()
+        return Path(target).resolve().is_relative_to(root)
+    except (OSError, KeyError, ValueError):
+        return False
+
+
 def _open_in_explorer(target: Path) -> None:
     if os.name == "nt":
         os.startfile(str(target))  # noqa: S606 - chỉ mở thư mục trong dự án
@@ -958,7 +1032,7 @@ def _read_batch(kw_dir: Path) -> dict:
         b = json.loads(layout.batch_file(kw_dir).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
-    return {k: b.get(k) for k in ("target", "started", "finished", "report")}
+    return {k: b.get(k) for k in ("target", "started", "finished", "report", "concepts")}
 
 
 def _already_running(url: str) -> bool:
@@ -992,6 +1066,15 @@ def run_server(host: str = "127.0.0.1", port: int = 8080, open_browser: bool = T
         print(f"Cổng {port} đang bị chương trình khác dùng. Tắt chương trình đó hoặc khởi động lại máy.")
         raise SystemExit(1)
     print(f"\n========================================================")
+    try:                                   # cuốn làm trước khi có SKU: đổi tên thư mục sang SKU (trước khi đọc hàng đợi)
+        from ..publish.shop_csv import shop_settings
+        from ..sku_rename import rename_all
+        cfg = config.load()
+        renamed = rename_all(Path(cfg["projects_dir"]), shop=shop_settings(cfg))
+        if renamed:
+            print(f" Đã đổi tên {len(renamed)} cuốn cũ sang mã SKU")
+    except Exception as e:  # noqa: BLE001 - đổi tên lỗi không được chặn mở tool
+        print(f" ⚠ Chưa đổi tên được các cuốn cũ sang SKU: {e}")
     batch_queue().start()                  # chạy lần lượt các batch trong hàng đợi
     print(f" ✨ CalForge Studio đang chạy tại: {url}")
     print(f" 📂 Bấm Ctrl+C để dừng máy chủ")

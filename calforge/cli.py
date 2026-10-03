@@ -202,9 +202,11 @@ def cmd_produce(args, cfg):
 
 def cmd_finish(args, cfg):
     """Hoàn thiện một cuốn đã vẽ đủ tranh (không cần ChatGPT): upscale, trang in, PDF, ảnh quảng cáo, listing."""
-    from .pipeline import finish_book, upscale_concept
+    from .pipeline import finish_book, upscale_concept, _read_status
 
     d = _concept_dir(args.concept)
+    if _read_status(d).get("terminal"):
+        sys.exit("Cuốn đã bị loại (TM/bản quyền, nội dung nhạy cảm hoặc vi phạm chính sách), không hoàn thiện lại.")
     if args.redo_previews:
         for f in layout.listing(d).glob("*.jpg"):
             f.unlink()
@@ -285,6 +287,13 @@ def cmd_shop(args, cfg):
     print(f"CSV: {res['csv']}" if res["csv"] else "CSV: không có cuốn mới cần xuất")
 
 
+def cmd_rename_sku(args, cfg):
+    from .publish.shop_csv import shop_settings
+    from .sku_rename import rename_all
+    done = rename_all(Path(cfg["projects_dir"]), shop=shop_settings(cfg))
+    print(f"Đã đổi tên {len(done)} cuốn sang SKU" if done else "Không còn cuốn nào cần đổi tên")
+
+
 def cmd_ui(args, cfg):
     from .ui.server import run_server
 
@@ -346,7 +355,7 @@ def main(argv=None):
     p.add_argument("--auto", type=int, help="tự chọn N góc tốt nhất (mặc định theo config)")
     p.add_argument("--more", action="store_true", help="sinh thêm lượt góc mới, không trùng góc cũ")
     p.add_argument("--style", help="ép phong cách, bỏ qua gợi ý của ChatGPT")
-    p.add_argument("--family", help="ép style đã duyệt: styled_photography, papercut_collage hoặc mid_century_retro")
+    p.add_argument("--family", help="ép style đã duyệt: styled_photography, papercut_collage, mid_century_retro hoặc anime_illustration")
     p.add_argument("--grid-preset", default="auto",
                    choices=("auto", "bento_planner", "quiet_luxury", "soft_tech", "fresh_monochrome", "organic_capsules", "playful_editorial"),
                    help="tự chọn grid theo concept hoặc ép một preset")
@@ -381,7 +390,7 @@ def main(argv=None):
     p.add_argument("keyword")
     p.add_argument("--pick")
     p.add_argument("--auto", type=int)
-    p.add_argument("--family", choices=("styled_photography", "papercut_collage", "mid_century_retro"),
+    p.add_argument("--family", choices=("styled_photography", "papercut_collage", "mid_century_retro", "anime_illustration"),
                    help="ép medium sản xuất cho toàn bộ dự án")
     p.add_argument("--grid-preset", default="auto",
                    choices=("auto", "bento_planner", "quiet_luxury", "soft_tech", "fresh_monochrome", "organic_capsules", "playful_editorial"))
@@ -390,7 +399,7 @@ def main(argv=None):
     p.add_argument("--resume", action="store_true",
                    help="làm nốt batch trước của chủ đề này (chỉ các cuốn thiếu/hỏng), không mở batch mới")
     p.add_argument("--mockup-mode", choices=("template", "ai"),
-                   help='chỉ với --grid-mode ai_page: template = mockup có sẵn; ai = AI gen bối cảnh cho 4 ảnh quảng cáo')
+                   help='chỉ với --grid-mode ai_page: template = mockup có sẵn; ai = AI gen bối cảnh cho 5 ảnh quảng cáo')
     p.add_argument("--grid-mode", choices=("ai_page", "background"),
                    help="Wall Calendar (Blank): ai_page = AI vẽ cả trang lịch; background = AI vẽ nền, code in lịch")
     p.add_argument("--no-printify", action="store_true", help="dừng ở file in + listing")
@@ -433,6 +442,9 @@ def main(argv=None):
     p.add_argument("--book", action="append", help="chỉ cuốn này (thư mục cuốn, lặp lại được); bỏ trống = mọi cuốn")
     p.add_argument("--format", choices=("printify", "calendaria"), default="printify", help="mẫu CSV cần xuất")
     p.set_defaults(func=cmd_shop)
+
+    p = sub.add_parser("rename-sku", help="đổi tên thư mục các cuốn cũ sang mã SKU (giữ SKU đã xuất)")
+    p.set_defaults(func=cmd_rename_sku)
 
     p = sub.add_parser("ui", help="mở giao diện web CalForge Studio")
     p.add_argument("--port", type=int, default=8080, help="cổng mạng (mặc định 8080)")

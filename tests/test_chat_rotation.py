@@ -117,6 +117,19 @@ class LimitMessagesTest(unittest.TestCase):
         ]
         for message in ip_messages:
             self.assertEqual(classify(message), "ip_refused", message)
+        adult_messages = [                                  # quy định ảnh khỏa thân / tình dục: cũng bỏ cuốn
+            ("Rất tiếc, nhưng hình ảnh chúng ta tạo ra có thể vi phạm các quy định của chúng tôi về ảnh khỏa thân, "
+             "tình dục hoặc nội dung khiêu dâm. Nếu bạn cho rằng chúng tôi đã hiểu sai, vui lòng thử lại hoặc chỉnh "
+             "sửa câu lệnh của bạn."),
+            "RAT TIEC, hinh anh co the vi pham quy dinh ve anh KHOA THAN.",
+            ("Sorry, but the image we created may violate our guardrails around nudity, sexuality, or erotic "
+             "content. If you think we got it wrong, please retry or edit your prompt."),
+            "I can't create this image because it may violate our policies on sexual content.",
+        ]
+        for message in adult_messages:
+            self.assertEqual(classify(message), "ip_refused", message)
+        for message in ("A classical statue study, tasteful, no nudity.", "Lịch tranh phong cảnh, không khỏa thân."):
+            self.assertNotEqual(classify(message), "ip_refused", message)
         non_ip_messages = [
             "Use licensed third-party content supplied by the customer.",
             "The article discusses copyright and trademark law.",
@@ -126,6 +139,8 @@ class LimitMessagesTest(unittest.TestCase):
         for message in non_ip_messages:
             self.assertNotEqual(classify(message), "ip_refused", message)
         self.assertEqual(classify("Something went wrong while generating the response."), "error")
+        self.assertEqual(classify("We're so sorry, but the prompt may violate our content policies. If you think we "
+                                  "got it wrong, please retry or edit your prompt."), "refused")   # gặp thật 03/10
         self.assertEqual(classify("Get Plus - upgrade your plan for more features"), "")      # banner quảng cáo
         self.assertEqual(classify("Here is your calendar concept."), "")
 

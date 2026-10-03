@@ -21,6 +21,17 @@ def book(root: Path, product="wall_grid") -> Path:
 
 
 class RedoTest(unittest.TestCase):
+    def test_terminal_book_cannot_be_redrawn_or_finished(self):
+        from calforge import pipeline
+        with tempfile.TemporaryDirectory() as tmp:
+            c = book(Path(tmp))
+            pipeline._status(c, stage="ip_rejected", ok=False, terminal=True)
+            with self.assertRaises(ValueError):
+                redo_pages(c, ["m05"])
+            self.assertEqual((layout.raw(c) / "m05.png").read_bytes(), b"x")
+            self.assertEqual(pipeline.finish_book(c, {})["stage"], "ip_rejected")
+            self.assertFalse(pipeline.needs_finishing(c))
+
     def test_moves_only_chosen_pages_and_marks_for_reexport(self):
         with tempfile.TemporaryDirectory() as tmp:
             c = book(Path(tmp))

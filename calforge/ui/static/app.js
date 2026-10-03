@@ -27,6 +27,7 @@ const STYLE_LABEL = {
   styled_photography: 'Styled photography',
   papercut_collage: 'Layered papercut',
   mid_century_retro: 'Mid-century poster',
+  anime_illustration: 'Anime illustration',
 };
 
 function batchStyle(selection) {
@@ -44,6 +45,7 @@ document.addEventListener('DOMContentLoaded', () => {
   reattachRunningTask();
   loadQueue();
   setInterval(loadQueue, 3000);
+  setInterval(loadAccounts, 15000);         // tài khoản chết giữa batch hiện ngay
 });
 
 // --------------------------------------------------------------------------
@@ -232,8 +234,17 @@ async function loadAccounts() {
     S.accounts = [];
   }
   const ready = S.accounts.filter((a) => a.has_session).length;
-  $('accSummary').textContent = `(${ready}/${S.accounts.length} sẵn sàng)`;
-  $('accDot').className = 'dot ' + (ready ? 'ok' : 'bad');
+  const dead = S.accounts.filter((a) => a.dead);
+  $('accSummary').textContent = `(${ready}/${S.accounts.length} sẵn sàng` +
+    (dead.length ? ` · ${dead.length} tài khoản chết` : '') + ')';
+  $('accDot').className = 'dot ' + (dead.length ? 'warn' : ready ? 'ok' : 'bad');
+  S.deadSeen = S.deadSeen || new Set();
+  const fresh = dead.filter((a) => !S.deadSeen.has(a.name));
+  if (fresh.length) {                       // batch vừa phát hiện tài khoản chết: báo ngay một lần
+    toast('Tài khoản chết, đã bỏ khỏi batch: ' +
+      fresh.map((a) => `${a.name} (${a.dead.label})`).join('; '), 'error');
+  }
+  S.deadSeen = new Set(dead.map((a) => a.name));
   $('accNotice').hidden = ready > 0;
   renderAccounts();
 }
@@ -302,6 +313,7 @@ function renderQueue() {
   $('queueCard').hidden = !items.length && !S.queue.paused;
   $('btnQueuePause').textContent = S.queue.paused ? 'Tiếp tục' : 'Tạm dừng';
   $('btnQueuePause').classList.toggle('btn-primary', !!S.queue.paused);
+  $('btnQueuePause').classList.toggle('btn-ghost', !S.queue.paused);
   $('queuePaused').hidden = !S.queue.paused;
   $('btnStart').textContent = (S.task || active.length) ? 'Thêm vào hàng đợi' : 'Bắt đầu';
   $('btnStart').disabled = false;
@@ -389,6 +401,7 @@ async function reattachRunningTask() {
 function attachTask(task) {
   S.task = task;
   S.logs = [];
+  S.logCursor = 0;
   $('runCard').hidden = false;
   $('btnStart').textContent = 'Thêm vào hàng đợi';   // đang chạy vẫn bấm được: xếp batch mới vào hàng đợi
   const p = task.params || {};
@@ -408,11 +421,12 @@ async function pollTask() {
   if (!S.task) return;
   let t;
   try {
-    t = await api(`/api/task?id=${S.task.id}&since=${S.logs.length}`);
+    t = await api(`/api/task?id=${S.task.id}&since=${S.logCursor || 0}`);
   } catch (_) {
     return;
   }
   S.logs.push(...(t.logs || []));
+  S.logCursor = t.total_logs;
   S.task.start_time = t.start_time || S.task.start_time;
   renderProgress();
   if (t.status !== 'running') finishTask(t.status);
@@ -513,12 +527,12 @@ function bookState(b) {
   return 'pending';
 }
 
-const STATE_LABEL = { done: 'Xong', rejected: 'Bỏ · TM/bản quyền', error: 'Bị dở', pending: 'Chưa xong' };
+const STATE_LABEL = { done: 'Xong', rejected: 'Bỏ · bị từ chối', error: 'Bị dở', pending: 'Chưa xong' };
 
 function friendlyReason(st) {
   const stage = (st || {}).stage;
   const raw = (st || {}).reason || '';
-  if (stage === 'ip_rejected') return raw || 'Bỏ cuốn: ChatGPT từ chối vì TM/bản quyền hoặc quyền bên thứ ba.';
+  if (stage === 'ip_rejected') return raw || 'Bỏ cuốn: ChatGPT từ chối vì TM/bản quyền, nội dung nhạy cảm hoặc vi phạm chính sách.';
   if (stage === 'images') return 'ChatGPT chưa vẽ đủ tranh (thường do tài khoản hết lượt). Chờ một lúc rồi bấm "Làm tiếp".';
   if (stage === 'render') return 'Lỗi khi dàn trang in. Bấm "Làm tiếp"; nếu vẫn lỗi, gửi phần chi tiết cho người kỹ thuật.';
   if (stage === 'printify') return 'Chưa đưa lên được Printify. Kiểm tra mạng rồi bấm "Làm tiếp".';
@@ -569,16 +583,33 @@ function bookCard(c, keyword) {
       <strong>${esc(c.title)}</strong>
       <span class="pill ${state}">${STATE_LABEL[state]}</span>
     </div>
+    ${c.sku ? `<p class="sku" title="Mã SKU - bấm để chép">${esc(c.sku)}</p>` : ''}
     ${c.product === 'wall_premade' ? '<p class="kind-tag">Wall Calendar</p>' : ''}
-    ${(state === 'error' || state === 'rejected') ? `<p class="why">${esc(friendlyReason(c.status))}</p>` : ''}`;
-  el.addEventListener('click', () => { S.openBook = c.path; renderBook(c, keyword); $('bookModal').hidden = false; });
+    ${(state === 'error' || state === 'rejected') ? `<p class="why">${esc(friendlyReason(c.status))}</p>` : ''}
+    <span class="book-detail" role="button" tabindex="0" title="Xem ảnh, vẽ lại trang, nội dung đăng bán">Chi tiết</span>`;
+  el.title = 'Bấm để mở thư mục cuốn này';
+  el.addEventListener('click', () => openFolder(c.path));            // bấm vào cuốn = mở thẳng thư mục cuốn
+  const detail = el.querySelector('.book-detail');
+  const showDetail = (e) => {
+    e.stopPropagation();
+    S.openBook = c.path; renderBook(c, keyword); $('bookModal').hidden = false;
+  };
+  detail.addEventListener('click', showDetail);
+  detail.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') showDetail(e); });
+  const skuEl = el.querySelector('.sku');
+  if (skuEl) {
+    skuEl.addEventListener('click', (e) => {          // bấm vào SKU: chép mã, không mở chi tiết cuốn
+      e.stopPropagation();
+      navigator.clipboard?.writeText(c.sku).then(() => toast(`Đã chép SKU ${c.sku}`, 'info'), () => {});
+    });
+  }
   return el;
 }
 
 function renderBook(c, keyword) {
   const state = bookState(c);
   $('bookTitle').textContent = c.title;
-  $('bookSub').textContent = [keyword, c.product === 'wall_premade' ? 'Wall Calendar' : 'Wall Calendar (Blank)', c.subtitle].filter(Boolean).join(' · ');
+  $('bookSub').textContent = [c.sku ? `SKU ${c.sku}` : '', keyword, c.product === 'wall_premade' ? 'Wall Calendar' : 'Wall Calendar (Blank)', c.subtitle].filter(Boolean).join(' · ');
   $('bookState').textContent = STATE_LABEL[state];
   $('bookState').className = `pill ${state}`;
   const err = $('bookError');
@@ -774,7 +805,8 @@ function renderAccounts() {
   ul.innerHTML = '';
   S.accounts.forEach((acc) => {
     const li = document.createElement('li');
-    const state = acc.is_locked ? ['Đang mở', 'warn'] : acc.has_session ? ['Sẵn sàng', 'ok'] : ['Chưa đăng nhập', 'bad'];
+    const state = acc.dead ? [`Đã chết · ${acc.dead.label}`, 'bad']
+      : acc.is_locked ? ['Đang mở', 'warn'] : acc.has_session ? ['Sẵn sàng', 'ok'] : ['Chưa đăng nhập', 'bad'];
     li.innerHTML = `
       <span class="dot ${state[1]}"></span>
       <strong>${esc(acc.name)}</strong>
@@ -892,7 +924,7 @@ async function openShopPicker(format = 'printify') {
 
 function shopVisible() {
   const q = $('shopFilter').value.trim().toLowerCase();
-  return SHOP.books.filter((b) => !q || `${b.title} ${b.keyword}`.toLowerCase().includes(q));
+  return SHOP.books.filter((b) => !q || `${b.sku || ''} ${b.title} ${b.keyword}`.toLowerCase().includes(q));
 }
 
 function renderShopBooks() {
@@ -918,7 +950,7 @@ function renderShopBooks() {
       : b.pushed_at ? '<span class="tag">Đã đẩy R2, chưa xuất CSV</span>' : '<span class="tag new">Mới</span>';
     row.innerHTML = `<input type="checkbox" ${SHOP.picked.has(b.path) ? 'checked' : ''}>
       ${b.cover ? `<img src="${thumbUrl(b.cover, 120)}" alt="" loading="lazy">` : '<img alt="">'}
-      <span class="t"><strong>${esc(b.title)}</strong><small>Xong ${esc(b.done_at.slice(5))}</small></span>${state}`;
+      <span class="t"><strong>${esc(b.title)}</strong><small>${b.sku ? `${esc(b.sku)} · ` : ''}Xong ${esc(b.done_at.slice(5))}</small></span>${state}`;
     row.querySelector('input').addEventListener('change', (e) => {
       if (e.target.checked) SHOP.picked.add(b.path); else SHOP.picked.delete(b.path);
       updateShopPicked();
@@ -1093,7 +1125,9 @@ function sanitizeDesc(html) {
 async function quitTool() {
   const running = S.task ? '\nViệc đang chạy sẽ dừng (phần đã làm vẫn còn, lần sau bấm "Làm tiếp").' : '';
   if (!confirm('Tắt CalForge Studio?' + running)) return;
-  try { await fetch('/api/shutdown', { method: 'POST' }); } catch (e) { /* máy chủ đã tắt */ }
+  try {
+    await fetch('/api/shutdown', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+  } catch (e) { /* máy chủ đã tắt */ }
   document.body.innerHTML = '<main style="padding:60px;text-align:center;font:18px Segoe UI,sans-serif">' +
     'Đã tắt CalForge Studio. Bạn có thể đóng cửa sổ này.<br><br>Muốn dùng lại: bấm biểu tượng <b>CalForge Studio</b>.</main>';
 }

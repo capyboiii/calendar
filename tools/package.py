@@ -195,8 +195,9 @@ def main() -> Path:
     iss = DIST / "setup.iss"
     iss.write_text(ISS % {"version": time.strftime("%Y.%m.%d"), "out": DIST, "app": app}, encoding="utf-8-sig")
     subprocess.run([str(iscc), "/Q", str(iss)], check=True)
-    shutil.rmtree(app, ignore_errors=True)
-    iss.unlink()
+    if "--keep-stage" not in sys.argv:
+        shutil.rmtree(app, ignore_errors=True)
+        iss.unlink()
     target = DIST / "CalForge_Studio_Setup.exe"
     print(f"Bộ cài -> {target} ({target.stat().st_size / 1e6:.0f} MB)")
     _guide_pdf()

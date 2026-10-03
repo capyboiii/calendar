@@ -167,7 +167,9 @@ class RunJobsStressTest(unittest.TestCase):
         for jobs in results.values():                             # mọi việc đều kết thúc: có ảnh hoặc có lý do
             self.assertTrue(all(j.result is not None or j.error for j in jobs))
         self.assertEqual(pool.use, {})                            # trả hết tài khoản
-        self.assertTrue(pool._resting("acc2", IMAGE) and pool._resting("acc5", IMAGE))
+        for acc in ("acc2", "acc5"):                              # tài khoản nào đã chạm hết lượt thì phải đang nghỉ vẽ
+            if FakeWorker.quota_left.get(acc, 0) < 0:                 # (được giao ít việc thì có thể chưa chạm - tuỳ nhịp)
+                self.assertTrue(pool._resting(acc, IMAGE), acc)
         self.assertFalse(pool._resting("acc2", CHAT))
 
     def test_all_accounts_out_of_quota_returns_promptly(self):
@@ -197,7 +199,7 @@ class RunJobsStressTest(unittest.TestCase):
         with mock.patch.object(driver, "_Worker", IPWorker):
             result = run_jobs(jobs, Path("."), ["acc1"], max_attempts=3, on_event=lambda *_: None,
                               pool=pool, open_page=fake_open)
-        self.assertEqual(calls, ["tm-0"])
+        self.assertEqual(calls, ["tm-0"] * 3)                      # gửi lại đúng prompt đó 2 lần nữa rồi mới bỏ cuốn
         self.assertTrue(all((j.error or "").startswith("IP/TM_REJECTED:") for j in result))
 
     def test_ip_text_interrupts_wait_even_while_ui_is_busy(self):

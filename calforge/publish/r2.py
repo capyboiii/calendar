@@ -120,10 +120,12 @@ def push_book(cdir: Path, cfg: dict, on_event=print, s3=None) -> dict:
     r2 = settings(cfg)
     s3 = s3 or client(r2)
     st = read_state(cdir)
+    destination = {k: r2.get(k, "") for k in ("account_id", "bucket", "prefix", "public_url")}
+    if st.get("destination") != destination:
+        st = {"destination": destination}
     key_base = st.get("key_base") or f"{r2['prefix'].strip('/')}/{_group(cdir)}{slug(cdir.parent.name, 40)}/{slug(cdir.name)}"
     files = st.get("files", {})
     base_url = r2["public_url"].rstrip("/")
-    todo = []
     todo = []
     for name, path in book_files(cdir).items():
         stat = path.stat()

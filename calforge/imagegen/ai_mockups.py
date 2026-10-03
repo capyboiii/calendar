@@ -1,8 +1,10 @@
-"""AI gen mockup (Wall Calendar (Blank), "AI vẽ cả trang" + "AI gen mockup"): 4 ảnh quảng cáo do ChatGPT dựng bối cảnh.
+"""AI gen mockup (Wall Calendar (Blank), "AI vẽ cả trang" + "AI gen mockup"): 5 ảnh quảng cáo do ChatGPT dựng bối cảnh.
 
 Chạy SAU khi code đã ghép mockup (render/mockups.previews), vì ảnh 2/3/4 cần đúng mockup code làm ảnh kèm:
 - 01_front_cover_spiral: kèm IMAGE 1 = data/mockups/front_cover_spiral.webp, IMAGE 2 = tranh bìa AI gốc (anh_ai/cover.*)
-- 02_open_spread_flat / 03_three_open_spreads / 05_wall_page_turn: kèm mockup code của chính ảnh đó
+- 02_open_spread_flat / 03_three_open_spreads: kèm mockup code của chính ảnh đó
+- 04_two_wall_spreads: kèm IMAGE 1 = tranh tháng 1 AI gốc (anh_ai/m01.*), IMAGE 2 = mockup code 2 tờ treo tường
+- 06_three_books: kèm IMAGE 1 = tranh tháng 4 AI gốc (anh_ai/m04.*), IMAGE 2 = mockup code 3 cuốn của chính ảnh đó
 Ảnh AI GHI ĐÈ đúng file preview (R2 / CSV dùng thẳng). Ảnh AI nào hỏng hẳn / hết lượt: GIỮ mockup code ở chỗ đó
 (cuốn không bị kẹt), ghi lại để "Làm lại ảnh quảng cáo" gen lại sau.
 
@@ -19,7 +21,7 @@ from pathlib import Path
 from PIL import Image
 
 from .. import layout
-from .mockup_prompts import AI_PREVIEWS, COVER_PROMPT, SCENE_PROMPT, SQUARE_COVER, SQUARE_SCENE
+from .mockup_prompts import AI_PREVIEWS, ART_PREVIEWS, COVER_PROMPT, SCENE_PROMPT, SQUARE_COVER, SQUARE_SCENE
 
 ROOT = Path(__file__).resolve().parents[2]
 COVER_TEMPLATE = ROOT / "data" / "mockups" / "front_cover_spiral.webp"
@@ -86,6 +88,13 @@ def ai_previews(cdir: Path, cfg: dict, on_event=print) -> dict:
                 on_event(f"  ⚠ {name}: thiếu tranh bìa gốc hoặc khung bìa - giữ mockup code")
                 continue
             attach, prompt = [COVER_TEMPLATE, cover], COVER_PROMPT + SQUARE_COVER   # IMAGE 1 = khung, IMAGE 2 = bìa gốc
+        elif name in ART_PREVIEWS:
+            art_job, prompt = ART_PREVIEWS[name]
+            art = job_done(cdir, art_job)
+            if art is None:
+                on_event(f"  ⚠ {name}: thiếu tranh {art_job} gốc - giữ mockup code")
+                continue
+            attach = [art, keep]                                      # IMAGE 1 = tranh tháng, IMAGE 2 = mockup đã ghép
         else:
             attach, prompt = [keep], SCENE_PROMPT + SQUARE_SCENE
         for old in work.glob(f"{name}.*"):

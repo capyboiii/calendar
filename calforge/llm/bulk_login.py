@@ -94,6 +94,8 @@ def mark_logged_in(udir: Path, email: str) -> None:
     """Dấu "đã đăng nhập thật" trong profile (danh sách tài khoản dựa vào đây, không dựa vào cookie)."""
     (udir / MARKER).write_text(json.dumps({"email": email, "at": time.strftime("%Y-%m-%d %H:%M:%S")}),
                                encoding="utf-8")
+    from .pool import clear_dead
+    clear_dead(udir)                                  # trước đó bị đánh dấu chết (bị đăng xuất): giờ dùng lại được
 
 
 MARKER = ".calforge_login.json"

@@ -108,6 +108,8 @@ def ensure_system(c: Path) -> Path:
 # Cấp chủ đề (keyword) và tên thư mục cuốn
 # ---------------------------------------------------------------------------
 ANGLE_ID = "angle_id.txt"
+SKU_FILE = "sku.txt"                  # mã SKU gốc của cuốn (= tên thư mục cuốn mới), CSV dùng đúng mã này
+SKU_PREFIX = {"wall_grid": "WCB", "wall_premade": "WCP"}   # WCB = Wall Calendar (Blank), WCP = grid in sẵn
 BATCH_REPORT = "Báo cáo batch.md"
 
 
@@ -158,12 +160,38 @@ def book_folder_name(title: str) -> str:
     return name[:60].rstrip(" .") or "Lich chua dat ten"
 
 
-def new_book_dir(kdir: Path, title: str, angle_id: str) -> Path:
-    """Thư mục cho một cuốn mới, trùng tên thì thêm (2), (3)... Ghi mã góc để tìm lại được."""
-    base = book_folder_name(title)
-    d, i = kdir / base, 2
-    while d.exists():
-        d, i = kdir / f"{base} ({i})", i + 1
+def make_sku(product: str, title: str, prefix: dict | None = None) -> str:
+    """SKU gốc của một cuốn: <loại>-<chữ đầu 3 từ của tên>-<5 ký tự ngẫu nhiên>, vd WCB-TGC-7K3QX. Cùng dạng SKU đã
+    xuất trước giờ; phần cuối ngẫu nhiên (không tính từ tên) nên hai máy làm cùng lúc cũng không trùng mã."""
+    import secrets
+    words = re.findall(r"[A-Za-z0-9]+", str(title or ""))
+    initials = "".join(w[0] for w in words[:3]).upper() or "CAL"
+    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"            # bỏ O/0, I/1 cho dễ đọc
+    return f"{(prefix or SKU_PREFIX).get(product, 'CAL')}-{initials}-{''.join(secrets.choice(alphabet) for _ in range(5))}"
+
+
+def book_sku(c: Path) -> str:
+    """SKU gốc đã lưu của cuốn ("" với cuốn làm trước khi có SKU - CSV tự tính như cũ)."""
+    try:
+        return (Path(c) / SYSTEM / SKU_FILE).read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+def new_book_dir(kdir: Path, title: str, angle_id: str, product: str = "wall_grid") -> Path:
+    """Thư mục cho một cuốn mới, ĐẶT TÊN BẰNG MÃ SKU cho dễ tìm (tên cuốn vẫn nằm trong concept.json và trên giao
+    diện). Ghi mã góc + SKU vào _he_thong để tìm lại được."""
+    for _ in range(50):
+        sku = make_sku(product, title)
+        d = kdir / sku
+        try:
+            d.mkdir(parents=True)                           # tạo được = mã chưa ai dùng (kể cả luồng song song)
+            break
+        except FileExistsError:
+            continue
+    else:
+        raise RuntimeError("không tạo được mã SKU mới cho cuốn")
     ensure_system(d)
     (d / SYSTEM / ANGLE_ID).write_text(angle_id, encoding="utf-8")
+    (d / SYSTEM / SKU_FILE).write_text(sku, encoding="utf-8")
     return d

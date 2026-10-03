@@ -68,7 +68,7 @@ MOCKUP_MODES = ("template", "ai")     # ảnh quảng cáo: code ghép khung có
 
 
 def ai_mockups(concept: dict | None) -> bool:
-    """Cuốn "AI vẽ cả trang" chọn "AI gen mockup": 4 ảnh quảng cáo do AI dựng bối cảnh."""
+    """Cuốn "AI vẽ cả trang" chọn "AI gen mockup": 5 ảnh quảng cáo do AI dựng bối cảnh."""
     return ai_page(concept) and ((concept or {}).get("style") or {}).get("mockup_mode") == "ai"
 
 

@@ -2,7 +2,9 @@
 
 Quy tắc:
 - Mỗi tài khoản (Chrome profile) tại một thời điểm chỉ được MỘT việc mượn: chat HOẶC vẽ.
-- Số Chrome mở cùng lúc có trần: tự tính theo RAM trống (~1 Chrome / 1.1 GB), không quá "max_browsers" (15).
+- Số Chrome mở cùng lúc có trần: tự tính theo RAM trống (~1 Chrome / 1.1 GB), không quá "max_browsers" (40).
+- Trần CO GIÃN lúc đang chạy (limit): RAM trống tụt thấp -> không mở thêm / bớt Chrome; nhiều tài khoản cùng lỗi
+  trang / bị chặn trong vài phút -> giảm một nửa số Chrome rồi tăng dần lại (không dồn dập vào lúc ChatGPT chặn).
 - Mở Chrome cách nhau ít nhất "launch_gap_s" giây (mặc định 5) - không bật ồ ạt như bot.
 - Hết lượt tính RIÊNG cho chat và vẽ: tài khoản hết lượt vẽ vẫn được đi chat và ngược lại.
 - Khi đang cần chat (lên ý tưởng) thì giữ chỗ cho chat: việc vẽ không được mượn chỗ cuối cùng, và luồng vẽ
@@ -13,15 +15,40 @@ from __future__ import annotations
 
 import ctypes
 import json
+import math
 import os
 import random
 import threading
 import time
+from collections import deque
 from contextlib import contextmanager
 from pathlib import Path
 
 CHAT, IMAGE = "chat", "image"
 GB_PER_BROWSER = 1.1
+RAM_HOLD_GB = 1.5         # RAM trống dưới mức này: không mở thêm Chrome
+RAM_SHED_GB = 0.8         # dưới mức này: bớt Chrome (luồng vẽ nhường sau ảnh đang vẽ)
+RAM_CHECK_S = 15.0
+MIN_LIMIT = 2             # co trần cũng không xuống dưới 2 (1 chat + 1 vẽ)
+BANNED_REST_S = 24 * 3600
+DEAD_MARKER = ".calforge_dead.json"       # trong thư mục profile: tài khoản chết (bị đăng xuất / bị khoá)
+DEAD_LABEL = {"logged_out": "bị đăng xuất - cần đăng nhập lại", "banned": "bị khoá / vô hiệu hoá - cần thay tài khoản"}
+
+
+def read_dead(profile_dir: Path) -> dict | None:
+    """Dấu tài khoản chết trong profile ({"kind", "why", "at"}); đăng nhập lại thành công thì dấu bị xoá."""
+    try:
+        d = json.loads((Path(profile_dir) / DEAD_MARKER).read_text(encoding="utf-8"))
+        return d if isinstance(d, dict) and d.get("kind") else None
+    except (OSError, ValueError):
+        return None
+
+
+def clear_dead(profile_dir: Path) -> None:
+    try:
+        (Path(profile_dir) / DEAD_MARKER).unlink(missing_ok=True)
+    except OSError:
+        pass
 
 
 def free_ram_gb() -> float:
@@ -40,9 +67,35 @@ def free_ram_gb() -> float:
     return 8.0
 
 
-def browser_cap(max_browsers: int = 15, free_gb: float | None = None) -> int:
+def browser_cap(max_browsers: int = 40, free_gb: float | None = None) -> int:
     free_gb = free_ram_gb() if free_gb is None else free_gb
     return max(1, min(int(max_browsers), int(free_gb / GB_PER_BROWSER)))
+
+
+def auto_parallel(cfg: dict, cap: int) -> dict:
+    """Số luồng của batch theo số Chrome chạy được (cap). Giá trị ghi rõ trong cấu hình thì giữ nguyên.
+    Một cuốn "AI vẽ cả trang" có ~26 ảnh nên ~8 Chrome / cuốn là vừa: đủ việc cho mọi Chrome mà không mở quá
+    nhiều cuốn dở cùng lúc."""
+    def pick(key, value):
+        v = cfg.get(key)
+        return max(1, int(v)) if v else value
+    books = pick("book_workers", max(3, min(8, math.ceil(cap / 8))))
+    return {"book_workers": books,
+            "idea_lookahead": pick("idea_lookahead", books),
+            "p2_parallel": pick("p2_parallel", max(3, min(5, math.ceil(cap / 10)))),
+            "finish_workers": pick("finish_workers", 2 if books >= 5 else 1)}
+
+
+def planned_cap(cfg: dict) -> int:
+    """Số Chrome dự kiến chạy được: trần cấu hình, RAM trống và số tài khoản (không dựng bộ điều phối)."""
+    from .. import config
+    try:
+        pdir = config.get_profiles_dir(cfg)
+        n = sum(1 for p in pdir.iterdir() if p.is_dir() and not p.name.startswith(".")) if pdir.exists() else 0
+    except OSError:
+        n = 0
+    cap = browser_cap(cfg.get("max_browsers", 40))
+    return max(1, min(cap, n)) if n else cap
 
 
 def human_pause(lo: float = 0.6, hi: float = 2.0) -> None:
@@ -52,7 +105,8 @@ def human_pause(lo: float = 0.6, hi: float = 2.0) -> None:
 
 class AccountPool:
     def __init__(self, profiles_dir: Path, names: list[str], *, cap: int, launch_gap_s: float = 5.0,
-                 locked=None, state_file: Path | None = None, clock=time.monotonic, sleep=time.sleep):
+                 locked=None, state_file: Path | None = None, clock=time.monotonic, sleep=time.sleep,
+                 free_ram=None, notify=None):
         self.profiles_dir = Path(profiles_dir)
         self.names = list(names)
         self.cap = max(1, int(cap))
@@ -68,6 +122,22 @@ class AccountPool:
         self._launch_lock = threading.Lock()
         self._last_launch = -1e9
         self.rest_s = 1800.0                                # tài khoản hết lượt nghỉ bao lâu (quota_wait_s)
+        # ---- trần co giãn ----
+        self._free_ram = free_ram                           # hàm -> GB RAM trống (None = không theo dõi RAM)
+        self._notify = notify or (lambda msg: print(f"[tài khoản] {msg}", flush=True))
+        self._ram_checked, self._ram_limit, self._ram_state = -1e9, None, "ok"
+        self.throttle_window_s = 180.0                      # đếm tài khoản gặp lỗi trang / bị chặn trong khoảng này
+        self.throttle_hold_s = 300.0                        # giữ mức giảm bấy lâu rồi tăng gấp đôi dần
+        self._troubles: deque = deque()
+        self._throttle_cap: int | None = None
+        self._throttle_until = 0.0
+        self.throttle_count = 0
+        self.banned: dict[str, str] = {}                    # tài khoản bị khoá / vô hiệu -> lý do
+        self.dead: dict[str, dict] = {}                     # tài khoản chết (bị đăng xuất / bị khoá) -> {kind, why}
+        for n in self.names:                                # chết từ lần chạy trước mà chưa đăng nhập lại: bỏ luôn
+            d = read_dead(self.profiles_dir / n)
+            if d:
+                self._mark_dead(n, d["kind"], str(d.get("why", "")))
 
     # ---------- trạng thái ----------
     def _resting(self, name: str, role: str) -> bool:
@@ -75,7 +145,8 @@ class AccountPool:
         return t is not None and t > self._clock()
 
     def _free_for(self, name: str, role: str) -> bool:
-        return name not in self.use and not self._resting(name, role) and not self._locked(name)
+        return (name not in self.use and name not in self.dead and not self._resting(name, role)
+                and not self._locked(name))
 
     def _count(self, role: str) -> int:
         return sum(1 for r in self.use.values() if r == role)
@@ -84,14 +155,124 @@ class AccountPool:
         """Chỗ vẽ tối đa: trần trừ chỗ giữ cho chat (chỉ giữ khi có tài khoản chat được)."""
         chat_able = sum(1 for n in self.names if not self._resting(n, CHAT))
         need_chat = max(0, min(self.chat_reserve, chat_able) - self._count(CHAT))
-        room = min(self.cap, len(self.names))               # ít tài khoản hơn trần: tính theo số tài khoản
+        room = min(self._limit(), len(self.names))          # ít tài khoản hơn trần: tính theo số tài khoản
         return max(0, room - self._count(CHAT) - need_chat)
+
+    # ---------- trần co giãn ----------
+    def _floor(self) -> int:
+        return min(self.cap, MIN_LIMIT)
+
+    def _ram_cap(self) -> int:
+        """Trần theo RAM lúc đang chạy (đo lại mỗi RAM_CHECK_S). Chrome đang mở đã ăn RAM nên so mức trống tuyệt đối."""
+        if self._free_ram is None:
+            return self.cap
+        now = self._clock()
+        if self._ram_limit is None or now - self._ram_checked >= RAM_CHECK_S:
+            self._ram_checked = now
+            try:
+                free = float(self._free_ram())
+            except Exception:  # noqa: BLE001 - không đo được thì coi như đủ RAM
+                free = 99.0
+            used = len(self.use)
+            if free < RAM_SHED_GB:
+                state, limit = "shed", max(self._floor(), used - max(1, used // 4))
+            elif free < RAM_HOLD_GB:
+                state, limit = "hold", max(self._floor(), used)
+            else:
+                state, limit = "ok", self.cap
+            if state != self._ram_state:
+                self._notify({"shed": f"RAM trống còn {free:.1f} GB - bớt Chrome xuống {limit}",
+                              "hold": f"RAM trống còn {free:.1f} GB - tạm không mở thêm Chrome (đang {used})",
+                              "ok": f"RAM đã đủ ({free:.1f} GB) - mở lại tới {self.cap} Chrome"}[state])
+            self._ram_state, self._ram_limit = state, limit
+        return self._ram_limit
+
+    def _limit(self) -> int:
+        """Số Chrome được mở lúc này: trần cấu hình, RAM đang trống, và mức giảm khi nhiều tài khoản cùng lỗi."""
+        lim = min(self.cap, self._ram_cap())
+        if self._throttle_cap is not None:
+            now = self._clock()
+            if now >= self._throttle_until:                 # yên ổn đủ lâu: tăng gấp đôi, tới trần thì thôi giảm
+                nxt = self._throttle_cap * 2
+                if nxt >= self.cap:
+                    self._throttle_cap = None
+                    self._notify(f"đã ổn định - chạy lại đủ {self.cap} Chrome")
+                else:
+                    self._throttle_cap, self._throttle_until = nxt, now + self.throttle_hold_s
+                    self._notify(f"đang ổn định lại - tăng lên {nxt} Chrome")
+            if self._throttle_cap is not None:
+                lim = min(lim, self._throttle_cap)
+        return max(1, lim)
+
+    def limit(self) -> int:
+        with self._cv:
+            return self._limit()
+
+    def trouble(self, name: str, why: str = "") -> None:
+        """Một tài khoản vừa gặp lỗi trang / mạng / bị chặn tốc độ. Nhiều tài khoản KHÁC NHAU cùng gặp trong
+        throttle_window_s => không phải lỗi của riêng tài khoản nào (mạng yếu, ChatGPT chặn theo máy/IP, máy quá
+        tải): giảm một nửa số Chrome, giữ throttle_hold_s rồi tăng dần lại."""
+        with self._cv:
+            now = self._clock()
+            self._troubles.append((now, name))
+            while self._troubles and now - self._troubles[0][0] > self.throttle_window_s:
+                self._troubles.popleft()
+            distinct = {n for _, n in self._troubles}
+            current = self._limit()
+            if len(distinct) < max(4, math.ceil(current * 0.3)) or current <= self._floor():
+                return
+            self._throttle_cap = max(self._floor(), current // 2)
+            self._throttle_until = now + self.throttle_hold_s
+            self._troubles.clear()
+            self.throttle_count += 1
+            self._notify(f"{len(distinct)} tài khoản cùng lỗi trang / bị chặn trong ít phút ({why[:60]}) - "
+                         f"giảm còn {self._throttle_cap} Chrome, sẽ tăng dần lại")
+            self._save()
+            self._cv.notify_all()
+
+    def _mark_dead(self, name: str, kind: str, why: str) -> None:
+        self.dead[name] = {"kind": kind, "why": why[:160]}
+        if kind == "banned":
+            self.banned[name] = why[:160]
+        until = self._clock() + BANNED_REST_S
+        for role in (CHAT, IMAGE):
+            self.rest_until[(name, role)] = until
+            self.rest_why[(name, role)] = f"tài khoản chết ({DEAD_LABEL.get(kind, kind)})"
+
+    def drop(self, name: str, kind: str, why: str = "") -> bool:
+        """Tài khoản CHẾT (kind: "logged_out" = trang ChatGPT hiện màn hình đăng nhập, "banned" = bị khoá):
+        bỏ hẳn khỏi batch cho cả chat lẫn vẽ, ghi dấu vào profile để các batch sau và UI cũng bỏ qua / báo cho
+        người dùng. Đăng nhập lại thành công thì dấu bị xoá (bulk_login.mark_logged_in). True = vừa mới phát hiện."""
+        with self._cv:
+            first = name not in self.dead
+            self._mark_dead(name, kind, why)
+            try:
+                pdir = self.profiles_dir / name
+                if pdir.is_dir():
+                    (pdir / DEAD_MARKER).write_text(json.dumps(
+                        {"kind": kind, "why": why[:300], "at": time.strftime("%Y-%m-%d %H:%M:%S")},
+                        ensure_ascii=False), encoding="utf-8")
+            except OSError:
+                pass
+            self._save()
+            self._cv.notify_all()
+        if first:
+            self._notify(f"✘ TÀI KHOẢN CHẾT: {name} {DEAD_LABEL.get(kind, kind)} - đã bỏ khỏi batch")
+        return first
+
+    def ban(self, name: str, why: str) -> None:
+        """Tài khoản bị khoá / vô hiệu hoá: bỏ hẳn (xem drop)."""
+        self.drop(name, "banned", why)
+
+    def alive_names(self) -> list[str]:
+        with self._cv:
+            return [n for n in self.names if n not in self.dead]
 
     # ---------- mượn / trả ----------
     def acquire(self, role: str, *, prefer: list[str] | None = None, only: str | None = None) -> str | None:
         """Mượn một tài khoản cho vai `role`; không có thì None (không chờ)."""
         with self._cv:
-            if len(self.use) >= self.cap:
+            if len(self.use) >= self._limit():
                 return None
             if role == IMAGE and self._count(IMAGE) >= self._image_slots():
                 return None
@@ -119,7 +300,9 @@ class AccountPool:
     def should_yield(self, name: str) -> bool:
         """Luồng vẽ đang giữ `name`: có nên nhả ra cho chat không (chat đang thiếu chỗ)."""
         with self._cv:
-            return self.use.get(name) == IMAGE and self._count(IMAGE) > self._image_slots()
+            if self.use.get(name) != IMAGE:
+                return False
+            return self._count(IMAGE) > self._image_slots() or len(self.use) > self._limit()   # chat thiếu chỗ / co trần
 
     @contextmanager
     def reserve_chat(self, n: int = 1):
@@ -173,7 +356,9 @@ class AccountPool:
             rests = {r: round(t - now) for (a, r), t in self.rest_until.items() if a == n and t > now}
             accs.append({"name": n, "role": self.use.get(n, ""), "rest_s": rests,
                          "why": {r: self.rest_why.get((n, r), "") for r in rests}})
-        return {"cap": self.cap, "chat_reserve": self.chat_reserve, "accounts": accs,
+        return {"cap": self.cap, "limit": self._limit(), "throttled": self._throttle_cap is not None,
+                "ram": self._ram_state, "banned": dict(self.banned), "dead": dict(self.dead),
+                "chat_reserve": self.chat_reserve, "accounts": accs,
                 "updated": time.strftime("%Y-%m-%d %H:%M:%S")}
 
     def _save(self) -> None:
@@ -202,14 +387,19 @@ def get_pool(cfg: dict | None = None) -> AccountPool:
             pdir = config.get_profiles_dir(cfg)
             names = sorted((p.name for p in pdir.iterdir() if p.is_dir() and not p.name.startswith(".")),
                            key=lambda n: (n == "acc1", n)) if pdir.exists() else []
-            cap = browser_cap(cfg.get("max_browsers", 15))
+            cap = browser_cap(cfg.get("max_browsers", 40))
             _POOL = AccountPool(pdir, names, cap=cap, launch_gap_s=cfg.get("launch_gap_s", 5),
-                                locked=lambda n: is_profile_locked(pdir / n),
+                                locked=lambda n: is_profile_locked(pdir / n), free_ram=free_ram_gb,
                                 state_file=Path(cfg["projects_dir"]) / ".tai_khoan_live.json")
             _POOL.rest_s = float(cfg.get("quota_wait_s", 1800))
             print(f"[tài khoản] {len(names)} tài khoản, tối đa {cap} Chrome cùng lúc "
                   f"(RAM trống {free_ram_gb():.1f} GB), mở cách nhau {_POOL.launch_gap_s:.0f}s", flush=True)
         return _POOL
+
+
+def peek_pool() -> AccountPool | None:
+    """Bộ điều phối đang dùng (không dựng mới)."""
+    return _POOL
 
 
 def reset_pool() -> None:

@@ -193,6 +193,7 @@ class BatchTest(unittest.TestCase):
         pipeline._status(cdir, stage="ip_rejected", ok=False, terminal=True, reason="TM")
         batch = {"target": 1, "product": "wall_grid", "concepts": ["b1"], "failed_ideas": [],
                  "errors": [], "started": "x", "finished": "y"}
+        layout.ensure_system(kdir)
         layout.batch_file(kdir).write_text(json.dumps(batch), encoding="utf-8")
         with self.patched():
             rows = pipeline.run("kw", cfg(self.root), auto_pick=1, resume=True, retry_wait_s=0)

@@ -16,11 +16,13 @@ DEFAULTS = {
     "angles_per_keyword": 1,
     "auto_pick": 1,
     "batch_retry_wait_s": 300,
-    "max_browsers": 15,          # trần số Chrome mở cùng lúc; thực tế tự hạ theo RAM trống (~1 Chrome / 1.1 GB)
+    "max_browsers": 40,          # trần số Chrome mở cùng lúc; thực tế tự hạ theo RAM trống (~1 Chrome / 1.1 GB)
     "launch_gap_s": 5,           # mở Chrome cách nhau ít nhất bấy nhiêu giây (không bật ồ ạt như bot)
-    "book_workers": 3,           # số cuốn vẽ ảnh cùng lúc trong một batch
-    "idea_lookahead": 3,         # nghĩ ý trước tối đa bấy nhiêu cuốn chưa kịp vẽ
-    "p2_parallel": 3,            # số concept (P2) viết song song mỗi lượt
+    # None = TỰ TÍNH theo số Chrome chạy được (llm/pool.auto_parallel): càng nhiều tài khoản + RAM càng nhiều luồng
+    "book_workers": None,        # số cuốn vẽ ảnh cùng lúc trong một batch (tự tính: 3..8)
+    "idea_lookahead": None,      # nghĩ ý trước tối đa bấy nhiêu cuốn chưa kịp vẽ (tự tính: = book_workers)
+    "p2_parallel": None,         # số concept (P2) viết song song mỗi lượt (tự tính: 3..5)
+    "finish_workers": None,      # số cuốn làm hậu kỳ (dàn trang, mockup) cùng lúc (tự tính: 1..2)
     "quota_wait_s": 1800,        # cả 5 tài khoản hết lượt: tạm dừng batch, cứ bấy nhiêu giây thử lại một lần
     "quota_max_wait_h": 24,      # chờ tối đa bấy nhiêu giờ cho một chỗ kẹt rồi mới coi là hỏng   # vòng vét cuối batch: chờ tài khoản ChatGPT hồi lượt rồi làm lại cuốn dở
     "max_repairs": 2,

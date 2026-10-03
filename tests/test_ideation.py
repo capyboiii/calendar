@@ -4,7 +4,9 @@ import tempfile
 import unittest
 from contextlib import contextmanager
 from pathlib import Path
+from unittest import mock
 
+from calforge import layout
 from calforge.ideation import catalog, templates
 from calforge.ideation.pipeline import run_ideation
 from calforge.ideation.validate import contrast_ratio, usable_angles, validate_angles, validate_concept
@@ -215,7 +217,8 @@ class PipelineTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             res = run_ideation("Christian", fake, Path(tmp), year=2027, max_repairs=2)
             self.assertEqual(len(res.concepts), 1)
-            self.assertEqual(res.concepts[0].name, "A Year with Jesus")        # thư mục = tên cuốn
+            self.assertRegex(res.concepts[0].name, r"^WCB-AYW-[A-Z0-9]{5}$")   # thư mục = mã SKU của cuốn
+            self.assertEqual(layout.book_sku(res.concepts[0]), res.concepts[0].name)
             self.assertEqual((res.concepts[0] / "_he_thong" / "angle_id.txt").read_text(encoding="utf-8"), "r1a1")
             self.assertTrue((Path(tmp) / "christian" / "_he_thong" / "angles.json").is_file())
             labels = [label for label, _ in fake.prompts]
@@ -595,7 +598,42 @@ class PortfolioFingerprintTest(unittest.TestCase):
         self.assertIn("...and 30 older calendars", text)
 
 
+class FourFamiliesTest(unittest.TestCase):
+    def test_anime_family_is_available_everywhere(self):
+        from calforge.imagegen import prompts
+        from calforge.render import grid_select, pages
+        ids = [f["id"] for f in catalog.families()]
+        self.assertEqual(ids, ["styled_photography", "papercut_collage", "mid_century_retro", "anime_illustration"])
+        desc = catalog.family("anime_illustration")["description"].lower()
+        self.assertIn("original", desc)
+        self.assertIn("never resembling any existing", desc)            # tả bằng đặc điểm hình ảnh, không nêu tên hãng
+        for word in ("ghibli", "pixar", "disney", "shonen", "naruto", "one piece", "pokemon", "miyazaki", "shinkai"):
+            self.assertNotIn(word, desc)
+        rule = prompts._artwork_lightness_rule({"family": "anime_illustration"})
+        self.assertIn("cel shading", rule)
+        self.assertIn("do not imitate or resemble any existing anime", rule)
+        self.assertIn("anime_illustration", grid_select.FAMILY_HINT)
+        self.assertIn("anime_illustration", pages.FAMILY_TO_PRESET)
+        forced = templates.p1_angles("cats", 2027, "US", 1, [], Path("."), family="anime_illustration")
+        self.assertIn('use exactly style_family "anime_illustration"', forced)
+
+    def test_quota_with_four_families(self):
+        ids = [f["id"] for f in catalog.families()]
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.assertEqual(catalog.family_quota(root, 4), {i: 1 for i in ids})
+            self.assertEqual(catalog.family_quota(root, 8), {i: 2 for i in ids})
+            self.assertEqual(sum(catalog.family_quota(root, 6).values()), 6)
+            self.assertEqual(sum(catalog.family_quota(root, 1).values()), 1)
+
+
 class StyleSplitTest(unittest.TestCase):
+    def setUp(self):                                  # logic chia đều kiểm trên đúng 3 họ đầu (số liệu test viết cho 3)
+        three = catalog.families()[:3]
+        p = mock.patch.object(catalog, "families", lambda: three)
+        p.start()
+        self.addCleanup(p.stop)
+
     def test_quota_spreads_families_by_least_used(self):
         ids = [f["id"] for f in catalog.families()]
         with tempfile.TemporaryDirectory() as tmp:
@@ -705,3 +743,16 @@ class BrokenAnswerNotCachedTest(unittest.TestCase):
             good = Chat(['```json\n{"ok": 1}\n```'])            # chạy lại: phải hỏi ChatGPT thật, không dùng câu hỏng
             data, errors, _ = _ask_validated(good, "p1", "go", lambda d: ([], []), 1)
             self.assertEqual((data, errors, good.asked), ({"ok": 1}, [], ["p1"]))
+
+
+class BackgroundPeopleRuleTest(unittest.TestCase):
+    def test_rule_in_every_artwork_prompt_but_not_grid(self):
+        c = fixtures.concept()
+        c["year"] = 2027
+        rule = prompts.BACKGROUND_PEOPLE
+        self.assertIn("never repeat or clone the main subject's face", rule)
+        self.assertIn(rule, prompts.anchor_prompt(c))
+        self.assertIn(rule, prompts.cover_prompt(c))
+        for m in c["months"]:
+            self.assertIn(rule, prompts.month_prompt(c, m))
+        self.assertNotIn(rule, prompts.grid_page_prompt(c, c["months"][0]))

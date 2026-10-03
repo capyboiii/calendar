@@ -40,8 +40,11 @@ def build_listing(concept: dict) -> dict:
         "<li>King James Version scripture for each month</li>" if kjv else "",
         "<li>Front cover and a back cover with all 12 artworks</li></ul>",
         f"<p><strong>Months</strong></p><ul>{''.join(items)}</ul>",
-        "<p><strong>Details</strong></p><ul><li>Size: 11 x 8.5 in (opens to 11 x 17 in)</li>"
-        "<li>Wire-bound, hanging hole</li><li>Printed on demand and shipped to you</li></ul>",
+        # phần Details CỐ ĐỊNH cho mọi cuốn (người dùng duyệt 03/10/2026)
+        "<p><strong>Details</strong></p><ul><li>Sizes:<ul><li>11 x 8.5 in (opens to 11 x 17 in)</li>"
+        "<li>14 x 11.5 in (opens to 14 x 23 in)</li></ul></li>"
+        "<li>Binding: wire-bound, with a hanging hole</li>"
+        "<li>Printing: printed on demand and shipped to you</li></ul>",
     ])
     return {"title": title, "description": desc, "tags": tags}
 
