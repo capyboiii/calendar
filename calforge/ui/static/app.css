@@ -344,6 +344,9 @@ input[type="text"], input[type="number"], select {
 .book-head .pill { margin-top: 6px; }
 .gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px; }
 .gallery img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 10px; cursor: zoom-in; background: var(--surface-2); }
+.gallery .preview { position: relative; margin: 0; }
+.gallery .preview-redo { position: absolute; right: 8px; bottom: 10px; background: rgba(255, 255, 255, .92);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, .18); }
 .book-actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
 .listing { display: grid; gap: 12px; border-top: 1px solid var(--line); padding-top: 18px; }
 .listing:empty { display: none; }

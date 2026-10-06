@@ -211,6 +211,12 @@ def cmd_finish(args, cfg):
         for f in layout.listing(d).glob("*.jpg"):
             f.unlink()
         print("↻ Làm lại 5 ảnh quảng cáo")
+    for name in args.redo_preview or []:            # gen lại ĐÚNG một / vài ảnh quảng cáo, ảnh khác giữ nguyên
+        f = layout.listing(d) / f"{Path(name).stem}.jpg"
+        if f.parent != layout.listing(d) or not f.is_file():
+            sys.exit(f"✘ Không có ảnh quảng cáo {name} trong cuốn này")
+        f.unlink()                                  # ghép lại bản code -> khác ảnh AI đã ghi -> AI gen lại đúng ảnh này
+        print(f"↻ Gen lại ảnh quảng cáo {f.stem}")
     upscale_concept(d)
     st = finish_book(d, cfg, printify=False)
     _print_status([{"concept": args.concept, **st}])
@@ -416,6 +422,8 @@ def main(argv=None):
     p = sub.add_parser("finish", help="hoàn thiện cuốn đã vẽ đủ tranh: trang in, PDF, ảnh quảng cáo, listing")
     p.add_argument("concept")
     p.add_argument("--redo-previews", action="store_true", help="xoá và làm lại 5 ảnh quảng cáo")
+    p.add_argument("--redo-preview", action="append",
+                   help="chỉ làm lại ảnh quảng cáo này (vd 04_two_wall_spreads), lặp lại được")
     p.set_defaults(func=cmd_finish)
 
     p = sub.add_parser("redo", help="vẽ lại vài trang hỏng của một cuốn rồi làm lại các bước sau")

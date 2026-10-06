@@ -66,7 +66,12 @@ class BatchQueue:
                     pages = list(dict.fromkeys((same["params"].get("pages") or []) + (params.get("pages") or [])))
                     same["params"] = {**same["params"], "pages": pages}
                 elif params.get("redo_previews"):
-                    same["params"] = {**same["params"], "redo_previews": True}
+                    old, new = same["params"].get("redo_previews"), params["redo_previews"]
+                    if isinstance(old, list) and isinstance(new, list):     # gen lại từng ảnh: gộp danh sách
+                        merged = list(dict.fromkeys(old + new))
+                    else:                                                   # có "làm lại cả 5" thì làm cả 5
+                        merged = True
+                    same["params"] = {**same["params"], "redo_previews": merged}
                 self._save()
                 return same
             item = {"id": f"q_{int(time.time() * 1000)}_{uuid.uuid4().hex[:6]}", "params": params,

@@ -322,7 +322,9 @@ function renderQueue() {
     const p = i.params;
     if (p.action === 'produce') return `<strong>Làm tiếp</strong> <span class="muted">${esc(p.title || '')}</span>`;
     if (p.action === 'finish') {
-      return `<strong>${p.redo_previews ? 'Làm lại ảnh quảng cáo' : 'Hoàn thiện'}</strong> <span class="muted">${esc(p.title || '')}</span>`;
+      const one = Array.isArray(p.redo_previews);
+      const what = one ? `Gen lại ${p.redo_previews.length} ảnh quảng cáo` : p.redo_previews ? 'Làm lại ảnh quảng cáo' : 'Hoàn thiện';
+      return `<strong>${what}</strong> <span class="muted">${esc(p.title || '')}</span>`;
     }
     if (p.action === 'redo') {
       return `<strong>Vẽ lại ${(p.pages || []).length} trang</strong> <span class="muted">${esc(p.title || '')}</span>`;
@@ -617,9 +619,21 @@ function renderBook(c, keyword) {
   err.textContent = (state === 'error' || state === 'rejected') ? friendlyReason(c.status) : '';
 
   const g = $('bookGallery');
+  const canRedo = state !== 'rejected';
   g.innerHTML = (c.previews || []).length
-    ? c.previews.map((p) => `<img loading="lazy" src="${thumbUrl(p, 400)}" alt="" data-full="${thumbUrl(p, 1600)}">`).join('')
+    ? c.previews.map((p) => {
+      const stem = previewStem(p);
+      return `<figure class="preview">
+        <img loading="lazy" src="${thumbUrl(p, 400)}" alt="" data-full="${thumbUrl(p, 1600)}">
+        ${canRedo && stem ? `<button class="btn btn-small preview-redo" data-stem="${esc(stem)}"
+          title="Chỉ làm lại ảnh này, 4 ảnh còn lại giữ nguyên">Gen lại</button>` : ''}
+      </figure>`;
+    }).join('')
     : `<p class="empty">Ảnh quảng cáo sẽ có khi cuốn này làm xong.</p>`;
+  g.querySelectorAll('.preview-redo').forEach((b) => b.addEventListener('click', (e) => {
+    e.stopPropagation();
+    redoPreview(c, b.dataset.stem);
+  }));
   g.querySelectorAll('img').forEach((img) => img.addEventListener('click', () => {
     $('lightboxImg').src = img.dataset.full;
     $('lightbox').hidden = false;
@@ -665,6 +679,29 @@ async function continueBook(c) {
     await queueOp('add', { params: { action: 'produce', concept: c.path, title: c.title } });
     $('bookModal').hidden = true;
     toast(busy ? `Đã xếp "Làm tiếp ${c.title}" vào hàng đợi.` : `Đang làm tiếp "${c.title}".`, 'info', 8000);
+    setTimeout(loadQueue, 800);
+  } catch (err) {
+    toast(err.message, 'error');
+  }
+}
+
+// Tên ảnh quảng cáo (vd "04_two_wall_spreads") từ đường dẫn ".../preview/04_two_wall_spreads.jpg?v=..."
+function previewStem(path) {
+  const m = /([0-9]{2}_[a-z0-9_]+)\.jpg/i.exec(decodeURIComponent(String(path || '')));
+  return m ? m[1] : '';
+}
+
+const PREVIEW_LABEL = {
+  '01': 'ảnh bìa', '02': 'ảnh tờ mở', '03': 'ảnh ba tờ', '04': 'ảnh treo tường', '05': 'ảnh lật trang', '06': 'ảnh ba cuốn',
+};
+
+// ---- Gen lại MỘT ảnh quảng cáo (AI gen mockup: AI dựng lại bối cảnh; mockup code: ghép lại) -------------------
+async function redoPreview(c, stem) {
+  const what = PREVIEW_LABEL[stem.slice(0, 2)] || stem;
+  if (!confirm(`Gen lại ${what} của "${c.title}"? 4 ảnh quảng cáo còn lại giữ nguyên.`)) return;
+  try {
+    await queueOp('add', { params: { action: 'finish', concept: c.path, title: c.title, redo_previews: [stem] } });
+    toast(`Đã xếp "Gen lại ${what}" cho "${c.title}".`, 'info');
     setTimeout(loadQueue, 800);
   } catch (err) {
     toast(err.message, 'error');

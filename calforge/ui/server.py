@@ -5,6 +5,7 @@ import hashlib
 import json
 import mimetypes
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -285,9 +286,19 @@ def run_args(params: dict) -> tuple[list[str], str]:
     if kind == "finish":
         target = _book_arg(params)
         _reject_terminal_book(target)
-        args = ["finish", str(target)] + (["--redo-previews"] if params.get("redo_previews") else [])
-        return args, (f"Làm lại ảnh quảng cáo: {target.name}" if params.get("redo_previews")
-                      else f"Hoàn thiện: {target.name}")
+        redo = params.get("redo_previews")
+        if isinstance(redo, list):                  # gen lại đúng các ảnh quảng cáo được chọn
+            names = [str(n) for n in redo]
+            have = {p.stem for p in layout.listing(target).glob("*.jpg")}
+            bad = [n for n in names if not re.fullmatch(r"\d\d_[a-z0-9_]+", n) or n not in have]
+            if not names or bad:
+                raise ValueError(f"Không có ảnh quảng cáo: {', '.join(bad) or '(chưa chọn)'}")
+            args = ["finish", str(target)]
+            for n in names:
+                args += ["--redo-preview", n]
+            return args, f"Gen lại {len(names)} ảnh quảng cáo: {target.name}"
+        args = ["finish", str(target)] + (["--redo-previews"] if redo else [])
+        return args, (f"Làm lại ảnh quảng cáo: {target.name}" if redo else f"Hoàn thiện: {target.name}")
     if kind == "redo":
         target = _book_arg(params)
         _reject_terminal_book(target)
