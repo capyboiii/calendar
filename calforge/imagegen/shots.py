@@ -46,14 +46,26 @@ PLACE_SHOTS = ["wide_vista", "layered_depth", "natural_frame", "leading_lines", 
                "hero_subject"]
 
 
-def assign(seed: str, frame_type: str = "") -> list[str]:
+# Họ Anime: ảnh AI chỉ 1536x1024, khung nhìn từ trên / trường hoa văn làm nhân vật bé tí, mặt nhoè -> bỏ. 06/10/2026.
+ANIME_FAMILY = "anime_illustration"
+ANIME_EXCLUDED = ("overhead", "pattern_field")
+ANIME_SHOTS = [s for s in SHOTS if s not in ANIME_EXCLUDED]
+# Toàn cảnh vẫn giữ cho anime, nhưng nhân vật chính phải đủ lớn để vẽ rõ mặt.
+ANIME_WIDE_NOTE = (" For this anime artwork the main characters still occupy at least about 30% of the frame "
+                   "height, so their faces stay large enough to draw clearly.")
+
+
+def assign(seed: str, frame_type: str = "", family: str = "") -> list[str]:
     """Khung cho tháng 1..12, thứ tự cố định theo seed (tên cuốn). Bình thường 12 khung khác nhau;
-    one_scene_12_seasons chỉ dùng các khung giữ được nơi chốn (lặp lại nhưng không trùng tháng liền kề)."""
+    one_scene_12_seasons chỉ dùng các khung giữ được nơi chốn (lặp lại nhưng không trùng tháng liền kề).
+    Họ Anime bỏ các khung làm nhân vật quá nhỏ (ANIME_EXCLUDED), 10 khung còn lại lặp không trùng tháng liền kề."""
     rnd = random.Random(int(hashlib.sha1(seed.encode("utf-8")).hexdigest()[:12], 16))
-    if frame_type == "one_scene_12_seasons":
+    anime = family == ANIME_FAMILY
+    if frame_type == "one_scene_12_seasons" or anime:
+        pool = PLACE_SHOTS if frame_type == "one_scene_12_seasons" else ANIME_SHOTS
         order: list[str] = []
         while len(order) < 12:
-            batch = list(PLACE_SHOTS)
+            batch = list(pool)
             rnd.shuffle(batch)
             if order and batch[0] == order[-1]:
                 batch.append(batch.pop(0))
@@ -65,14 +77,23 @@ def assign(seed: str, frame_type: str = "") -> list[str]:
 
 
 def month_shot(concept: dict, month: dict) -> str:
-    """Khung của một tháng: lấy cái đã lưu trong concept; concept cũ chưa có thì chia lại theo tên cuốn."""
+    """Khung của một tháng: lấy cái đã lưu trong concept; concept cũ chưa có (hoặc cuốn anime cũ còn khung đã bỏ)
+    thì chia lại theo tên cuốn."""
+    family = str((concept.get("style") or {}).get("family") or "")
     shot = month.get("shot")
-    if shot in SHOTS:
+    if shot in SHOTS and not (family == ANIME_FAMILY and shot in ANIME_EXCLUDED):
         return shot
-    return assign(str(concept.get("title", "")), str(concept.get("frame_type", "")))[int(month["month"]) - 1]
+    return assign(str(concept.get("title", "")), str(concept.get("frame_type", "")), family)[int(month["month"]) - 1]
 
 
-def describe(seed: str, frame_type: str = "") -> str:
+def shot_text(shot: str, family: str = "") -> str:
+    """Mô tả khung đưa vào prompt; anime + toàn cảnh thêm yêu cầu nhân vật đủ lớn."""
+    text = SHOTS[shot]
+    return text + ANIME_WIDE_NOTE if family == ANIME_FAMILY and shot == "wide_vista" else text
+
+
+def describe(seed: str, frame_type: str = "", family: str = "") -> str:
     """Danh sách khung theo tháng để đưa vào prompt P2."""
     names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
-    return "\n".join(f"- {name}: {SHOTS[shot]}" for name, shot in zip(names, assign(seed, frame_type)))
+    return "\n".join(f"- {name}: {shot_text(shot, family)}"
+                     for name, shot in zip(names, assign(seed, frame_type, family)))

@@ -752,7 +752,37 @@ class BackgroundPeopleRuleTest(unittest.TestCase):
         rule = prompts.BACKGROUND_PEOPLE
         self.assertIn("never repeat or clone the main subject's face", rule)
         self.assertIn(rule, prompts.anchor_prompt(c))
+        self.assertIn(prompts.CHARACTER_ACCURACY, prompts.anchor_prompt(c))
+        self.assertIn("five fingers per hand", prompts.CHARACTER_ACCURACY)
         self.assertIn(rule, prompts.cover_prompt(c))
         for m in c["months"]:
             self.assertIn(rule, prompts.month_prompt(c, m))
         self.assertNotIn(rule, prompts.grid_page_prompt(c, c["months"][0]))
+
+
+class AnimeCharacterRulesTest(unittest.TestCase):
+    def test_anime_shots_cast_and_focus(self):
+        from calforge.imagegen import shots
+        order = shots.assign("Some Anime Book", "", "anime_illustration")
+        self.assertEqual(len(order), 12)
+        self.assertFalse(set(order) & set(shots.ANIME_EXCLUDED))
+        self.assertTrue(all(a != b for a, b in zip(order, order[1:])))
+        self.assertEqual(shots.assign("Some Book"), shots.assign("Some Book", "", "mid_century_retro"))
+        self.assertIn("30% of the frame", shots.shot_text("wide_vista", "anime_illustration"))
+        self.assertNotIn("30% of the frame", shots.shot_text("wide_vista", "mid_century_retro"))
+        c = fixtures.concept()
+        c["year"] = 2027
+        c["style"]["family"] = "anime_illustration"
+        c["months"][0]["shot"] = "overhead"                      # cuốn anime cũ: khung đã bỏ -> chia lại
+        self.assertNotIn(shots.month_shot(c, c["months"][0]), shots.ANIME_EXCLUDED)
+        for p in (prompts.anchor_prompt(c), prompts.cover_prompt(c), prompts.month_prompt(c, c["months"][0])):
+            self.assertIn(prompts.ANIME_CHARACTERS, p)
+            self.assertIn(prompts.CHARACTER_ACCURACY, p)
+        c["style"]["family"] = "mid_century_retro"
+        self.assertNotIn(prompts.ANIME_CHARACTERS, prompts.month_prompt(c, c["months"][0]))
+        from calforge.ideation import templates
+        angle = {"title": "X", "style_family": "anime_illustration"}
+        with mock.patch.object(templates, "render", lambda name, **kw: kw["month_shots"]):
+            self.assertIn("ANIME CAST LIMIT", templates.p2_concept(angle, "s", 2027, "US"))
+            angle["style_family"] = "mid_century_retro"
+            self.assertNotIn("ANIME CAST LIMIT", templates.p2_concept(angle, "s", 2027, "US"))

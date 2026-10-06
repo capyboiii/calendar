@@ -310,7 +310,7 @@ def finish_book(concept_dir: Path, cfg: dict, *, printify: bool = True, publish:
         if lacking and not preview_error:
             preview_error = f"thiếu {', '.join(lacking)}"
         if products.ai_mockups(concept) and not lacking:
-            # "AI gen mockup": ChatGPT dựng bối cảnh cho 5 ảnh; ảnh nào hỏng thì giữ mockup code (không chặn cuốn)
+            # "AI gen mockup": ChatGPT dựng bối cảnh cho từng ảnh; ảnh nào hỏng thì giữ mockup code (không chặn cuốn)
             try:
                 from .imagegen.ai_mockups import ai_previews
                 res = ai_previews(concept_dir, cfg, on_event)
@@ -324,7 +324,7 @@ def finish_book(concept_dir: Path, cfg: dict, *, printify: bool = True, publish:
         on_event("▶ Bước 5/6: Listing đã mới, bỏ qua")
     else:
         on_event("▶ Bước 5/6: Tạo listing (title, tags, mô tả)")
-        write_listing(concept_dir)
+        write_listing(concept_dir, cfg, on_event)
     if preview_error:     # trang in + listing xong nhưng thiếu ảnh quảng cáo: chưa đủ để đăng bán
         on_event(f"  ✘ Thiếu ảnh quảng cáo: {preview_error}")
         return _status(concept_dir, stage="mockup", ok=False, reason=f"thiếu ảnh quảng cáo: {preview_error}")
@@ -523,7 +523,7 @@ def run(keyword: str, cfg: dict, *, pick: list[str] | None = None, auto_pick: in
         printify: bool = True, publish: bool = False, grid_preset: str | None = None,
         family: str | None = None, on_event=print, retry_wait_s: float | None = None,
         product: str | None = None, grid_mode: str | None = None, resume: bool = False,
-        mockup_mode: str | None = None) -> list[dict]:
+        mockup_mode: str | None = None, listing_style: str | None = None) -> list[dict]:
     """Chạy trọn gói một batch N cuốn theo lượt tối đa ROUND_SIZE cuốn.
 
     - Lỗi của một cuốn chỉ hỏng cuốn đó (status.json có lý do + traceback), batch đi tiếp.
@@ -541,7 +541,7 @@ def run(keyword: str, cfg: dict, *, pick: list[str] | None = None, auto_pick: in
     wait = cfg.get("batch_retry_wait_s", 300) if retry_wait_s is None else retry_wait_s
     common = dict(year=cfg["year"], market=cfg["market"], n_angles=cfg["angles_per_keyword"],
                   max_repairs=cfg["max_repairs"], grid_preset=grid_preset, family=family, product=product,
-                  grid_mode=grid_mode, mockup_mode=mockup_mode)
+                  grid_mode=grid_mode, mockup_mode=mockup_mode, listing_style=listing_style)
     kw = dict(printify=printify, publish=publish)
 
     from . import products as _products

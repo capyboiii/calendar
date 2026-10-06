@@ -211,7 +211,11 @@ def wants_source(text: str) -> bool:
 def generating(st: dict) -> bool:
     """Trang cho thấy ảnh đang được vẽ (khung chờ trong DOM hoặc chữ tạm kiểu "Creating image")."""
     low = " ".join((st.get("tail") or "").lower().split())
-    return bool(st.get("pending")) or any(p in low for p in GEN_PAT)
+    if st.get("pending"):
+        return True
+    # câu báo lỗi cũng có thể chứa "generating your image" (vd "There was a problem generating your image"):
+    # có dấu hiệu lỗi/từ chối/hết lượt thì không tính là đang vẽ, kẻo chờ hết hạn chót mới bỏ.
+    return any(p in low for p in GEN_PAT) and not classify(st.get("tail") or "")
 
 
 def _sent(st: dict, before: dict) -> bool:

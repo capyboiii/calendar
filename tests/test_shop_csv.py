@@ -65,6 +65,7 @@ class ShopCsvTest(unittest.TestCase):
                                  + ["Title", "Description (HTML)", "Tags"])
                 self.assertEqual(head[:23], shop_csv.TEMPLATE)                     # 23 cột mẫu Printify giữ nguyên
                 self.assertEqual((head[23], head[48], head[53]), ("Page 01 front_cover", "Page 26 back_cover", "Preview 5"))
+                self.assertEqual(head[54], "Preview 6")
                 for r in rows:                                                      # nội dung listing đủ ở mọi dòng
                     self.assertTrue(r["Title"].endswith("2027 Wall Calendar | Gift"))
                     self.assertEqual((r["Description (HTML)"], r["Tags"]), ("<p>Hi</p>", "a, b"))
@@ -86,7 +87,7 @@ class ShopCsvTest(unittest.TestCase):
                 self.assertTrue(cat[1]["Print area front"].endswith("/14x11.5/front_cover.png"))
                 self.assertTrue(all(r["Quantity"] == "1" for r in rows))
                 self.assertTrue(all([r[c].rsplit("/", 1)[-1][:3] for c in shop_csv.PREVIEW_COLS]
-                                    == ["01_", "02_", "03_", "04_", "05_"] for r in rows))
+                                    == ["01_", "02_", "03_", "04_", "05_", "", "", ""] for r in rows))   # cuốn 5 ảnh: cột 6 trống
                 self.assertTrue(all("/cats/" in r["Preview 1"] for r in cat))
                 filled = {"External ID", "Label", "Quantity", "Print area front"}
                 self.assertTrue(all(not r[k] for r in rows for k in shop_csv.TEMPLATE if k not in filled))

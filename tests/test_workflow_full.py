@@ -167,6 +167,20 @@ class WaitImageDomTest(DomCase):
             self.wait(lambda t: state(assistant=1, tail="Something went wrong while generating."))
         self.assertNotIsInstance(e.exception, (Refused, QuotaExceeded))
 
+    def test_server_errors_are_temporary_and_caught_at_once(self):
+        from tests.test_chat_errors import SERVER_ERRORS
+        for text in SERVER_ERRORS:
+            with self.subTest(text=text), self.assertRaises(TempError) as e:
+                self.wait(lambda t, text=text: state(assistant=1, tail=text), timeout_s=420)
+            self.assertNotIsInstance(e.exception, (Refused, QuotaExceeded, ThirdPartyIPRefused))
+            self.assertLess(self.clock.t, 5, text)                # nhận ngay, không chờ 45 giây im lặng
+
+    def test_server_busy_rests_account_instead_of_burning_tries(self):
+        from tests.test_chat_errors import SERVER_BUSY
+        for text in SERVER_BUSY:
+            with self.subTest(text=text), self.assertRaises(QuotaExceeded):
+                self.wait(lambda t, text=text: state(assistant=1, tail=text))
+
     def test_plain_text_answer_without_image_gives_up_after_quiet_period(self):
         with self.assertRaises(TempError) as e:
             self.wait(lambda t: state(assistant=1, tail="Here is a description of the calendar."), timeout_s=420)
@@ -539,7 +553,7 @@ class OldAiMockupBookUpgradeTest(unittest.TestCase):
             c = tam.book(root)
             pages = layout.print_dir(c)
             pages.mkdir(parents=True, exist_ok=True)
-            for n in ["front_cover"] + [f"m{m:02d}_{k}" for m in range(1, 13) for k in ("month", "grid")]:
+            for n in ["front_cover", "back_cover"] + [f"m{m:02d}_{k}" for m in range(1, 13) for k in ("month", "grid")]:
                 Image.new("RGB", (60, 40), "white").save(pages / f"{n}.png")
             old_time = time.time() - 3600
             import os
@@ -554,26 +568,28 @@ class OldAiMockupBookUpgradeTest(unittest.TestCase):
             layout.tech(c).mkdir(parents=True, exist_ok=True)
             layout.tech(c, "mockup_ai.json").write_text(json.dumps(
                 {n: {"mtime_ns": (listing / f"{n}.jpg").stat().st_mtime_ns} for n in old}), encoding="utf-8")
-            self.assertEqual(mockups.missing_previews(c), ["04_two_wall_spreads.jpg", "06_three_books.jpg"])
+            self.assertEqual(mockups.missing_previews(c), ["04_two_wall_spreads.jpg", "06_three_books.jpg",
+                                                           "07_three_open_spreads_fall.jpg", "08_wall_and_back.jpg", "09_year_grid.jpg"])
 
             def fake_render(name, pages_dir, out):
                 Image.new("RGB", (1600, 1600), "gray").save(out)
             with mock.patch.object(mockups, "render", fake_render):
                 made = mockups.previews(c, on_event=lambda *_: None)
-            self.assertEqual([p.name for p in made], ["04_two_wall_spreads.jpg", "06_three_books.jpg"])
+            self.assertEqual([p.name for p in made], ["04_two_wall_spreads.jpg", "06_three_books.jpg",
+                                                      "07_three_open_spreads_fall.jpg", "08_wall_and_back.jpg", "09_year_grid.jpg"])
             self.assertEqual(sorted(p.name for p in listing.glob("*.jpg")),
                              ["01_front_cover_spiral.jpg", "02_open_spread_flat.jpg", "03_three_open_spreads.jpg",
-                              "04_two_wall_spreads.jpg", "06_three_books.jpg"])
+                              "04_two_wall_spreads.jpg", "06_three_books.jpg", "07_three_open_spreads_fall.jpg", "08_wall_and_back.jpg", "09_year_grid.jpg"])
             self.assertEqual(mockups.missing_previews(c), [])
-            self.assertEqual(ai_mockups.pending(c), ["04_two_wall_spreads", "06_three_books"])   # 3 ảnh AI cũ giữ nguyên
+            self.assertEqual(ai_mockups.pending(c), ["04_two_wall_spreads", "06_three_books", "07_three_open_spreads_fall", "08_wall_and_back"])   # 3 ảnh AI cũ giữ nguyên
 
             cfg = {"projects_dir": str(root), "profiles_dir": str(root / "profiles"), "imagegen": {}}
             (root / "profiles" / "acc1").mkdir(parents=True)
             fake = tam.FakeRun()
             with mock.patch.object(driver, "run_jobs", fake):
                 res = ai_mockups.ai_previews(c, cfg, on_event=lambda *_: None)
-            self.assertEqual(sorted(res["ai"]), ["04_two_wall_spreads", "06_three_books"])
-            self.assertEqual(sorted(j.id for j in fake.calls[0]), ["04_two_wall_spreads", "06_three_books"])
+            self.assertEqual(sorted(res["ai"]), ["04_two_wall_spreads", "06_three_books", "07_three_open_spreads_fall", "08_wall_and_back"])
+            self.assertEqual(sorted(j.id for j in fake.calls[0]), ["04_two_wall_spreads", "06_three_books", "07_three_open_spreads_fall", "08_wall_and_back"])
             self.assertEqual(ai_mockups.pending(c), [])
 
     def test_template_mode_books_keep_the_old_five_previews(self):

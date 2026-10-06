@@ -1,13 +1,13 @@
 """Prompt cho "AI gen mockup" (chỉ Wall Calendar (Blank) chế độ "AI vẽ cả trang"). Giữ NGUYÊN VĂN theo người dùng.
 
-Preview 1: đính kèm IMAGE 1 = khung mockup bìa lò xo (data/mockups/front_cover_spiral.webp),
+Preview 1: đính kèm IMAGE 1 = khung mockup bìa lò xo (data/mockups/front_cover_spiral_v2.webp),
            IMAGE 2 = tranh bìa AI gốc của cuốn (_he_thong/anh_ai/cover.*).
-Preview 2, 3: đính kèm mockup code đã ghép của cuốn (02_open_spread_flat, 03_three_open_spreads) - AI giữ nguyên
-           cuốn lịch, thay bối cảnh.
-Preview 4: IMAGE 1 = tranh tháng 1 AI gốc (_he_thong/anh_ai/m01.*), IMAGE 2 = mockup code 04_two_wall_spreads (2 tờ
-           lịch mở treo tường: tháng 1, tháng 2) - AI chỉ thay nền theo tranh.
-Preview 5: IMAGE 1 = tranh tháng 4 AI gốc (_he_thong/anh_ai/m04.*), IMAGE 2 = mockup code 06_three_books (bìa +
-           trang lịch tháng 4 + tranh tháng 4) - AI chỉ thay nền theo tranh.
+Preview 2: đính kèm mockup code đã ghép của cuốn (02_open_spread_flat) - AI giữ nguyên cuốn lịch, thay bối cảnh.
+Preview 3: IMAGE 1 = tranh tháng 2 AI gốc (anh_ai/m02.*), IMAGE 2 = mockup code 03_three_open_spreads (tháng 2, 3, 4).
+Preview 4: IMAGE 1 = tranh tháng 5 AI gốc (_he_thong/anh_ai/m05.*), IMAGE 2 = mockup code 04_two_wall_spreads (2 tờ
+           lịch mở treo tường: tháng 5, tháng 6) - AI chỉ thay nền theo tranh.
+Preview 5: IMAGE 1 = tranh tháng 7 AI gốc (_he_thong/anh_ai/m07.*), IMAGE 2 = mockup code 06_three_books (tranh
+           tháng 7 + trang lịch tháng 8 + tranh tháng 8) - AI chỉ thay nền theo tranh.
 """
 
 COVER_PROMPT = """## BACKGROUND — FULL CREATIVE FREEDOM
@@ -166,7 +166,114 @@ Avoid repetitive product-mockup conventions.
 
 Make a fresh creative decision specifically for this calendar every time the prompt is used."""
 
-# Preview 4 (04_two_wall_spreads): IMAGE 1 = tranh tháng 1 AI gốc, IMAGE 2 = mockup code 2 tờ treo tường. Đã duyệt 02/10/2026.
+# Preview 3 (03_three_open_spreads): IMAGE 1 = tranh tháng 2 AI gốc, IMAGE 2 = mockup code 3 tờ lịch mở (tháng 2, 3, 4)
+SPREADS_PROMPT = """## TASK: BACKGROUND REPLACEMENT EDIT (not a new picture)
+
+Edit IMAGE 2. Keep the three open calendars in IMAGE 2 exactly as they are and repaint ONLY the area around them.
+Work as if the three calendars were a locked, cut-out layer lying on top of the photo: you may change everything
+underneath and around that layer, but nothing inside its outline.
+
+IMAGE 1 = a monthly artwork of this calendar. Use it ONLY as inspiration for the mood, colors and theme of the new
+background.
+IMAGE 2 = the photo to edit: three open spiral-bound wall calendars lying at slight angles on a table, partly
+overlapping. Each one shows a monthly artwork page on top, the spiral binding in the middle and that month's date
+grid page below.
+
+## LOCKED: THE THREE CALENDARS (highest priority - more important than the background)
+
+Inside the outline of each calendar, everything must stay identical to IMAGE 2:
+- the printed artwork, month names, year, weekday names, every date number and holiday label, with the same font,
+  size, color and position; every number stays in the same grid cell
+- the position, size, angle, perspective, overlap order and proportions of each calendar
+- the metal spiral binding, punched holes, hanging holes, paper edges and paper thickness
+Do NOT redraw, repaint, re-render, re-light, recolor, sharpen, blur, upscale, restyle, translate, correct or "improve"
+anything printed on the calendars. Do not replace any calendar page with IMAGE 1. Do not add, remove, move, rotate,
+crop or resize any calendar. Nothing may overlap the calendars: no props, hands, leaves, petals, light rays,
+reflections, glare or shadows on top of them.
+If you are unsure whether a detail inside a calendar would change, leave it exactly as in IMAGE 2.
+
+## BACKGROUND (only outside the calendars)
+
+Replace the table and everything around the calendars with a new, real photographed setting inspired by IMAGE 1:
+choose the surface, materials, a few props, colors and lighting that fit its theme, mood and season. Keep the same
+camera angle and the same framing as IMAGE 2. Real objects and surfaces, not a drawn illustration, and do not paste
+IMAGE 1 into the scene as a print, poster or extra page. Do not default to a generic wooden table or white studio;
+every time IMAGE 1 changes, invent a new setting.
+
+## MAKE THE CALENDARS STAND OUT - BY CHANGING THE BACKGROUND ONLY
+
+- Keep the background calmer, softer and a little darker or lower in contrast and saturation than the calendars,
+  with colors that separate clearly from the calendar edges.
+- Keep props few and small, only in the empty space around the calendars, near the edges of the frame.
+- Only soft contact shadows on the new surface right at the calendar edges; never shade or tint the calendars.
+
+## FINAL CHECK BEFORE YOU ANSWER
+
+Compare each calendar in your result with IMAGE 2: same artwork, same month names and year, same date numbers in the
+same grid cells, same spiral and holes. If anything inside a calendar changed, restore it from IMAGE 2.
+
+## IMAGE FORMAT
+
+Output a square 1:1 photo with the same framing as IMAGE 2. Photorealistic, professional product photography."""
+
+# Preview 7 (08_wall_and_back): IMAGE 1 = tranh tháng 12 AI gốc, IMAGE 2 = mockup code tờ treo tường tháng 12 + bìa sau.
+# Người dùng duyệt 06/10/2026.
+WALL_BACK_PROMPT = """## TASK: BACKGROUND REPLACEMENT EDIT (not a new picture)
+
+Edit IMAGE 2. Keep the two calendars in IMAGE 2 exactly as they are and repaint ONLY the area around them.
+Work as if the two calendars were a locked, cut-out layer on top of the photo: you may change everything
+behind and around that layer, but nothing inside its outline.
+
+IMAGE 1 = the December artwork of this calendar. Use it ONLY as inspiration for the mood, colors and theme of
+the new background.
+IMAGE 2 = the photo to edit: an open spiral-bound wall calendar hanging on a wall from a small hook (December
+artwork on top, spiral binding in the middle, December date grid below), and in front of it a closed
+spiral-bound calendar leaning at an angle, showing its back cover with the title and 12 small monthly
+pictures.
+
+## LOCKED: THE TWO CALENDARS (highest priority - more important than the background)
+
+Inside the outline of each calendar, everything must stay identical to IMAGE 2:
+- the printed artwork, the title, year, month names, captions and every date number, with the same font,
+  size, color and position; the 12 small pictures on the back cover stay the same 12 pictures in the same grid
+- the position, size, angle, perspective, overlap and proportions of both calendars; the front calendar keeps
+  covering the same part of the hanging one
+- the metal spiral bindings, the hanging hook, the hanging hole of the front calendar, paper edges and paper
+  thickness
+Do NOT redraw, repaint, re-render, re-light, recolor, sharpen, blur, upscale, restyle, translate, correct or
+"improve" anything printed on the calendars. Do not replace any page with IMAGE 1. Do not add, remove, move,
+rotate, crop or resize any calendar. Nothing may overlap the calendars: no props, leaves, garlands, lights,
+reflections, glare or shadows on top of them.
+If you are unsure whether a detail inside a calendar would change, leave it exactly as in IMAGE 2.
+
+## BACKGROUND (only outside the calendars)
+
+Replace the wall, the floor and the plant with a new, real photographed setting inspired by IMAGE 1 and its
+December mood: choose the wall surface, the surface the front calendar leans on, a few props, colors and
+lighting that fit its theme and season. Keep the same straight-on camera and the same framing as IMAGE 2.
+Real objects and surfaces, not a drawn illustration, and do not paste IMAGE 1 into the scene as a print,
+poster or extra page. Do not default to a generic beige wall, white studio or wooden floor; every time
+IMAGE 1 changes, invent a new setting.
+
+## MAKE THE CALENDARS STAND OUT - BY CHANGING THE BACKGROUND ONLY
+
+- Keep the background calmer, softer and a little darker or lower in contrast and saturation than the
+  calendars, with colors that separate clearly from the calendar edges.
+- Keep props few and small, only in the empty space around the calendars, near the edges of the frame.
+- Only soft contact shadows behind the hanging calendar and under the leaning one; never shade or tint the
+  calendars themselves.
+
+## FINAL CHECK BEFORE YOU ANSWER
+
+Compare both calendars in your result with IMAGE 2: same December artwork and date numbers, same title and
+year on the back cover, same 12 small pictures and month names, same spirals, hook and hole. If anything inside a
+calendar changed, restore it from IMAGE 2.
+
+## IMAGE FORMAT
+
+Output a square 1:1 photo with the same framing as IMAGE 2. Photorealistic, professional product photography."""
+
+# Preview 4 (04_two_wall_spreads): IMAGE 1 = tranh tháng 5 AI gốc, IMAGE 2 = mockup code 2 tờ treo tường. Đã duyệt 02/10/2026.
 WALL_PROMPT = """## INPUTS
 
 IMAGE 1 = the artwork. Use it ONLY as the style, theme and color reference for the new background.
@@ -216,51 +323,50 @@ IMPORTANT: Every time IMAGE 1 changes, reconsider the environment from scratch. 
 
 Output a square 1:1 photo with the same framing as IMAGE 2. Photorealistic, professional product photography."""
 
-# Preview 5 (06_three_books): IMAGE 1 = tranh tháng 4 AI gốc, IMAGE 2 = mockup code 3 cuốn đã ghép. Đã duyệt 02/10/2026.
-BOOKS_PROMPT = """## INPUTS
+# Preview 5 (06_three_books): IMAGE 1 = tranh tháng 7 AI gốc, IMAGE 2 = mockup code 3 cuốn đã ghép. Đã duyệt 02/10/2026.
+BOOKS_PROMPT = """## TASK: BACKGROUND REPLACEMENT EDIT (not a new picture)
 
-IMAGE 1 = the artwork. Use it ONLY as the style, theme and color reference for the new background.
-IMAGE 2 = the photo to edit. It shows three spiral-bound wall calendars lying on a plain dark green surface: a front cover (top left), a monthly grid page (top right) and a monthly artwork page (bottom).
+Edit IMAGE 2. Keep the three calendars in IMAGE 2 exactly as they are and repaint ONLY the area around them.
+Work as if the three calendars were a locked, cut-out layer lying on top of the photo: you may change everything
+underneath and around that layer, but nothing inside its outline.
 
-## TASK
+IMAGE 1 = the monthly artwork. Use it ONLY as inspiration for the mood, colors and theme of the new background.
+IMAGE 2 = the photo to edit: three spiral-bound wall calendars lying flat on a plain dark green surface - a monthly
+artwork page (top left), a monthly date grid page (top right) and another monthly artwork page (bottom).
 
-Replace ONLY the background of IMAGE 2. The output is IMAGE 2 with a new background. Do not output IMAGE 1, and do not paste IMAGE 1 into the scene as a picture, poster or extra page.
+## LOCKED: THE THREE CALENDARS (highest priority - more important than the background)
 
-## PRESERVE THE CALENDARS — DO NOT REDESIGN
+Inside the outline of each calendar, everything must stay identical to IMAGE 2:
+- the printed artwork, every title, word, letter, year, month name and caption, with the same font, size, color and
+  position; every date number, weekday name and holiday label on the grid page stays in the same cell
+- the position, size, angle, perspective and proportions of each calendar
+- the metal spiral binding, punched holes, hanging holes, paper edges and paper thickness
+Do NOT redraw, repaint, re-render, re-light, recolor, sharpen, blur, upscale, restyle, translate, correct or "improve"
+anything printed on the calendars. Do not replace any calendar page with IMAGE 1. Do not add, remove, move, rotate,
+crop or resize any calendar. Nothing may overlap the calendars: no props, hands, leaves, petals, light rays,
+reflections, glare or shadows on top of them.
+If you are unsure whether a detail inside a calendar would change, leave it exactly as in IMAGE 2.
 
-Keep all three calendars exactly as they are in IMAGE 2:
+## BACKGROUND (only outside the calendars)
 
-- same position, size, angle, perspective and proportions
-- same printed artwork, title, lettering, month name, weekday names and every date number, pixel-faithful; do not redraw, restyle, re-letter, translate, correct or "improve" anything printed on them
-- do not replace what is printed on the calendars with IMAGE 1
-- same metal spiral binding, punched holes, hanging holes and paper thickness
-- do not add, remove, move, rotate, crop or cover any calendar
+Replace the plain green surface with a new, real photographed setting inspired by IMAGE 1: choose the surface,
+materials, a few props, colors and lighting that fit its theme, mood and season. Keep the same top-down flat-lay
+camera and the same framing as IMAGE 2. Real objects and surfaces, not a drawn illustration, and do not paste
+IMAGE 1 into the scene as a print, poster or extra page. Do not default to a generic wooden table or white studio;
+every time IMAGE 1 changes, invent a new setting.
 
-Nothing may overlap the calendars. Props may only sit in the empty areas around and between them.
+## MAKE THE CALENDARS STAND OUT - BY CHANGING THE BACKGROUND ONLY
 
-## BACKGROUND — FULL CREATIVE FREEDOM
+- Keep the background calmer, softer and a little darker or lower in contrast and saturation than the calendars,
+  with colors that separate clearly from the calendar edges.
+- Keep props few and small, only in the empty space between and around the calendars, near the edges of the frame.
+- Only soft contact shadows on the new surface right at the calendar edges; never shade or tint the calendars.
 
-Replace the plain green surface of IMAGE 2 with a completely new environment.
+## FINAL CHECK BEFORE YOU ANSWER
 
-Study IMAGE 1 carefully and independently create the most beautiful, visually compelling and contextually appropriate setting for that specific artwork.
-
-The background must feel naturally connected to the subject, theme, mood, colors, season, atmosphere and visual story of IMAGE 1.
-
-Do not default to a generic wooden table, white studio or any repeated product-mockup setting. Interpret IMAGE 1 first, then invent the scene from scratch: the surface, materials, surrounding objects and props, colors, lighting and atmosphere.
-
-The scene is a top-down flat lay, matching the camera angle of IMAGE 2. The background does NOT need to literally reproduce the scene shown in IMAGE 1; extend its visual world in a tasteful and believable way, as real photographed objects and surfaces, not as a drawn illustration.
-
-Avoid generic decoration added only to fill empty space. Every environmental choice should make visual sense for IMAGE 1.
-
-IMPORTANT: Every time IMAGE 1 changes, reconsider the environment from scratch. Do not reuse a background concept from previous images.
-
-## PRODUCT EMPHASIS — THE CALENDARS MUST STAND OUT
-
-- The three calendars are the heroes: the sharpest, brightest and most clearly lit elements in the frame.
-- Keep the background calmer, slightly darker or softer, and lower in contrast and saturation than the printed artwork.
-- Choose background colors that separate clearly from the calendar edges; do not use colors or patterns that blend into the artwork.
-- Keep props small, few and near the edges of the frame.
-- Add soft, realistic contact shadows under each calendar, consistent with one light direction, so they sit naturally on the new surface.
+Compare each calendar in your result with IMAGE 2: same titles and spelling, same year, same month names, same
+artwork, same date numbers in the same grid cells, same spiral and holes. If anything inside a calendar changed,
+restore it from IMAGE 2.
 
 ## IMAGE FORMAT
 
@@ -285,10 +391,15 @@ AI_PREVIEWS = {
     "03_three_open_spreads": "03_three_open_spreads",
     "04_two_wall_spreads": "04_two_wall_spreads",
     "06_three_books": "06_three_books",
+    "07_three_open_spreads_fall": "07_three_open_spreads_fall",
+    "08_wall_and_back": "08_wall_and_back",
 }
 # preview chỉ thay nền: IMAGE 1 = tranh AI gốc của tháng này, IMAGE 2 = mockup code của chính ảnh đó -> (tranh, prompt)
 ART_PREVIEWS = {
-    "04_two_wall_spreads": ("m01", WALL_PROMPT),
-    "06_three_books": ("m04", BOOKS_PROMPT),
+    "03_three_open_spreads": ("m02", SPREADS_PROMPT),     # ghép tháng 2, 3, 4 - kèm tranh tháng 2
+    "04_two_wall_spreads": ("m05", WALL_PROMPT),          # ghép tháng 5, 6 - kèm tranh tháng 5
+    "07_three_open_spreads_fall": ("m09", SPREADS_PROMPT),   # preview 6: cơ chế preview 3, ghép tháng 9, 10, 11
+    "08_wall_and_back": ("m12", WALL_BACK_PROMPT),           # preview 7: treo tường tháng 12 + bìa sau
+    "06_three_books": ("m07", BOOKS_PROMPT),            # ghép tranh T7, lịch T8, tranh T8 - kèm tranh tháng 7
 }
 DROPPED = "05_wall_page_turn"         # chế độ AI mockup bỏ ảnh lật trang (04 = 2 tờ treo tường, 06 = 3 cuốn)

@@ -201,7 +201,7 @@ def run_ideation(keyword: str, backend: Backend, projects_root: Path, *, year: i
                  family: str | None = None, grid_preset: str | None = None,
                  product: str | None = None, keyword_root: Path | None = None,
                  grid_mode: str | None = None, p2_parallel: int = 3,
-                 mockup_mode: str | None = None) -> IdeationResult:
+                 mockup_mode: str | None = None, listing_style: str | None = None) -> IdeationResult:
     # keyword_root: thư mục loại lịch (projects/Wall Calendar (Blank)...); danh mục chống trùng, chia đều style/nền/
     # bố cục vẫn tính trên TOÀN BỘ projects_root (mọi loại lịch)
     kdir = (keyword_root or projects_root) / slugify(keyword)
@@ -356,6 +356,7 @@ def run_ideation(keyword: str, backend: Backend, projects_root: Path, *, year: i
                 if tone:   # tông giao + tông thật (xếp theo hex AI chọn) để soi lại
                     concept["style"]["base_tone"] = {"assigned": tone, "actual": tones.book_tone(concept)}
                 concept["product"] = product if product in products.PRODUCTS else products.DEFAULT
+                concept["listing_style"] = "etsy" if listing_style == "etsy" else "standard"   # title/mô tả chuẩn Etsy
                 if products.ai_grid(concept):
                     concept["style"]["grid_mode"] = (grid_mode if grid_mode in products.GRID_MODES
                                                      else products.DEFAULT_GRID_MODE)
@@ -364,7 +365,8 @@ def run_ideation(keyword: str, backend: Backend, projects_root: Path, *, year: i
                 # Khung hình từng tháng do code chia (cùng thứ tự đã đưa vào prompt P2).
                 from ..imagegen import shots
                 for m, shot in zip(concept["months"],
-                                   shots.assign(str(angle.get("title", "")), str(angle.get("frame_type", "")))):
+                                   shots.assign(str(angle.get("title", "")), str(angle.get("frame_type", "")),
+                                                str(angle.get("style_family") or ""))):
                     m["shot"] = shot
                 from ..render.grid_select import apply_grid_selection
                 apply_grid_selection(concept, requested=grid_preset or "auto")

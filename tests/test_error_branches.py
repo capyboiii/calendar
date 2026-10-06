@@ -417,7 +417,7 @@ class AiMockupBranchesTest(unittest.TestCase):
         with mock.patch.object(driver, "run_jobs", fake):
             res = ai_mockups.ai_previews(c, self.cfg, on_event=lambda *_: None)
         self.assertNotIn("03_three_open_spreads", [j.id for j in fake.calls[0]])
-        self.assertEqual(len(res["ai"]), 4)
+        self.assertEqual(len(res["ai"]), 6)
 
     def test_missing_cover_art_keeps_code_cover(self):
         c = tam.book(self.root)
@@ -430,14 +430,14 @@ class AiMockupBranchesTest(unittest.TestCase):
 
     def test_nothing_can_be_sent_returns_without_opening_chrome(self):
         c = tam.book(self.root)
-        for n in ("cover.png", "m01.png", "m04.png"):
+        for n in ("cover.png", "m02.png", "m05.png", "m07.png", "m09.png", "m12.png"):
             (layout.raw(c) / n).unlink()
         for n in ("02_open_spread_flat", "03_three_open_spreads"):
             (layout.listing(c) / f"{n}.jpg").unlink()
         with mock.patch.object(driver, "run_jobs", mock.Mock(side_effect=AssertionError("không được mở Chrome"))):
             res = ai_mockups.ai_previews(c, self.cfg, on_event=lambda *_: None)
         self.assertEqual((res["ai"], sorted(res["kept_code"])),
-                         ([], ["01_front_cover_spiral", "04_two_wall_spreads", "06_three_books"]))
+                         ([], ["01_front_cover_spiral", "04_two_wall_spreads", "06_three_books", "07_three_open_spreads_fall", "08_wall_and_back"]))
 
     def test_ai_step_crash_keeps_finished_book(self):
         """Bước ảnh quảng cáo AI nổ lỗi bất ngờ: cuốn vẫn xong với ảnh code ghép (pipeline bắt lỗi)."""
@@ -447,7 +447,7 @@ class AiMockupBranchesTest(unittest.TestCase):
         with mock.patch.object(driver, "run_jobs", mock.Mock(side_effect=RuntimeError("Chrome nổ"))):
             with self.assertRaises(RuntimeError):
                 ai_mockups.ai_previews(c, self.cfg, on_event=lambda *_: None)
-        self.assertEqual(len(list(layout.listing(c).glob("*.jpg"))), 5)   # ảnh code ghép còn nguyên
+        self.assertEqual(len(list(layout.listing(c).glob("*.jpg"))), 8)   # ảnh code ghép còn nguyên
 
 
 class AcceptImageTest(unittest.TestCase):

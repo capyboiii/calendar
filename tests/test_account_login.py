@@ -66,6 +66,20 @@ class ServerLoginTest(unittest.TestCase):
         self.assertIsNone(tm.login_running("acc2"))
 
 
+class LoginWindowOnScreenTest(unittest.TestCase):
+    def test_login_window_is_placed_on_screen(self):
+        """Profile vừa chạy ngầm (Chrome nhớ vị trí -32000): cửa sổ đăng nhập phải ghi rõ vị trí trên màn hình."""
+        import inspect
+        from calforge.llm import accounts
+        pos = [a for a in accounts.LOGIN_ARGS if a.startswith("--window-position=")]
+        self.assertEqual(len(pos), 1)
+        x, y = (int(v) for v in pos[0].split("=", 1)[1].split(","))
+        self.assertTrue(0 <= x < 1000 and 0 <= y < 800)
+        src = inspect.getsource(accounts.open_login_browser)
+        self.assertEqual(src.count("args=LOGIN_ARGS"), 2)                  # cả lần mở Chrome và lần lùi về Chromium
+        self.assertIn("bring_to_front", src)
+
+
 if __name__ == "__main__":
     unittest.main()
 

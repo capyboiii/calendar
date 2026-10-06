@@ -262,14 +262,14 @@ class Recovery(unittest.TestCase):
         self.drain(q)
         [b] = self.sim.books("koi")
         first = json.loads(layout.tech(b, "mockup_ai.json").read_text(encoding="utf-8"))
-        self.assertEqual(len(first), 5)
+        self.assertEqual(len(first), 7)
         time.sleep(0.02)
         q.add(self.book_params(b, "finish", redo_previews=True))   # "Làm lại ảnh quảng cáo"
         items = self.drain(q)
         self.assertEqual(items[-1]["status"], "done")
         again = json.loads(layout.tech(b, "mockup_ai.json").read_text(encoding="utf-8"))
         self.assertEqual(sorted(again), sorted(first))
-        self.assertTrue(all(again[k]["mtime_ns"] != first[k]["mtime_ns"] for k in first))   # AI gen lại cả 5
+        self.assertTrue(all(again[k]["mtime_ns"] != first[k]["mtime_ns"] for k in first))   # AI gen lại cả 7
 
 
 if __name__ == "__main__":

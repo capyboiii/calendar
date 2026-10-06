@@ -26,7 +26,7 @@ TEMPLATE = ["External ID", "Label", "Shipping method", "First name", "Last name"
           "Print area left sleeve", "Print area right sleeve", "Print area neck outer"]
 # ngoài mẫu Printify: 26 trang in của khổ đó, mỗi cột một trang, đúng thứ tự cuốn lịch
 PAGE_COLS = [f"Page {i:02d} {n}" for i, n in enumerate(r2.PAGE_ORDER, 1)]
-PREVIEW_COLS = [f"Preview {i}" for i in range(1, 6)]     # 5 ảnh quảng cáo, Preview 1 = ảnh bìa
+PREVIEW_COLS = [f"Preview {i}" for i in range(1, 9)]     # tối đa 8 ảnh quảng cáo (AI mockup 8, mockup sẵn 5)
 # nội dung listing (giống CSV Calendaria): tiêu đề SEO, mô tả HTML (có phần Details), tag cách nhau dấu phẩy
 LISTING_COLS = ["Title", "Description (HTML)", "Tags"]
 HEADER = TEMPLATE + PAGE_COLS + PREVIEW_COLS + LISTING_COLS

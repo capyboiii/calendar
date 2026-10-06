@@ -167,6 +167,34 @@ BACKGROUND_PEOPLE = (
     "Prefer fewer, well-defined background figures over a large repeated crowd."
 )
 
+# Nhân vật đủ bộ phận (tay, ngón, mắt, đuôi...) - chỉ cấu trúc cơ thể, không bắt bối cảnh phải thực tế. 06/10/2026.
+CHARACTER_ACCURACY = (
+    "CHARACTER ACCURACY (applies to every person and animal in the artwork)\n"
+    "- Each character has the correct number of body parts for its kind: two arms, two legs, five fingers per hand, "
+    "two eyes, two ears, one head, one tail where it should have one.\n"
+    "- Body parts are attached in the right places and joints bend the natural way; no extra, missing, merged or "
+    "duplicated limbs, fingers or faces.\n"
+    "- Hands that hold something grip it clearly with distinct fingers.\n"
+    "- Stylized or fantasy proportions (big eyes, chibi heads, exaggerated shapes) are fine, as long as each "
+    "character's body structure is complete and consistent."
+)
+
+
+# Họ Anime: tối đa 3 nhân vật chính rõ mặt, dồn chi tiết vào mặt + tay, nền được phép đơn giản hơn. 06/10/2026.
+ANIME_CHARACTERS = (
+    "ANIME CHARACTER FOCUS: show at most 3 main characters clearly, with visible faces and expressions; any other "
+    "characters are distant figures, back views or cropped at the frame edge. Draw the faces and hands of the main "
+    "characters large, crisp and fully detailed with clean line art; the background may be simpler and softer so "
+    "the detail goes to the characters."
+)
+
+
+def _character_rules(style: dict) -> list[str]:
+    rules = [BACKGROUND_PEOPLE, CHARACTER_ACCURACY]
+    if str(style.get("family") or "") == shots.ANIME_FAMILY:
+        rules.append(ANIME_CHARACTERS)
+    return rules
+
 
 def anchor_prompt(concept: dict) -> str:
     """Ảnh neo style sạch, không chữ; mọi ảnh tháng và cover riêng bám theo."""
@@ -178,7 +206,7 @@ def anchor_prompt(concept: dict) -> str:
         _artwork_lightness_rule(st),
         "",
         _scene_block(concept["cover"]["scene"], _single_motif(st.get("recurring_motif", ""))),
-        BACKGROUND_PEOPLE,
+        *_character_rules(st),
         f"Collection visual rhythm (shared look, not a fixed camera setup): {_composition_system(st)}",
         PRINT_SAFETY,
         PAPER,
@@ -227,7 +255,7 @@ def cover_prompt(concept: dict, with_reference: bool = True) -> str:
         "15% and 85% of the canvas width, never pushed toward one side. Keep lettering away from the top binding "
         "strip and the bottom-center hanging hole.",
         _scene_block(cov["scene"], _single_motif(st.get("recurring_motif", ""))),
-        BACKGROUND_PEOPLE,
+        *_character_rules(st),
         f"Collection visual rhythm (shared look, not a fixed camera setup): {_composition_system(st)}",
         COVER_PRINT_SAFETY,
         PAPER,
@@ -254,9 +282,9 @@ def month_prompt(concept: dict, month: dict, with_reference: bool = True) -> str
     lines.append(f'This calendar is "{str(concept.get("title", "")).strip()}": the picture must read as part of '
                  "that theme, not as a generic seasonal or holiday image.")
     lines += [
-        f"Shot type for this month: {shots.SHOTS[shots.month_shot(concept, month)]}",
+        f"Shot type for this month: {shots.shot_text(shots.month_shot(concept, month), st.get('family') or '')}",
         _scene_block(month["scene"], month.get("motif_placement", ""), month.get("composition_note", "")),
-        BACKGROUND_PEOPLE,
+        *_character_rules(st),
     ]
     if month.get("theme"):
         lines.append(f"The picture should make a viewer feel this, without any written words: {month['theme'].strip()}")

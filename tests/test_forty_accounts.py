@@ -360,6 +360,99 @@ class FortyAccountsBatchTest(unittest.TestCase):
         self.assertEqual(s.pool.limit(), 40)                             # và tự về lại đủ trần
         self.finish(s)
 
+    def server_storm(self, s, first, last, texts):
+        """Lượt vẽ thứ first..last trả câu lỗi phía server ChatGPT thật; phân loại bằng classify + generating của
+        tool rồi ném đúng lỗi như _wait_image (lỗi tạm -> TempError, quá tải -> QuotaExceeded)."""
+        from calforge.llm.limits import classify
+        from tests.test_chat_errors import SERVER_BUSY, SERVER_ERRORS  # noqa: F401
+        base, state, lock = driver._Worker, {"n": 0, "kinds": []}, threading.Lock()
+
+        class Storm(base):
+            def run_job(self, page, job):
+                with lock:
+                    state["n"] += 1
+                    n = state["n"]
+                if first <= n < last:
+                    text = texts[n % len(texts)]
+                    self_test.assertFalse(driver.generating({"tail": text}), text)   # không bị hiểu là đang vẽ
+                    kind = classify(text)
+                    with lock:
+                        state["kinds"].append(kind)
+                    if kind == "quota":
+                        raise QuotaExceeded(text)
+                    self_test.assertEqual(kind, "error", text)
+                    raise driver.TempError(f"trả lời xong mà không có ảnh: {text!r}")
+                return super().run_job(page, job)
+
+        self_test = self
+        return Storm, state
+
+    def test_server_errors_storm_with_40_accounts(self):
+        """Bão lỗi phía server ChatGPT ("Internal server error", "502 Bad Gateway", "Something went wrong"...)
+        trên cả 40 tài khoản: gửi lại, không bỏ cuốn, không loại tài khoản, batch vẫn đủ cuốn."""
+        from tests.test_chat_errors import SERVER_ERRORS
+        s = sim(self, 735, fault=0)
+        Storm, state = self.server_storm(s, 15, 135, SERVER_ERRORS)       # 120 lượt vẽ liên tiếp đều lỗi server
+        with mock.patch.object(driver, "_Worker", Storm):
+            tb.run_until_done(self, s, "srv", 6, "wall_grid", "ai_page")
+        self.assertEqual(len(s.books("srv")), 6)
+        self.assertGreaterEqual(len(state["kinds"]), 100)
+        self.assertEqual(set(state["kinds"]), {"error"})
+        self.assertFalse(s.pool.banned)                                   # lỗi server không phải lỗi tài khoản
+        self.assertFalse(list(s.root.rglob("ip_rejected*")))              # không cuốn nào bị bỏ như TM
+        self.finish(s)
+
+    def test_server_busy_with_40_accounts(self):
+        """ChatGPT quá tải ("at capacity", "Máy chủ đang bận"...) trên nhiều tài khoản: cho tài khoản nghỉ thay vì
+        đốt số lần thử; hết quá tải thì chạy tiếp, batch đủ cuốn."""
+        from tests.test_chat_errors import SERVER_BUSY
+        s = sim(self, 736, fault=0)
+        Storm, state = self.server_storm(s, 10, 70, SERVER_BUSY)
+        with mock.patch.object(driver, "_Worker", Storm):
+            tb.run_until_done(self, s, "busy", 6, "wall_grid", "ai_page")
+        self.assertEqual(len(s.books("busy")), 6)
+        self.assertEqual(set(state["kinds"]), {"quota"})
+        self.assertFalse(s.pool.banned)
+        self.finish(s)
+
+    def test_mixed_server_errors_and_busy_with_ai_mockups(self):
+        """Lỗi server + quá tải xen kẽ, kiểu AI gen mockup, 40 tài khoản: vẫn đủ cuốn, đủ ảnh quảng cáo."""
+        from tests.test_chat_errors import SERVER_BUSY, SERVER_ERRORS
+        s = sim(self, 737, fault=0)
+        Storm, state = self.server_storm(s, 20, 120, SERVER_ERRORS + SERVER_BUSY)
+        with mock.patch.object(driver, "_Worker", Storm):
+            rows = []
+            for i in range(4):
+                rows = s.run("mix", 4, "wall_grid", "ai_page", resume=i > 0, mockup_mode="ai")
+                if sum(r["ok"] for r in rows) == 4:
+                    break
+        self.assertEqual(sum(r["ok"] for r in rows), 4)
+        self.assertEqual(set(state["kinds"]), {"error", "quota"})
+        for b in s.books("mix"):
+            self.assertGreaterEqual(len(list(layout.listing(b).glob("*.jpg"))), 7)
+        self.finish(s)
+
+    def test_chat_server_errors_with_40_accounts(self):
+        """Lúc viết concept, ChatGPT trả câu lỗi server thay vì JSON (~40% lượt): tool nhắc lại / gửi lại, đủ cuốn."""
+        from tests.test_chat_errors import SERVER_ERRORS
+        s = sim(self, 738, fault=0)
+        real_ask, hits = tb.FakeSession.ask, []
+
+        def ask(sess, prompt, label):
+            answer = real_ask(sess, prompt, label)                        # ChatGPT giả vẫn ghi nhận câu hỏi
+            with sess.world.lock:                                         # fault=0 tắt chance(): bốc riêng
+                hit = sess.world.rng.random() < .4
+            if hit:                                                       # ...nhưng trả câu lỗi server thay JSON
+                hits.append(label)
+                return SERVER_ERRORS[len(hits) % len(SERVER_ERRORS)]
+            return answer
+
+        with mock.patch.object(tb.FakeSession, "ask", ask):
+            tb.run_until_done(self, s, "chatsrv", 10, "wall_grid", "ai_page")
+        self.assertEqual(len(s.books("chatsrv")), 10)
+        self.assertGreaterEqual(len(hits), 2, hits)
+        self.finish(s)
+
     def test_ram_drops_mid_batch(self):
         """RAM tụt giữa batch: không mở thêm / bớt Chrome, RAM hồi thì chạy lại; không treo, không hỏng cuốn."""
         s = sim(self, 740, fault=0.5)
@@ -430,7 +523,7 @@ class FortyAccountsBatchTest(unittest.TestCase):
         for b in s.books("koi"):
             self.assertEqual(sorted(p.stem for p in layout.listing(b).glob("*.jpg")),
                              ["01_front_cover_spiral", "02_open_spread_flat", "03_three_open_spreads",
-                              "04_two_wall_spreads", "06_three_books"])
+                              "04_two_wall_spreads", "06_three_books", "07_three_open_spreads_fall", "08_wall_and_back"])
         self.finish(s)
 
     def test_80_accounts_cap_40(self):

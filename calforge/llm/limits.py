@@ -43,7 +43,7 @@ QUOTA_PAT = (
     # tiếng Việt (giao diện ChatGPT tiếng Việt)
     "đã đạt giới hạn", "đạt đến giới hạn", "đã đạt đến giới hạn", "hết lượt", "giới hạn tạo ảnh",
     "giới hạn sử dụng", "quá nhiều yêu cầu", "quá nhiều tin nhắn", "hoạt động bất thường", "nhu cầu cao",
-    "quá tải",
+    "quá tải", "máy chủ đang bận", "hệ thống đang bận",
 )
 
 # Câu mơ hồ: chỉ tính là hết lượt khi KHÔNG phải câu từ chối (vd "I can't create that... try again in a new chat")
@@ -147,6 +147,10 @@ TEMP_PAT = (
     "conversation not found", "failed to fetch", "request timed out", "bad gateway", "gateway timeout",
     "please try again", "try again later", "unable to generate", "wasn't able to generate", "could not generate",
     "đã xảy ra lỗi", "có lỗi xảy ra", "thử lại sau",
+    # lỗi phía server / mạng của ChatGPT (soát 06/10/2026): nhận ngay là lỗi tạm thay vì chờ 45s im lặng
+    "internal server error", "server error", "server had an error", "status code 5", "error in body stream",
+    "unable to load conversation", "trouble connecting", "issue generating", "problem generating",
+    "generation failed", "lỗi mạng", "lỗi máy chủ", "đã xảy ra sự cố", "gặp sự cố",
 )
 
 # Mọi khối thông báo ngoài lượt trả lời: hộp thoại, banner, toast

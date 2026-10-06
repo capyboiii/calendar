@@ -36,21 +36,22 @@ def box(tl, tr, br, bl):
 
 MOCKUPS = {
     # bìa lịch treo, lò xo ở mép trên, khe treo giữa, lỗ dưới (trang mockup hơi cao hơn 11x8.5 ~8%: kéo vừa khung)
-    "front_cover_spiral": dict(file="front_cover_spiral.webp", edges="geo", metal=30, metal_thr=18, sheets=[
-        dict(source="front_cover", kind="page", lines=box((168, 244), (1083.5, 244), (1083.5, 1011), (168, 1011)),
-             cutouts=[(626, 256, 16)], cutout_thr=22,
-             through=[(627, 985, 9)]),                      # lỗ dưới: thủng hẳn, thấy nền sau
+    # thay khung mới 06/10/2026 (nền trắng, không khe treo trên; khung cũ: front_cover_spiral.webp)
+    "front_cover_spiral": dict(file="front_cover_spiral_v2.webp", edges="geo", metal=30, metal_thr=18, sheets=[
+        dict(source="front_cover", kind="page", lines=box((168.5, 244), (1083.5, 244), (1083.5, 1010), (168.5, 1010)),
+             through=[(625, 982.5, 9)]),                    # lỗ dưới: thủng hẳn, thấy nền sau
     ]),
-    # 3 tờ lịch mở nằm nghiêng trên bàn (mép đo bằng Hough, nhiều đoạn thì fit chung); tờ 3 đè lên 2 tờ kia
+    # 3 tờ lịch mở nằm nghiêng trên bàn (mép đo bằng Hough, nhiều đoạn thì fit chung); tờ 3 đè lên 2 tờ kia.
+    # Tháng 2, 3, 4 (06/10/2026; trước là 1, 2, 3)
     "three_open_spreads": dict(file="three_open_spreads.webp", edges="paper", sheets=[
-        dict(month=1, kind="spread", lines=dict(
+        dict(month=2, kind="spread", lines=dict(
             top=[(189, 94), (614, 235)], bottom=[(0, 766), (381, 907), (1, 769), (377, 909)],
             left=[(187, 94), (50, 509), (58, 484), (0, 651)],
             right=[(616, 236), (496, 596), (445, 722), (378, 909)])),
-        dict(month=2, kind="spread", lines=dict(
+        dict(month=3, kind="spread", lines=dict(
             top=[(655, 131), (1093, 5)], bottom=[(904, 778), (1253, 672), (908, 781), (1252, 676)],
             left=[(653, 133), (782, 570)], right=[(1095, 5), (1252, 552), (1100, 8), (1253, 542)])),
-        dict(month=3, kind="spread", lines=dict(
+        dict(month=4, kind="spread", lines=dict(
             top=[(439, 604), (782, 571)], bottom=[(494, 1235), (948, 1186), (498, 1238), (946, 1189)],
             left=[(447, 721), (492, 1234)], right=[(882, 563), (945, 1189)])),
     ]),
@@ -107,20 +108,22 @@ MOCKUPS = {
     ]),
     # 2 tờ lịch mở treo tường (chỉ dùng cho "AI gen mockup"): tờ trái tháng 1, tờ phải tháng 2. Tường sáng gần bằng
     # giấy -> mép hình học (đo bằng gradient), lỗ treo trên/dưới đo trực tiếp, 02/10/2026.
+    # tháng 5 (trái) và 6 (phải) (06/10/2026; trước là 1 và 2)
     "two_wall_spreads": dict(file="two_wall_spreads.webp", seam="band", metal=9, metal_thr=10, edges="geo", sheets=[
-        dict(month=1, kind="spread", lines=box((177.5, 52.5), (616, 52.5), (616, 723), (177.5, 723)),
+        dict(month=5, kind="spread", lines=box((177.5, 52.5), (616, 52.5), (616, 723), (177.5, 723)),
              through=[(397, 65.5, 5.5), (396, 709.5, 5.5)]),
-        dict(month=2, kind="spread", lines=box((672.5, 342.5), (1112, 342.5), (1112, 1009), (672.5, 1009)),
+        dict(month=6, kind="spread", lines=box((672.5, 342.5), (1112, 342.5), (1112, 1009), (672.5, 1009)),
              through=[(887.5, 354.5, 5.5), (887.5, 995.5, 5.5)]),
     ]),
-    # 3 cuốn nằm trên nền xanh (ảnh 2000px, chỉ dùng cho "AI gen mockup"): bìa, trang lịch tháng 4 (lò xo mép trên),
-    # tranh tháng 4 (lò xo mép dưới). Góc đo theo bao lồi mặt giấy, tâm lỗ treo đo trực tiếp, 02/10/2026.
+    # 3 cuốn nằm trên nền xanh (ảnh 2000px, chỉ dùng cho "AI gen mockup"): tranh tháng 7, trang lịch tháng 8 (lò xo
+    # mép trên), tranh tháng 8 (lò xo mép dưới) - 06/10/2026 (trước: bìa, lịch T4, tranh T4). Góc đo theo bao lồi mặt giấy, tâm lỗ treo đo trực tiếp, 02/10/2026.
     "three_books": dict(file="three_books.webp", edges="geo", metal=46, metal_thr=18, sheets=[
-        dict(source="front_cover", kind="page", lines=box((81, 348), (868, 236), (960, 843), (145, 966)),
+        dict(source="m07_month", kind="page", lines=box((81, 348), (868, 236), (960, 843), (145, 966)),
              through=[(554.2, 879.4, 12)]),
-        dict(source="m04_grid", kind="page", lines=box((1115, 286), (1926, 391), (1861, 1011), (1023, 888)),
+        # không dùng bìa sau: nhiều chi tiết li ti, ChatGPT vẽ lại bị nhoè
+        dict(source="m08_grid", kind="page", lines=box((1115, 286), (1926, 391), (1861, 1011), (1023, 888)),
              through=[(1432.1, 923.2, 12)]),
-        dict(source="m04_month", kind="page", metal_edge="bottom", through=[(1017.5, 1069.5, 11)],
+        dict(source="m08_month", kind="page", metal_edge="bottom", through=[(1017.5, 1069.5, 11)],
              lines=box((608, 1010), (1447, 1088), (1398, 1733), (528, 1643))),
     ]),
 }
@@ -181,6 +184,8 @@ def render(name: str, pages: Path, out_path: Path, debug: bool = False) -> None:
     cfg = MOCKUPS[name]
     if cfg.get("curl"):
         return render_curl(cfg, pages, out_path)
+    if cfg.get("year_grid"):
+        return render_year_grid(cfg, pages, out_path)
     sheets = cfg["sheets"]
     mock0 = cv2.imread(str(HERE / cfg["file"]), cv2.IMREAD_COLOR)
     g0 = cv2.cvtColor(mock0, cv2.COLOR_BGR2GRAY)
@@ -482,6 +487,46 @@ def render_curl(cfg: dict, pages: Path, out_path: Path) -> None:
     _save(out_path, out)
 
 
+def render_year_grid(cfg: dict, pages: Path, out_path: Path, size: int = 3000) -> None:
+    """12 tháng trong một ảnh vuông: ghép từng tháng vào mockup cfg["base"], cắt sát mép tờ, lưới 4 cột x 3 hàng."""
+    import tempfile
+    from PIL import Image, ImageFilter
+
+    base = MOCKUPS[cfg["base"]]
+    x0, y0, x1, y1 = cfg["crop"]
+    tiles = []
+    with tempfile.TemporaryDirectory() as tmp:
+        for m in range(1, 13):
+            sheet = {**base["sheets"][0], "month": m}
+            MOCKUPS["_year_grid_month"] = {**base, "sheets": [sheet]}
+            one = Path(tmp) / f"m{m:02d}.png"
+            try:
+                render("_year_grid_month", pages, one)
+            finally:
+                MOCKUPS.pop("_year_grid_month", None)
+            with Image.open(one) as im:
+                k = im.width / cv2.imread(str(HERE / base["file"]), cv2.IMREAD_GRAYSCALE).shape[1]
+                tiles.append(im.convert("RGB").crop((round(x0 * k), round(y0 * k), round(x1 * k), round(y1 * k))))
+    w, h = tiles[0].size
+    cols, rows, margin, gap = 4, 3, round(size * .037), round(size * .02)
+    th = (size - 2 * margin - (rows - 1) * gap) // rows
+    tw = round(th * w / h)
+    left = (size - cols * tw - (cols - 1) * gap) // 2
+    canvas = Image.new("RGB", (size, size), "white")
+    shadow = Image.new("L", (size, size), 0)
+    spots = []
+    for i in range(12):
+        r, c = divmod(i, cols)
+        x, y = left + c * (tw + gap), margin + r * (th + gap)
+        spots.append((x, y))
+        shadow.paste(70, (x + 6, y + 10, x + tw + 6, y + th + 10))
+    shadow = shadow.filter(ImageFilter.GaussianBlur(14))
+    canvas = Image.composite(Image.new("RGB", (size, size), (150, 150, 150)), canvas, shadow)
+    for t, (x, y) in zip(tiles, spots):
+        canvas.paste(t.resize((tw, th), Image.LANCZOS), (x, y))
+    _save(out_path, cv2.cvtColor(np.asarray(canvas), cv2.COLOR_RGB2BGR))
+
+
 def _save(out_path: Path, img) -> None:
     """Ảnh listing lưu JPG q92 (nhẹ ~8 lần PNG, Etsy vẫn nét); ảnh debug/PNG giữ nguyên."""
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -492,11 +537,38 @@ def _save(out_path: Path, img) -> None:
         cv2.imwrite(str(out_path), img)
 
 
+# Một tờ lịch mở treo tường nhìn thẳng trên nền xám xanh (móc treo trên đỉnh, lỗ dưới đáy) - đo 06/10/2026.
+MOCKUPS["hang_single"] = dict(file="hang_single.webp", seam="band", metal=22, metal_thr=18, edges="geo", sheets=[
+    dict(month=1, kind="spread", lines=box((314.5, 115.5), (940.5, 115.5), (940.5, 1142), (314.5, 1142)),
+         through=[(627.1, 126.3, 6), (627.3, 1127, 5)]),
+])
+# Preview 8 của "AI gen mockup": ghép lần lượt 12 tháng vào hang_single, cắt đúng mép tờ lịch, xếp lưới 4x3 trên nền
+# trắng có bóng đổ nhẹ. Hoàn toàn bằng code (không gửi ChatGPT: 12 tờ nhỏ, AI vẽ lại sẽ nhoè chữ số).
+MOCKUPS["year_grid"] = dict(file="hang_single.webp", year_grid=True, base="hang_single",
+                            crop=(315.5, 116.5, 939.5, 1141),
+                            sheets=[dict(month=m, kind="spread") for m in range(1, 13)])
+
+# Preview 7 của "AI gen mockup": tờ lịch mở treo tường (tháng 12, móc treo trên đỉnh) + cuốn đóng dựng nghiêng phía
+# trước khoe bìa sau (lò xo mép trên, đè lên nửa dưới tờ treo). Mép đo bằng Hough + gradient, 06/10/2026.
+MOCKUPS["wall_and_back"] = dict(file="wall_and_back.webp", seam="band", metal=9, metal_thr=10, edges="geo", sheets=[
+    dict(month=12, kind="spread", lines=box((267.5, 73.5), (869.5, 73.5), (869.5, 999), (267.5, 999))),
+    dict(source="back_cover", kind="page", metal=40, metal_thr=18, through=[(876.5, 1194.5, 9)],   # lỗ treo dưới
+         lines=dict(top=[(420, 735), (880, 662)], right=[(1140, 650), (1220, 1150)],
+                    bottom=[(720, 1240), (1120, 1175)], left=[(421, 760), (515, 1240)])),
+])
+
+# Preview 6 của "AI gen mockup": đúng mockup 3 tờ lịch mở trên bàn của preview 3, chỉ đổi sang tháng 9, 10, 11
+MOCKUPS["three_open_spreads_fall"] = {
+    **MOCKUPS["three_open_spreads"],
+    "sheets": [{**sh, "month": m} for sh, m in zip(MOCKUPS["three_open_spreads"]["sheets"], (9, 10, 11))],
+}
+
 # 5 ảnh preview cho listing, theo thứ tự hiển thị: bìa, tờ mở, 3 tờ trên bàn, treo tường, để bàn
 PREVIEWS = ["front_cover_spiral", "open_spread_flat", "three_open_spreads", "wall_spread", "wall_page_turn"]
-# "AI gen mockup": 04 = 2 tờ treo tường (thay ảnh treo tường mở đôi), 05 lật trang bị bỏ, 06 = 3 cuốn -> vẫn 5 ảnh
+# "AI gen mockup": 04 = 2 tờ treo tường (thay ảnh treo tường mở đôi), 05 lật trang bị bỏ, 06 = 3 cuốn,
+# 07 = 3 tờ lịch mở tháng 9-11, 08 = tờ treo tường tháng 12 + bìa sau, 09 = lưới 12 tháng (chỉ code) -> 8 ảnh
 AI_MOCKUP_PREVIEWS = ["front_cover_spiral", "open_spread_flat", "three_open_spreads", "two_wall_spreads",
-                      "wall_page_turn", "three_books"]
+                      "wall_page_turn", "three_books", "three_open_spreads_fall", "wall_and_back", "year_grid"]
 # lịch grid in sẵn: bìa (dùng lại), treo tường thẳng, treo tường chéo, 3 tờ trên bàn, 2 cuốn gập
 PREMADE_PREVIEWS = ["front_cover_spiral", "premade_wall_straight", "premade_wall_angled", "premade_three_spreads",
                     "premade_two_closed"]

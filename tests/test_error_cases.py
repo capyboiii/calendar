@@ -485,7 +485,7 @@ class ChaosBatchTest(unittest.TestCase):
         for b in s.books("koi"):
             names = sorted(p.stem for p in layout.listing(b).glob("*.jpg"))
             self.assertEqual(names, ["01_front_cover_spiral", "02_open_spread_flat", "03_three_open_spreads",
-                                     "04_two_wall_spreads", "06_three_books"])   # ảnh AI hỏng thì vẫn còn ảnh code ghép
+                                     "04_two_wall_spreads", "06_three_books", "07_three_open_spreads_fall", "08_wall_and_back"])   # ảnh AI hỏng thì vẫn còn ảnh code ghép
         tb.check_invariants(self, s)
 
 

@@ -285,7 +285,7 @@ class Sim:
             if _p.ai_mockups(concept):                       # "AI gen mockup": code ghép 5 ảnh rồi AI dựng bối cảnh (THẬT)
                 layout.listing(cdir).mkdir(parents=True, exist_ok=True)
                 for name in ("01_front_cover_spiral", "02_open_spread_flat", "03_three_open_spreads",
-                             "04_two_wall_spreads", "06_three_books"):
+                             "04_two_wall_spreads", "06_three_books", "07_three_open_spreads_fall", "08_wall_and_back"):
                     f = layout.listing(cdir) / f"{name}.jpg"
                     if not f.exists():
                         Image.new("RGB", (1600, 1067), "gray").save(f)
@@ -473,7 +473,7 @@ class AiMockupBatchSimulationTest(unittest.TestCase):
                     names = sorted(p.stem for p in layout.listing(b).glob("*.jpg"))
                     self.assertEqual(names, ["01_front_cover_spiral", "02_open_spread_flat",
                                              "03_three_open_spreads", "04_two_wall_spreads",
-                                             "06_three_books"])                            # 5 ảnh, không có 05
+                                             "06_three_books", "07_three_open_spreads_fall", "08_wall_and_back"])   # 6 ảnh, không có 05
                     res = sim.mockup_results.get(b.name) or {}
                     st = _j.loads(layout.tech(b, "mockup_ai.json").read_text(encoding="utf-8"))                         if layout.tech(b, "mockup_ai.json").exists() else {}
                     for n in res.get("ai", []):                                 # ảnh AI ghi nhận đúng

@@ -267,6 +267,7 @@ async function startBatch() {
   const product = (document.querySelector('input[name="product"]:checked') || {}).value || 'wall_grid';
   const selection = (document.querySelector('input[name="family"]:checked') || {}).value || 'random';
   const params = { keyword, batch_size: countValue(), product, ...batchStyle(selection) };
+  params.listing_style = (document.querySelector('input[name="listing_style"]:checked') || {}).value || 'standard';
   if (product === 'wall_grid') {
     params.grid_mode = (document.querySelector('input[name="grid_mode"]:checked') || {}).value || 'ai_page';
     if (params.grid_mode === 'ai_page') {
@@ -331,10 +332,11 @@ function renderQueue() {
     }
     const mode = p.product === 'wall_grid' ? (p.grid_mode === 'background' ? ' · AI vẽ nền'
       : ` · AI vẽ cả trang${p.mockup_mode === 'ai' ? ' · AI mockup' : ''}`) : '';
+    const etsy = p.listing_style === 'etsy' ? ' · Listing Etsy' : '';
     const style = STYLE_LABEL[p.family];
     const styleText = style ? ` · ${p.family_selection === 'random' ? 'Ngẫu nhiên: ' : ''}${style}` : '';
     return `<strong>${esc(p.keyword)}</strong>
-    <span class="muted">${p.batch_size || 1} cuốn · ${PRODUCT_LABEL[p.product] || ''}${mode}${styleText}</span>`;
+    <span class="muted">${p.batch_size || 1} cuốn · ${PRODUCT_LABEL[p.product] || ''}${mode}${styleText}${etsy}</span>`;
   };
   const wl = $('queueWaiting');
   wl.innerHTML = '';
@@ -669,7 +671,8 @@ function renderBook(c, keyword) {
     <div class="copy-row"><div><span class="label">Tiêu đề</span><p>${esc(L.title)}</p></div><button class="btn btn-small" data-copy="title">Chép</button></div>
     <div class="copy-row"><div><span class="label">Thẻ tìm kiếm</span><p class="tags">${(L.tags || []).map((t) => `<span>${esc(t)}</span>`).join('')}</p></div><button class="btn btn-small" data-copy="tags">Chép</button></div>
     <div class="copy-row"><div><span class="label">Mô tả</span><div class="desc">${sanitizeDesc(L.description || '')}</div></div><button class="btn btn-small" data-copy="description">Chép</button></div>`;
-  const texts = { title: L.title, tags: (L.tags || []).join(', '), description: L.description || '' };
+  // bản chuẩn Etsy có mô tả chữ thường (Etsy không hiện HTML): nút Chép lấy bản đó
+  const texts = { title: L.title, tags: (L.tags || []).join(', '), description: L.description_text || L.description || '' };
   lb.querySelectorAll('[data-copy]').forEach((btn) => btn.addEventListener('click', () => copy(texts[btn.dataset.copy], btn)));
 }
 
@@ -693,12 +696,14 @@ function previewStem(path) {
 
 const PREVIEW_LABEL = {
   '01': 'ảnh bìa', '02': 'ảnh tờ mở', '03': 'ảnh ba tờ', '04': 'ảnh treo tường', '05': 'ảnh lật trang', '06': 'ảnh ba cuốn',
+  '07': 'ảnh ba tờ tháng 9-11', '08': 'ảnh treo tường tháng 12 + bìa sau',
+  '09': 'ảnh 12 tháng',
 };
 
 // ---- Gen lại MỘT ảnh quảng cáo (AI gen mockup: AI dựng lại bối cảnh; mockup code: ghép lại) -------------------
 async function redoPreview(c, stem) {
   const what = PREVIEW_LABEL[stem.slice(0, 2)] || stem;
-  if (!confirm(`Gen lại ${what} của "${c.title}"? 4 ảnh quảng cáo còn lại giữ nguyên.`)) return;
+  if (!confirm(`Gen lại ${what} của "${c.title}"? các ảnh quảng cáo còn lại giữ nguyên.`)) return;
   try {
     await queueOp('add', { params: { action: 'finish', concept: c.path, title: c.title, redo_previews: [stem] } });
     toast(`Đã xếp "Gen lại ${what}" cho "${c.title}".`, 'info');

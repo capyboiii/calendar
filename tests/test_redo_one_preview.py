@@ -20,7 +20,7 @@ from tests import test_recovery_simulation as tr
 from tests import test_batch_simulation as tb
 
 ALL = ["01_front_cover_spiral", "02_open_spread_flat", "03_three_open_spreads", "04_two_wall_spreads",
-       "06_three_books"]
+       "06_three_books", "07_three_open_spreads_fall", "08_wall_and_back"]
 
 
 def fake_render(name, pages, out):
@@ -37,7 +37,7 @@ class RedoOnePreviewCliTest(unittest.TestCase):
         self.c = tam.book(self.root)
         pages = layout.print_dir(self.c)
         pages.mkdir(parents=True, exist_ok=True)
-        for n in ["front_cover"] + [f"m{m:02d}_{k}" for m in range(1, 13) for k in ("month", "grid")]:
+        for n in ["front_cover", "back_cover"] + [f"m{m:02d}_{k}" for m in range(1, 13) for k in ("month", "grid")]:
             Image.new("RGB", (60, 40), "white").save(pages / f"{n}.png")
         old = time.time() - 3600
         import os
@@ -83,7 +83,7 @@ class RedoOnePreviewCliTest(unittest.TestCase):
             if n != "04_two_wall_spreads":
                 self.assertEqual(before[n], after[n], n)                             # 4 ảnh còn lại không đụng
         self.assertEqual(ai_mockups.pending(self.c), [])
-        self.assertEqual(sorted(p.stem for p in layout.listing(self.c).glob("*.jpg")), ALL)
+        self.assertEqual(sorted(p.stem for p in layout.listing(self.c).glob("*.jpg")), ALL + ["09_year_grid"])
 
     def test_two_previews_at_once(self):
         fake = self.finish("01_front_cover_spiral", "06_three_books")

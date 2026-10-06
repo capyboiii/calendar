@@ -70,6 +70,16 @@ def p1b_review(keyword: str, n: int, candidates: list[dict], projects_root: Path
                   candidates=json.dumps(view, ensure_ascii=False, indent=1))
 
 
+NL = "\n"
+# Họ Anime: ảnh AI nhỏ (1536x1024) -> cảnh đông người làm mặt nhoè. Giới hạn số nhân vật rõ mặt ngay từ lúc viết cảnh.
+ANIME_SCENE_RULE = (
+    "- ANIME CAST LIMIT (applies to the cover and every month): each scene features at most 3 main characters "
+    "shown clearly with visible faces and expressions. Any other characters appear only as distant figures, back "
+    "views or cropped at the frame edge, with no expressions described. Do not write crowded scenes that ask for "
+    "many readable faces."
+)
+
+
 def p2_concept(angle: dict, style: str, year: int, market: str,
                grid_composition_usage: str = "none yet", base_tone_rule: str = "") -> str:
     from ..imagegen import shots
@@ -83,7 +93,9 @@ def p2_concept(angle: dict, style: str, year: int, market: str,
                   angle_json=json.dumps(angle, ensure_ascii=False, indent=2), style=style,
                   family_name=fam["name"], grid_composition_usage=grid_composition_usage,
                   base_tone_rule=base_tone_rule or "Choose the base tone that best suits the art.",
-                  month_shots=shots.describe(str(angle.get("title", "")), str(angle.get("frame_type", ""))))
+                  month_shots=shots.describe(str(angle.get("title", "")), str(angle.get("frame_type", "")),
+                                             str(angle.get("style_family") or ""))
+                  + (NL + ANIME_SCENE_RULE if angle.get("style_family") == shots.ANIME_FAMILY else ""))
 
 
 def p3_repair(errors: list[str], previous: dict, *, include_previous: bool = True) -> str:

@@ -1,10 +1,13 @@
-"""AI gen mockup (Wall Calendar (Blank), "AI vẽ cả trang" + "AI gen mockup"): 5 ảnh quảng cáo do ChatGPT dựng bối cảnh.
+"""AI gen mockup (Wall Calendar (Blank), "AI vẽ cả trang" + "AI gen mockup"): 7 ảnh quảng cáo do ChatGPT dựng bối cảnh.
 
 Chạy SAU khi code đã ghép mockup (render/mockups.previews), vì ảnh 2/3/4 cần đúng mockup code làm ảnh kèm:
-- 01_front_cover_spiral: kèm IMAGE 1 = data/mockups/front_cover_spiral.webp, IMAGE 2 = tranh bìa AI gốc (anh_ai/cover.*)
-- 02_open_spread_flat / 03_three_open_spreads: kèm mockup code của chính ảnh đó
-- 04_two_wall_spreads: kèm IMAGE 1 = tranh tháng 1 AI gốc (anh_ai/m01.*), IMAGE 2 = mockup code 2 tờ treo tường
-- 06_three_books: kèm IMAGE 1 = tranh tháng 4 AI gốc (anh_ai/m04.*), IMAGE 2 = mockup code 3 cuốn của chính ảnh đó
+- 01_front_cover_spiral: kèm IMAGE 1 = data/mockups/front_cover_spiral_v2.webp, IMAGE 2 = tranh bìa AI gốc (anh_ai/cover.*)
+- 02_open_spread_flat: kèm mockup code của chính ảnh đó
+- 03_three_open_spreads: kèm IMAGE 1 = tranh tháng 2 AI gốc (anh_ai/m02.*), IMAGE 2 = mockup code 3 tờ (tháng 2, 3, 4)
+- 04_two_wall_spreads: kèm IMAGE 1 = tranh tháng 5 AI gốc (anh_ai/m05.*), IMAGE 2 = mockup code 2 tờ treo tường (tháng 5, 6)
+- 07_three_open_spreads_fall (preview 6): như 03 nhưng ghép tháng 9, 10, 11, kèm tranh tháng 9 (anh_ai/m09.*)
+- 08_wall_and_back (preview 7): tờ treo tường tháng 12 + bìa sau, kèm tranh tháng 12 (anh_ai/m12.*)
+- 06_three_books: kèm IMAGE 1 = tranh tháng 7 AI gốc (anh_ai/m07.*), IMAGE 2 = mockup code 3 cuốn (tranh T7, lịch T8, tranh T8)
 Ảnh AI GHI ĐÈ đúng file preview (R2 / CSV dùng thẳng). Ảnh AI nào hỏng hẳn / hết lượt: GIỮ mockup code ở chỗ đó
 (cuốn không bị kẹt), ghi lại để "Làm lại ảnh quảng cáo" gen lại sau.
 
@@ -24,7 +27,7 @@ from .. import layout
 from .mockup_prompts import AI_PREVIEWS, ART_PREVIEWS, COVER_PROMPT, SCENE_PROMPT, SQUARE_COVER, SQUARE_SCENE
 
 ROOT = Path(__file__).resolve().parents[2]
-COVER_TEMPLATE = ROOT / "data" / "mockups" / "front_cover_spiral.webp"
+COVER_TEMPLATE = ROOT / "data" / "mockups" / "front_cover_spiral_v2.webp"   # cùng khung với mockup code
 MIN_SIDE = 1000
 
 

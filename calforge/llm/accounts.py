@@ -269,6 +269,9 @@ def wait_until_browser_closed(ctx, udir: Path | None = None, poll: float = 0.5, 
 
 
 LOGIN_TIMEOUT_S = 15 * 60      # để quên cửa sổ đăng nhập: tự đóng, không treo tác vụ mãi
+# Cửa sổ đăng nhập phải HIỆN trên màn hình. Chrome nhớ vị trí cửa sổ trong profile; profile vừa chạy batch ngầm
+# (đặt ở -32000, ngoài màn hình) mà mở lại không ghi rõ vị trí thì Chrome đặt cửa sổ đăng nhập ra ngoài màn hình.
+LOGIN_ARGS = ["--disable-blink-features=AutomationControlled", "--window-position=80,60", "--window-size=1280,900"]
 
 
 def open_login_browser(name: str, cfg: dict | None = None, on_event=print) -> bool:
@@ -293,7 +296,7 @@ def open_login_browser(name: str, cfg: dict | None = None, on_event=print) -> bo
                 headless=False,
                 channel="chrome",
                 viewport=None,
-                args=["--disable-blink-features=AutomationControlled"],
+                args=LOGIN_ARGS,
                 # bỏ cờ "Chrome đang bị phần mềm tự động điều khiển": Google coi là dấu hiệu bot khi đăng nhập
                 ignore_default_args=["--enable-automation", "--no-sandbox"],
             )
@@ -304,12 +307,16 @@ def open_login_browser(name: str, cfg: dict | None = None, on_event=print) -> bo
                 user_data_dir=str(udir),
                 headless=False,
                 viewport=None,
-                args=["--disable-blink-features=AutomationControlled"],
+                args=LOGIN_ARGS,
                 # bỏ cờ "Chrome đang bị phần mềm tự động điều khiển": Google coi là dấu hiệu bot khi đăng nhập
                 ignore_default_args=["--enable-automation", "--no-sandbox"],
             )
 
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
+        try:
+            page.bring_to_front()                       # đưa cửa sổ đăng nhập lên trước mặt người dùng
+        except Exception:  # noqa: BLE001
+            pass
         try:
             page.goto("https://chatgpt.com/", timeout=60_000)
         except Exception as e:

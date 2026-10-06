@@ -49,8 +49,59 @@ def build_listing(concept: dict) -> dict:
     return {"title": title, "description": desc, "tags": tags}
 
 
-def write_listing(concept_dir: Path) -> dict:
+LISTING_STYLES = ("standard", "etsy")
+
+
+def write_listing(concept_dir: Path, cfg: dict | None = None, on_event=print) -> dict:
+    """listing.json của cuốn. Cuốn chọn "Listing: Etsy" (concept["listing_style"]) và có cfg: ChatGPT viết bản
+    chuẩn Etsy (publish/etsy_listing.py); không được thì lùi về bản thường dựng từ concept."""
     concept = json.loads(layout.concept_file(concept_dir).read_text(encoding="utf-8"))
+    if cfg is not None and concept.get("listing_style") == "etsy":
+        from .etsy_listing import write as write_etsy
+        layout.tech(concept_dir, "listing_etsy").mkdir(parents=True, exist_ok=True)
+        etsy = write_etsy(concept_dir, concept, cfg, on_event)
+        if etsy:
+            write_listing_txt(concept_dir, etsy)
+            return etsy
     listing = build_listing(concept)
     layout.listing_file(concept_dir).write_text(json.dumps(listing, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_listing_txt(concept_dir, listing)
     return listing
+
+
+LISTING_TXT = "listing.txt"
+NL = "\n"
+
+
+def html_to_text(desc: str) -> str:
+    """Mô tả HTML -> chữ thường để dán lên shop: đoạn cách dòng, mục danh sách "- " (danh sách con thụt 2 dấu cách)."""
+    import re
+    t = re.sub(r"\s*<br\s*/?>\s*", NL, desc or "")
+    depth, out, pos = 0, [], 0
+    for m in re.finditer(r"<(/?)(ul|li|p|strong|em|b|i)[^>]*>", t):
+        out.append(t[pos:m.start()])
+        closing, tag = m.group(1), m.group(2)
+        if tag == "ul":
+            depth += -1 if closing else 1
+            out.append(NL)
+        elif tag == "li" and not closing:
+            out.append(NL + "  " * max(0, depth - 1) + "- ")
+        elif tag == "p":
+            out.append(NL * 2)
+        pos = m.end()
+    out.append(t[pos:])
+    text = html.unescape(re.sub(r"<[^>]+>", "", "".join(out)))
+    text = re.sub(r"[ \t]+\n", NL, text)
+    text = re.sub(r"\n{3,}", NL * 2, text)
+    return re.sub(r"\n\n(?=\s*- )", NL, text).strip()   # mục danh sách liền ngay dưới tiêu đề, không dòng trống
+
+
+def write_listing_txt(concept_dir: Path, listing: dict) -> Path:
+    """listing.txt ngay trong thư mục cuốn (cạnh 11x8.5 / 14x11.5 / preview): title, tags, mô tả - mở ra chép thẳng
+    lên shop, khỏi phải mở tool."""
+    desc = listing.get("description_text") or html_to_text(listing.get("description", ""))
+    text = NL.join(["TITLE", listing.get("title", ""), "", "TAGS", ", ".join(listing.get("tags", [])), "",
+                    "DESCRIPTION", desc, ""])
+    f = Path(concept_dir) / LISTING_TXT
+    f.write_text(text, encoding="utf-8-sig")              # có BOM: Notepad mở đúng mọi ký tự
+    return f

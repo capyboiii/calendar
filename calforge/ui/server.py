@@ -330,6 +330,8 @@ def run_args(params: dict) -> tuple[list[str], str]:
         cmd_args += ["--product", params["product"]]
     if params.get("resume"):
         cmd_args += ["--resume"]
+    if params.get("listing_style") == "etsy":
+        cmd_args += ["--listing-style", "etsy"]
     if params.get("grid_mode") in products.GRID_MODES and params.get("product", products.DEFAULT) == "wall_grid":
         cmd_args += ["--grid-mode", params["grid_mode"]]
         if params["grid_mode"] == "ai_page" and params.get("mockup_mode") in products.MOCKUP_MODES:

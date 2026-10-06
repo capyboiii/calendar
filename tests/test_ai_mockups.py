@@ -11,7 +11,7 @@ from PIL import Image
 
 from calforge import layout, products
 from calforge.imagegen import ai_mockups, driver
-from calforge.imagegen.mockup_prompts import BOOKS_PROMPT, COVER_PROMPT, SCENE_PROMPT, WALL_PROMPT
+from calforge.imagegen.mockup_prompts import BOOKS_PROMPT, COVER_PROMPT, SCENE_PROMPT, SPREADS_PROMPT, WALL_PROMPT
 from calforge.render import mockups
 from calforge.ui import server
 
@@ -19,7 +19,7 @@ from tests import fixtures
 
 
 ALL = ["01_front_cover_spiral", "02_open_spread_flat", "03_three_open_spreads", "04_two_wall_spreads",
-       "06_three_books"]
+       "06_three_books", "07_three_open_spreads_fall", "08_wall_and_back"]
 
 
 def book(root: Path, mockup_mode="ai", grid_mode="ai_page") -> Path:
@@ -31,9 +31,9 @@ def book(root: Path, mockup_mode="ai", grid_mode="ai_page") -> Path:
     layout.raw(c).mkdir(parents=True)
     Image.new("RGB", (1536, 1024), "red").save(layout.raw(c) / "cover.png")
     layout.listing(c).mkdir(parents=True)
-    for m in ("m01", "m04"):
+    for m in ("m02", "m05", "m07", "m09", "m12"):
         Image.new("RGB", (1536, 1024), "green").save(layout.raw(c) / f"{m}.png")
-    for name in ALL:
+    for name in ALL + ["09_year_grid"]:                 # 09 = lưới 12 tháng, chỉ code (không gửi ChatGPT)
         Image.new("RGB", (1600, 1067), "gray").save(layout.listing(c) / f"{name}.jpg")     # mockup code
     return c
 
@@ -77,7 +77,7 @@ class AiMockupTest(unittest.TestCase):
         jobs = {j.id: j for j in fake.calls[0]}
         cover = jobs["01_front_cover_spiral"]
         self.assertTrue(cover.prompt.startswith(COVER_PROMPT) and "1:1" in cover.prompt)
-        self.assertEqual([Path(a).name for a in cover.attach], ["front_cover_spiral.webp", "cover.png"])  # IMAGE 1, 2
+        self.assertEqual([Path(a).name for a in cover.attach], ["front_cover_spiral_v2.webp", "cover.png"])  # IMAGE 1, 2
         spread = jobs["02_open_spread_flat"]
         self.assertTrue(spread.prompt.startswith(SCENE_PROMPT) and "1:1" in spread.prompt)
         self.assertEqual([Path(a).parent.name for a in spread.attach], ["mockup_goc"])   # mockup code của cuốn
@@ -85,12 +85,16 @@ class AiMockupTest(unittest.TestCase):
         self.assertEqual(books.prompt, BOOKS_PROMPT)
         self.assertIn("1:1", books.prompt)
         self.assertEqual([(Path(a).parent.name, Path(a).name) for a in books.attach],
-                         [(layout.raw(c).name, "m04.png"), ("mockup_goc", "06_three_books.jpg")])   # IMAGE 1, 2
+                         [(layout.raw(c).name, "m07.png"), ("mockup_goc", "06_three_books.jpg")])   # IMAGE 1, 2
         wall = jobs["04_two_wall_spreads"]
         self.assertEqual(wall.prompt, WALL_PROMPT)
         self.assertIn("1:1", wall.prompt)
         self.assertEqual([(Path(a).parent.name, Path(a).name) for a in wall.attach],
-                         [(layout.raw(c).name, "m01.png"), ("mockup_goc", "04_two_wall_spreads.jpg")])   # IMAGE 1, 2
+                         [(layout.raw(c).name, "m05.png"), ("mockup_goc", "04_two_wall_spreads.jpg")])   # IMAGE 1, 2
+        spreads = jobs["03_three_open_spreads"]
+        self.assertEqual(spreads.prompt, SPREADS_PROMPT)
+        self.assertEqual([(Path(a).parent.name, Path(a).name) for a in spreads.attach],
+                         [(layout.raw(c).name, "m02.png"), ("mockup_goc", "03_three_open_spreads.jpg")])
         self.assertIsNone(fake.accept)
         with Image.open(layout.listing(c) / "02_open_spread_flat.jpg") as im:
             self.assertEqual(im.getpixel((10, 10))[2] > 200, True)                    # đã thay bằng ảnh AI
@@ -107,7 +111,7 @@ class AiMockupTest(unittest.TestCase):
 
     def test_three_books_without_april_art_keeps_code_mockup(self):
         c = book(self.root)
-        (layout.raw(c) / "m04.png").unlink()
+        (layout.raw(c) / "m07.png").unlink()
         before = (layout.listing(c) / "06_three_books.jpg").read_bytes()
         fake = FakeRun()
         res = self.run_ai(c, fake)
@@ -131,10 +135,15 @@ class AiMockupTest(unittest.TestCase):
             self.assertEqual(mockups.skipped_previews(concept), {"wall_page_turn"})
             self.assertEqual(mockups.missing_previews(ai), [])                      # 5 ảnh: 01 02 03 04 06, không có 05
             self.assertEqual(mockups.sheet_pages(mockups.MOCKUPS["two_wall_spreads"]["sheets"][1]),
-                             ["m02_month", "m02_grid"])
+                             ["m06_month", "m06_grid"])
+            self.assertEqual([mockups.sheet_pages(s) for s in mockups.MOCKUPS["two_wall_spreads"]["sheets"]],
+                             [["m05_month", "m05_grid"], ["m06_month", "m06_grid"]])
+            self.assertEqual([s["month"] for s in mockups.MOCKUPS["three_open_spreads"]["sheets"]], [2, 3, 4])
             (layout.listing(ai) / "06_three_books.jpg").unlink()
             self.assertEqual(mockups.missing_previews(ai), ["06_three_books.jpg"])
-            self.assertEqual(mockups.sheet_pages(mockups.MOCKUPS["three_books"]["sheets"][1]), ["m04_grid"])
+            self.assertEqual(mockups.sheet_pages(mockups.MOCKUPS["three_books"]["sheets"][1]), ["m08_grid"])
+            self.assertEqual([mockups.sheet_pages(s) for s in mockups.MOCKUPS["three_books"]["sheets"]],
+                             [["m07_month"], ["m08_grid"], ["m08_month"]])
         for mode, grid in (("ai", "background"), ("template", "ai_page")):
             c = {**fixtures.concept(), "product": "wall_grid"}
             c["style"].update(grid_mode=grid, mockup_mode=mode)

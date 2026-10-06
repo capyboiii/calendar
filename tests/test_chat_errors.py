@@ -18,6 +18,20 @@ from calforge.llm import pool as poolmod
 from calforge.llm.pool import CHAT, AccountPool
 
 
+
+SERVER_ERRORS = (   # thông báo lỗi phía server / mạng ChatGPT thật hay gặp (tiếng Anh + giao diện tiếng Việt)
+    "Something went wrong. If this issue persists please contact us through our help center at help.openai.com.",
+    "An error occurred. Either the engine you requested does not exist or there was another issue.",
+    "There was an error generating a response", "Network error", "Hmm...something seems to have gone wrong.",
+    "Internal server error", "502 Bad Gateway", "Gateway timeout", "Unable to load conversation",
+    "Error in body stream", "I ran into an issue generating the image.", "There was a problem generating your image.",
+    "Image generation failed", "The server had an error while processing your request. Sorry about that!",
+    "Request failed with status code 500", "We're having trouble connecting right now.",
+    "Rất tiếc, đã xảy ra lỗi. Vui lòng thử lại.", "Lỗi mạng", "Đã xảy ra sự cố khi tạo ảnh", "Lỗi máy chủ",
+)
+SERVER_BUSY = ("ChatGPT is at capacity right now", "We're experiencing exceptionally high demand. Please hang tight.",
+               "Our servers are busy", "Máy chủ đang bận, vui lòng thử lại", "Too many requests in 1 hour.")
+
 class Clock:
     def __init__(self):
         self.t = 0.0
@@ -138,6 +152,20 @@ class AskTest(unittest.TestCase):
             with self.assertRaises(cw.SendFailed, msg=text):
                 self.ask(lambda t, text=text: st(assistant=1, text=text))
             self.assertLess(self.clock.t, 5)
+
+    def test_server_errors_fail_fast_and_busy_rests_account(self):
+        for text in SERVER_ERRORS:
+            with self.subTest(text=text), self.assertRaises(cw.SendFailed):
+                self.ask(lambda t, text=text: st(assistant=1, text=text))
+            self.assertLess(self.clock.t, 5, text)
+        for text in SERVER_BUSY:
+            with self.subTest(text=text), self.assertRaises(cw.QuotaExceeded):
+                self.ask(lambda t, text=text: st(assistant=1, text=text))
+
+    def test_server_error_banner_without_reply(self):
+        with self.assertRaises(cw.SendFailed):
+            self.ask(lambda t: st(user=1), notice=lambda t: "Internal server error" if t > 3 else "")
+        self.assertLess(self.clock.t, 10)
 
     def test_refusal_words_inside_a_json_answer_are_not_an_error(self):
         text = "The concept avoids anything that violates trademark or copyright."

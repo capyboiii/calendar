@@ -184,7 +184,7 @@ def cmd_run(args, cfg):
     rows = run(args.keyword, cfg, pick=args.pick.split(",") if args.pick else None, auto_pick=args.auto,
                printify=not args.no_printify, publish=args.publish, grid_preset=args.grid_preset,
                family=args.family, product=args.product, grid_mode=args.grid_mode, resume=args.resume,
-               mockup_mode=args.mockup_mode)
+               mockup_mode=args.mockup_mode, listing_style=args.listing_style)
     _print_status(rows)
 
 
@@ -262,7 +262,7 @@ def cmd_listing(args, cfg):
     from .publish.listing import write_listing
 
     d = _concept_dir(args.concept)
-    lst = write_listing(d)
+    lst = write_listing(d, cfg)
     print(lst["title"])
     print("tags:", ", ".join(lst["tags"]))
 
@@ -404,6 +404,8 @@ def main(argv=None):
                    help="loại lịch: wall_grid (máy thiết kế grid) hoặc wall_premade (grid in sẵn, không gen grid)")
     p.add_argument("--resume", action="store_true",
                    help="làm nốt batch trước của chủ đề này (chỉ các cuốn thiếu/hỏng), không mở batch mới")
+    p.add_argument("--listing-style", choices=("standard", "etsy"), default="standard",
+                   help="etsy = ChatGPT viết title / mô tả / 13 tag theo chuẩn Etsy (thêm 1 lượt chat mỗi cuốn)")
     p.add_argument("--mockup-mode", choices=("template", "ai"),
                    help='chỉ với --grid-mode ai_page: template = mockup có sẵn; ai = AI gen bối cảnh cho 5 ảnh quảng cáo')
     p.add_argument("--grid-mode", choices=("ai_page", "background"),

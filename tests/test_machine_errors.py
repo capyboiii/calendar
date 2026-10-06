@@ -135,16 +135,16 @@ class MockupRenderTest(unittest.TestCase):
             c = tam.book(Path(tmp))
             for f in layout.listing(c).glob("*.jpg"):
                 f.unlink()
-            self.pages(layout.print_dir(c), skip=("m04_grid",))
+            self.pages(layout.print_dir(c), skip=("m08_grid",))
             calls = []
             with mock.patch.object(mockups, "render", lambda n, p, o: (calls.append(n),
                                                                        Image.new("RGB", (10, 10)).save(o))):
                 with self.assertRaises(mockups.PreviewError) as e:
                     mockups.previews(c, on_event=lambda *_: None)
-            self.assertTrue(any("06_three_books" in x and "m04_grid" in x for x in e.exception.errors))
+            self.assertTrue(any("06_three_books" in x and "m08_grid" in x for x in e.exception.errors))
             self.assertNotIn("three_books", calls)
             self.assertIn("two_wall_spreads", calls)                           # tấm khác vẫn ghép được
-            self.assertEqual(mockups.missing_previews(c), ["06_three_books.jpg"])
+            self.assertEqual(mockups.missing_previews(c), ["06_three_books.jpg", "09_year_grid.jpg"])   # lưới 12 tháng cũng cần T8
 
 
 class AccountInputTest(unittest.TestCase):
