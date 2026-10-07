@@ -414,6 +414,10 @@ class _Worker:
             page._calforge_rate = RateWatch(page)          # theo dõi 429/503 của trang (gắn 1 lần)
         open_home(page, URL)                             # mạng chập / chuyển hướng: chờ + thử lại, không tính lượt
         self._find(page, SEL_PROMPT, 60_000)
+        if not getattr(self, "_plan_read", False):       # gói Free/Plus + ngày hết hạn: đọc 1 lần mỗi lần mở Chrome
+            self._plan_read = True
+            from ..llm import plan
+            plan.record(page, self.profile_dir)
         self._attach(page, job.attach)
         before = self._send(page, job.prompt)
         try:
