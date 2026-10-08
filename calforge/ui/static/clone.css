@@ -4,6 +4,7 @@
 .refs-box legend small { font-weight: 400; }
 .drop { border: 2px dashed var(--line); border-radius: 14px; padding: 18px; text-align: center; }
 .drop.over { border-color: var(--primary); background: var(--surface-2); }
+.drop:focus-visible { outline: 2px solid var(--primary); outline-offset: 3px; }
 .drop p { margin: 0; }
 .drop .hint { margin-top: 8px; }
 .ref-list { list-style: none; display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 10px;

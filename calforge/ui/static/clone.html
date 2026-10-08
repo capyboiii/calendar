@@ -34,9 +34,10 @@
       <h1>Làm theo ảnh mẫu</h1>
       <fieldset class="kinds refs-box">
         <legend>Ảnh mẫu <small class="muted">(1–10 ảnh: tranh, trang lịch hoặc ảnh mockup · mọi định dạng ảnh, cả PDF - mỗi trang PDF là 1 ảnh)</small></legend>
-        <div class="drop" id="drop">
+        <div class="drop" id="drop" tabindex="0" aria-label="Ảnh mẫu: nhấn Ctrl+V để dán ảnh từ clipboard">
           <input type="file" id="files" multiple hidden>
           <p><strong>Kéo thả ảnh vào đây</strong> hoặc <button class="btn btn-small" id="btnPick" type="button">Chọn ảnh</button></p>
+          <p class="hint">Hoặc bấm vào khung này rồi nhấn <strong>Ctrl+V</strong> để dán ảnh đã sao chép.</p>
           <p class="hint">Thứ tự ảnh = artwork 1, 2, 3… Ảnh mẫu ít hơn 12 thì các artwork còn lại giữ nét vẽ + tông màu,
             ChatGPT tự nghĩ chủ thể mới (và câu chữ mới nếu ảnh mẫu có chữ).</p>
         </div>

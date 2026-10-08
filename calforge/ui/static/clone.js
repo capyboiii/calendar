@@ -85,7 +85,14 @@ async function loadImage(file) {
   return { name: file.name.replace(/\.[^.]+$/, '') + '.jpg', data: c.toDataURL('image/jpeg', 0.92) };
 }
 
-async function addFiles(list) {
+let fileQueue = Promise.resolve();
+function addFiles(list) {
+  const files = Array.from(list);
+  fileQueue = fileQueue.then(() => appendFiles(files)).catch((e) => toast(e.message, 'error'));
+  return fileQueue;
+}
+
+async function appendFiles(list) {
   const files = Array.from(list);
   if (!files.length) return;
   const room = MAX_REFS - S.refs.length;
@@ -345,6 +352,23 @@ async function stop() {
 $('btnPick').addEventListener('click', () => $('files').click());
 $('files').addEventListener('change', (e) => { addFiles(e.target.files); e.target.value = ''; });
 const drop = $('drop');
+drop.addEventListener('click', (e) => {
+  if (!e.target.closest('button, input')) drop.focus();
+});
+drop.addEventListener('paste', (e) => {
+  const clipboard = e.clipboardData;
+  if (!clipboard) return;
+  let images = Array.from(clipboard.items || [])
+    .filter((item) => item.kind === 'file' && item.type.startsWith('image/'))
+    .map((item) => item.getAsFile()).filter(Boolean);
+  if (!images.length) images = Array.from(clipboard.files || []).filter((file) => file.type.startsWith('image/'));
+  if (!images.length) {
+    toast('Clipboard chưa có ảnh. Hãy sao chép ảnh hoặc chụp màn hình rồi dán vào đây.', 'error');
+    return;
+  }
+  e.preventDefault();
+  addFiles(images);
+});
 drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('over'); });
 drop.addEventListener('dragleave', () => drop.classList.remove('over'));
 drop.addEventListener('drop', (e) => { e.preventDefault(); drop.classList.remove('over'); addFiles(e.dataTransfer.files); });

@@ -73,24 +73,30 @@ class PromptTest(unittest.TestCase):
         self.assertIn("Nov 7 Election Day", prompts._call(2028, 11, 1))
 
     def test_art_prompts(self):
-        self.assertIn("10 SEPARATE image outputs", prompts.art_prompt(3))
+        self.assertIn("10 SEPARATE images", prompts.art_prompt(3))
         plan = prompts.art_plan(3)                                  # 3 ảnh mẫu: 3 tranh giữ chủ thể, 9 tranh chủ thể mới
-        self.assertIn("- Artwork 1: reference 1 - KEEP its subject", plan)
-        self.assertIn("- Artwork 4: reference 1 - NEW subject", plan)
-        self.assertIn("- Artwork 12: reference 3 - NEW subject", plan)
+        self.assertIn("- Artwork 1: reference 1 — KEEP its subject", plan)
+        self.assertIn("- Artwork 4: reference 1 — NEW concept", plan)
+        self.assertIn("- Artwork 12: reference 3 — NEW concept", plan)
         self.assertEqual(plan.count("KEEP"), 3)
-        self.assertEqual(prompts.art_plan(10).count("NEW subject"), 2)      # 10 ảnh mẫu: chỉ tranh 11, 12 tự nghĩ
+        self.assertEqual(prompts.art_plan(10).count("NEW concept"), 2)      # 10 ảnh mẫu: chỉ tranh 11, 12 tự nghĩ
         self.assertEqual(prompts.art_plan(1).count("KEEP"), 1)
-        self.assertIn("VARIETY ACROSS THE SET", prompts.art_prompt(2))
-        self.assertIn("write a NEW text of the same kind instead of copying it", prompts.art_prompt(2))
-        self.assertIn("never a copy", prompts.ART_CONTINUE)
+        self.assertIn("WHAT COUNTS AS A DISTINCT ARTWORK", prompts.art_prompt(2))
+        self.assertIn("choose a different text of the same kind", prompts.art_prompt(2))
+        self.assertIn("Do not repeat any text", prompts.ART_CONTINUE)
         self.assertNotIn("{plan}", prompts.art_resume([4], 2))
-        self.assertEqual(prompts.art_continue([11, 12]), prompts.ART_CONTINUE)
-        self.assertIn("generate ONLY artwork 8, 9, 10, 11, 12", prompts.art_continue([8, 9, 10, 11, 12]))
+        for count in range(1, 11):
+            continuation = prompts.art_continue([11, 12], count)
+            self.assertIn(f"Artwork 11: reference {10 % count + 1} — NEW concept", continuation)
+            self.assertIn(f"Artwork 12: reference {11 % count + 1} — NEW concept", continuation)
+            self.assertNotIn("{ref", continuation)
+        self.assertIn("generate ONLY artwork 8, 9, 10, 11, 12", prompts.art_continue([8, 9, 10, 11, 12], 3))
         resume = prompts.art_resume([5, 11], 3)
         self.assertIn("I have attached reference images", resume)
         self.assertIn("generate ONLY artwork 5, 11", resume)
         self.assertIn("2 SEPARATE image outputs", resume)
+        self.assertNotIn("Generate ONLY Artwork 1 through Artwork 10", resume)
+        self.assertNotIn("do not generate them yet", resume)
         self.assertIn("Artwork 11 and Artwork 12: choose the composition", resume)
         self.assertNotIn("snowy", prompts.ART_CONTINUE)
         self.assertIn('"Garden Cats"', prompts.cover_prompt("Garden Cats", "x", 2027))
@@ -231,7 +237,7 @@ class BookArtTest(unittest.TestCase):
         b.art_work(s, "acc3")
         self.assertEqual(s.sent[0][0], prompts.art_prompt(3))
         self.assertEqual([p.name for p in s.sent[0][2]], ["ref01.png", "ref02.png", "ref03.png"])
-        self.assertEqual(s.sent[1][0], prompts.ART_CONTINUE)               # nhắn tiếp đúng nguyên văn
+        self.assertEqual(s.sent[1][0], prompts.art_continue([11, 12], 3))               # nhắn tiếp đúng nguyên văn
         self.assertEqual(s.sent[1][2], [])                                 # cùng phiên: không đính lại
         self.assertEqual(s.sent[2][1], "text")
         self.assertIn('"Garden Cats"', s.sent[3][0])                       # bìa dùng tên ChatGPT đặt
@@ -256,7 +262,7 @@ class BookArtTest(unittest.TestCase):
                          session.Turn(distinct(1, 40))])
         b.art_work(s, "acc3")
         self.assertIn("generate ONLY artwork 8, 9, 10, 11, 12", s.sent[1][0])
-        self.assertEqual(s.sent[2][0], prompts.ART_CONTINUE)
+        self.assertEqual(s.sent[2][0], prompts.art_continue([11, 12], 3))
         self.assertEqual(b.missing("m"), [])
 
     def test_resume_in_new_session_only_draws_missing(self):
@@ -606,7 +612,7 @@ class StuckFlagsAndReopenTest(unittest.TestCase):
             with mock.patch.object(run.driver, "open_home", lambda page, url: opened.append(url)):
                 b.art_work(s, "acc3")
             self.assertEqual(opened, ["https://chatgpt.com/c/abc"])
-            self.assertEqual(s.sent[0][0], prompts.ART_CONTINUE)          # không vẽ lại 10 ảnh đầu
+            self.assertEqual(s.sent[0][0], prompts.art_continue([11, 12], 3))          # không vẽ lại 10 ảnh đầu
             self.assertEqual(b.missing("m"), [])
             self.assertEqual(store.read(d)["art_chat"]["saved"], 12)
 

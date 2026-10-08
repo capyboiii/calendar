@@ -7,6 +7,8 @@ Mỗi cuốn:
      OCR soát từng trang; trang sai vẽ lại ngay trong phiên.
   3. Dựng sách bằng pipeline của trang chính: upscale, 2 khổ in + PDF, mockup AI (mọi tài khoản, thinking mặc định), listing.txt.
 Lỗi giữa chừng (hết lượt, mạng, tài khoản chết, lỗi server): ảnh đã về được giữ, phiên mới chỉ vẽ phần còn thiếu.
+Hàng đợi chia theo bước: artwork/trang lịch dùng chung pool Plus linh hoạt; hậu kỳ có executor riêng.
+Mỗi cuốn chỉ chạy một bước tại một thời điểm. Số Chrome thực tế vẫn chịu trần RAM của pool chung.
 """
 from __future__ import annotations
 
@@ -15,7 +17,8 @@ import json
 import shutil
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
+from collections import deque
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -257,7 +260,7 @@ class Book:
                 missing = self.missing("m")
                 self.status(stage=f"vẽ artwork ({12 - len(missing)}/12)")
                 before = len(missing)
-                turn = s.ask_images(prompts.art_continue(missing), len(missing))
+                turn = s.ask_images(prompts.art_continue(missing, len(refs)), len(missing))
                 self._take_art(turn, name)
                 idle = idle + 1 if len(self.missing("m")) == before else 0
                 if idle >= 2:
@@ -349,6 +352,7 @@ class Book:
                 data = None
             errors = validate_meta(data)
             if not errors:
+                data["months"] = month_captions(data.get("months"))
                 layout.tech(self.dir).mkdir(parents=True, exist_ok=True)
                 (layout.tech(self.dir) / "clone_meta.json").write_text(json.dumps(data, ensure_ascii=False, indent=1),
                                                                       encoding="utf-8")
@@ -465,6 +469,7 @@ class Book:
     def finish(self, plus: list[str]) -> dict:
         from .. import pipeline
         book = self.dir
+        repair_month_captions(book)
         anchor = layout.raw(book) / "anchor"
         if job_done(book, "anchor") is None:          # ảnh neo của trang chính = bìa (bảng màu trang + QC màu)
             src = self.done("cover") or self.done("m01")
@@ -482,6 +487,44 @@ def s_has_art(s) -> bool:
 
 
 # ------------------------------------------------------------------ concept + listing từ JSON ChatGPT trả
+def month_captions(months) -> list[str]:
+    """Accept plain captions or explicitly named caption objects, never stringify data."""
+    if not isinstance(months, list) or len(months) != 12:
+        raise ValueError('"months" must have exactly 12 captions')
+    out = []
+    for i, entry in enumerate(months, 1):
+        if isinstance(entry, dict):
+            label = entry.get("month")
+            if label is not None and str(label).strip().lower() not in (str(i), prompts.MONTHS[i - 1].lower()):
+                raise ValueError(f'"months[{i}]" has an incorrect month; use January to December order')
+            entry = entry.get("caption")
+        if not isinstance(entry, str) or not entry.strip():
+            raise ValueError(f'"months[{i}]" must be a non-empty caption string')
+        out.append(entry.strip())
+    return out
+
+
+def repair_month_captions(book: Path) -> None:
+    """Repair previously adopted clone books from their original structured metadata."""
+    path = layout.concept_file(book)
+    concept = json.loads(path.read_text(encoding="utf-8"))
+    if concept.get("source") != "clone":
+        return
+    meta = json.loads((layout.tech(book) / "clone_meta.json").read_text(encoding="utf-8"))
+    captions = month_captions(meta.get("months"))
+    changed = False
+    for month in concept["months"]:
+        caption = captions[int(month["month"]) - 1]
+        if month.get("subtitle") != caption:
+            month["subtitle"] = caption
+            changed = True
+    if changed:
+        backup = path.with_name("concept_before_caption_fix.json")
+        if not backup.exists():
+            shutil.copy2(path, backup)
+        path.write_text(json.dumps(concept, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 def validate_meta(d) -> list[str]:
     from ..publish.etsy_listing import validate
     if not isinstance(d, dict):
@@ -492,9 +535,10 @@ def validate_meta(d) -> list[str]:
             errors.append(f'"{k}" is missing')
     if isinstance(d.get("title"), str) and len(d["title"]) > 60:
         errors.append("title must be at most 60 characters")
-    months = d.get("months")
-    if not isinstance(months, list) or len([m for m in months if str(m).strip()]) != 12:
-        errors.append('"months" must have exactly 12 captions')
+    try:
+        month_captions(d.get("months"))
+    except ValueError as e:
+        errors.append(str(e))
     errors += validate({"title": d.get("etsy_title"), "description": d.get("etsy_description"), "tags": d.get("tags")})
     return [e.replace("title is", "etsy_title is").replace("description ", "etsy_description ") for e in errors]
 
@@ -513,7 +557,7 @@ def write_concept(book: Path, meta: dict, year: int, item: dict) -> dict:
                               "grid_line": "#CFC6B6"},
                   "fonts": {"title": "Cormorant Garamond", "body": "Montserrat", "numbers": "Lora"}},
         "cover": {"title": meta["title"].strip(), "subtitle": meta.get("subtitle", "").strip()},
-        "months": [{"month": i + 1, "subtitle": str(c).strip(), "content": {}} for i, c in enumerate(meta["months"])],
+        "months": [{"month": i + 1, "subtitle": c, "content": {}} for i, c in enumerate(month_captions(meta.get("months")))],
         "back_cover": {"line": meta.get("subtitle", "").strip()},
         "listing": {"seo_title": meta["etsy_title"].strip(), "tags": [str(t).strip().lower() for t in meta["tags"]]},
     }
@@ -529,17 +573,32 @@ def write_concept(book: Path, meta: dict, year: int, item: dict) -> dict:
 
 # ------------------------------------------------------------------ cả hàng đợi
 def run_book(cfg: dict, d: Path, accts: Accounts, plus: list[str], stop: threading.Event | None = None,
-             on_event=print) -> dict:
+             on_event=print, *, step: str = "all") -> dict:
+    """Chạy cả cuốn hoặc một bước; bước thành công trả `next` cho bộ điều phối."""
     b = Book(cfg, d, on_event)
     b.status(status="running", reason="")
     try:
-        art_acc = run_stage(accts, f"{d.name} artwork", b.art_work, stop=stop,
-                            prefer=lambda: (b.item.get("art_chat") or {}).get("account")) \
-            if (b.missing("m") or b.meta() is None or b.done("cover") is None or not b.item.get("book")) else ""
-        b._adopt() if b.meta() else None
-        if b.missing("g"):
-            run_stage(accts, f"{b.item.get('sku') or d.name} trang lịch", b.grid_work,
-                      avoid={art_acc} if art_acc else None, stop=stop)
+        if stop and stop.is_set():
+            raise StageFailed("người dùng dừng")
+        art_acc = b.item.get("art_account", "")
+        if step in ("all", "art"):
+            art_acc = run_stage(accts, f"{d.name} artwork", b.art_work, stop=stop,
+                                prefer=lambda: (b.item.get("art_chat") or {}).get("account")) \
+                if (b.missing("m") or b.meta() is None or b.done("cover") is None or not b.item.get("book")) else art_acc
+            b._adopt() if b.meta() else None
+            b.status(art_account=art_acc)
+            if step == "art":
+                b.status(stage="chờ pool trang lịch")
+                return {"next": "grid"}
+        if step in ("all", "grid"):
+            if b.missing("g"):
+                run_stage(accts, f"{b.item.get('sku') or d.name} trang lịch", b.grid_work,
+                          avoid={art_acc} if art_acc else None, stop=stop)
+            if step == "grid":
+                b.status(stage="chờ pool hậu kỳ")
+                return {"next": "finish"}
+        if stop and stop.is_set():
+            raise StageFailed("người dùng dừng")
         res = b.finish(plus)
         ok = bool(res.get("ok"))
         b.status(status="done" if ok else "failed", stage=res.get("stage", ""),
@@ -557,8 +616,8 @@ def run_book(cfg: dict, d: Path, accts: Accounts, plus: list[str], stop: threadi
 
 def run_queue(cfg: dict, on_event=print, stop: threading.Event | None = None, accts: Accounts | None = None,
               plus: list[str] | None = None) -> list[dict]:
-    """Chạy hàng đợi. Cuốn thêm vào TRONG LÚC đang chạy cũng được làm luôn (mỗi luồng xong một cuốn lại bốc cuốn
-    tiếp theo từ hàng đợi), không phải chờ lượt sau."""
+    """Điều phối từng bước, ưu tiên trang lịch sẵn sàng và tách hậu kỳ khỏi worker AI.
+    Quét thêm cuốn khi đang chạy; giới hạn số cuốn dở để hậu kỳ chậm không làm tích hàng vô hạn."""
     projects = Path(cfg["projects_dir"])
     todo = store.pending(projects)
     if not todo:
@@ -572,32 +631,77 @@ def run_queue(cfg: dict, on_event=print, stop: threading.Event | None = None, ac
         return []
     on_event(f"▶ {len(todo)} cuốn, chỉ dùng {len(plus)} tài khoản Plus: {', '.join(plus)}")
     accts = accts or Accounts(cfg, plus, on_event)
+    # Artwork and grid borrow the same accounts: idle capacity is never reserved
+    # for a stage with no ready work. The global pool still enforces RAM/Chrome limits.
+    workers = max(1, len(set(plus)))
+    finish_workers = max(1, min(2, int(cfg.get("finish_workers") or 1)))
+    max_inflight = workers * 2 + finish_workers
+    on_event(f"▶ Chia pool động: {workers} luồng artwork/trang lịch dùng chung tài khoản Plus, "
+             f"{finish_workers} luồng hậu kỳ; trần Chrome/RAM do pool chung điều phối. "
+             "Ưu tiên trang lịch đã sẵn sàng, không giữ cặp acc cố định cho từng cuốn.")
     claimed: set[str] = set()
-    lock = threading.Lock()
+    active: set[str] = set()
+    ready = deque()
+    finishing = deque()
     results: list[dict] = []
 
-    def next_item() -> Path | None:
-        with lock:
-            for d in store.pending(projects):
-                if d.name not in claimed:
-                    claimed.add(d.name)
-                    return d
-        return None
+    def record(d, res):
+        active.discard(d.name)
+        results.append(res)
+        on_event(f"◆ CUỐN {'XONG' if res.get('ok') else 'LỖI'}: {store.read(d).get('sku') or d.name}")
 
-    def worker() -> None:
-        while not (stop and stop.is_set()):
-            d = next_item()
-            if d is None:
-                return
-            res = run_book(cfg, d, accts, plus, stop, on_event)
-            with lock:
-                results.append(res)
-            on_event(f"◆ CUỐN {'XONG' if res.get('ok') else 'LỖI'}: {store.read(d).get('sku') or d.name}")
+    def cancelled(d):
+        store.write(d, status="failed", reason="người dùng dừng; chạy tiếp để làm phần còn thiếu")
+        record(d, {"ok": False})
 
-    workers = max(1, min(len(todo) + 2, len(plus)))
-    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="clone") as ex:
-        for f in [ex.submit(worker) for _ in range(workers)]:
-            f.result()
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="clone-ai") as ai, \
+            ThreadPoolExecutor(max_workers=finish_workers, thread_name_prefix="clone-finish") as post:
+        jobs = {}
+        while True:
+            stopping = stop and stop.is_set()
+            if stopping:
+                for queue in (ready, finishing):
+                    while queue:
+                        d, _ = queue.popleft()
+                        cancelled(d)
+            else:
+                # Rescan throughout the run, even while all earlier books are busy.
+                for d in store.pending(projects):
+                    if len(active) >= max_inflight:
+                        break
+                    if d.name not in claimed:
+                        claimed.add(d.name)
+                        active.add(d.name)
+                        store.write(d, status="running", stage="chờ pool artwork", reason="")
+                        ready.append((d, "art"))
+                for queue, executor, capacity, kind in ((ready, ai, workers, "ai"),
+                                                         (finishing, post, finish_workers, "finish")):
+                    free = capacity - sum(k == kind for _, _, k in jobs.values())
+                    for _ in range(min(free, len(queue))):
+                        d, step = queue.popleft()
+                        future = executor.submit(run_book, cfg, d, accts, plus, stop, on_event, step=step)
+                        jobs[future] = (d, step, kind)
+            if not jobs:
+                if not ready and not finishing:
+                    break
+                continue
+            completed, _ = wait(jobs, timeout=0.25, return_when=FIRST_COMPLETED)
+            for future in completed:
+                d, step, kind = jobs.pop(future)
+                try:
+                    res = future.result()
+                except Exception as e:  # isolate even failures before Book initialization
+                    store.write(d, status="failed", reason=f"{type(e).__name__}: {str(e)[:250]}")
+                    res = {"ok": False}
+                next_step = res.get("next")
+                if next_step and stop and stop.is_set():
+                    cancelled(d)
+                elif next_step == "grid":
+                    ready.appendleft((d, "grid"))  # finish ready books before opening more
+                elif next_step == "finish":
+                    finishing.append((d, "finish"))
+                else:
+                    record(d, res)
     ok = sum(1 for r in results if r.get("ok"))
     on_event(f"🏁 Xong {ok}/{len(results)} cuốn")
     return results

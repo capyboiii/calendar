@@ -1,5 +1,5 @@
-"""Prompt của luồng "Làm theo ảnh mẫu". Câu chữ của 4 prompt chính giữ NGUYÊN VĂN như người dùng duyệt (07/10/2026);
-code chỉ điền năm, thứ của ngày 1, số ngày và ngày lễ (tính theo năm, không ghi cứng 2027)."""
+"""Prompt của luồng "Làm theo ảnh mẫu". Hai prompt artwork được duyệt lại ngày 08/10/2026.
+Code điền phân công ảnh mẫu, số ảnh còn thiếu và dữ kiện lịch theo năm."""
 from __future__ import annotations
 
 import calendar
@@ -11,47 +11,110 @@ MONTHS = dates.MONTH_NAMES
 WEEKDAY = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 
 # ------------------------------------------------------------------ 12 artwork (phiên 1, tài khoản A)
-ART_RULES_T = """I have attached reference images. These are NOT images to edit. Do NOT modify, retouch or recreate the attached images.
+# Artwork prompts approved on 2026-10-08; reference assignments are filled dynamically.
+ART_RULES_T = """I have attached reference images. These are visual references, NOT images to edit. Create new artworks from scratch. Do not retouch or make minor variations of the attached images.
 
 REFERENCE FORMAT
-Some attached images are plain artworks. Others are calendar pages or product mockups that CONTAIN an artwork.
-For every reference, use ONLY the artwork area. Completely IGNORE all calendar elements: date grids, numbers, month names, weekday names, year, spiral binding, hanging holes, paper edges, white margins, borders, frames, walls, tables, hands and mockup backgrounds.
+Some references are plain artworks. Others are calendar pages or product mockups containing artwork.
 
-TEXT ON THE ARTWORK
-If the artwork area of a reference contains text (e.g. a quote, verse, title, phrase or reference line):
-- Copy that EXACT text into the corresponding KEEP artwork, word for word, with the same spelling, punctuation and line breaks.
-- Keep a similar font style, color and hierarchy (main text vs. smaller reference line).
-- Place the text in a clean, calm area of the new composition so it stays highly legible.
-- Each artwork only uses the text from ITS OWN reference. Never swap or mix text between artworks.
-- If a reference has no text in its artwork area, the new artwork has NO text.
-- NEW-subject artworks follow the NEW text rule below.
-- Calendar text (dates, month names, weekdays, year) is NOT artwork text. Never include it.
+Study ONLY the artwork area of each reference. Ignore date grids, numbers, month names, weekdays, year, spiral binding, hanging holes, paper edges, white margins, frames, walls, tables, hands and mockup backgrounds.
 
-INDIVIDUAL REFERENCES
-Treat each attached image INDIVIDUALLY. Do NOT blend styles, colors or text across references.
-Follow the ARTWORK PLAN below: it says which reference each artwork follows, and whether it KEEPS the reference's subject or needs a NEW subject.
+STUDY THE WHOLE SET BEFORE GENERATING
+Silently examine ALL attached references first.
+
+Identify:
+- the overall theme and visual world
+- the subjects and scenes already represented
+- references that repeat the same subject or similar composition
+- the distinctive artistic style, rendering technique, stroke quality, texture and color tone of each reference
+- any text that belongs to the artwork itself
+
+Then silently plan 12 distinct artwork ideas before generating any images. Do not output the plan or any written analysis.
+
+REFERENCE ASSIGNMENT
+Each artwork must follow its assigned reference for artistic style, rendering technique, stroke quality, texture and color tone.
+
+Do not blend different reference styles into a hybrid style. If the references share one style, keep that style consistent throughout the collection.
 
 {plan}
 
-For each artwork, silently study ONLY its assigned reference (do not write any description).
-- KEEP: keep the same subject (appearance, colors, materials, details), the same drawing / photo style and stroke quality, the same color tone and the same text (if any), as described above.
-- NEW: keep the same drawing / photo style, stroke quality and color tone, and stay in the same theme and world as the reference, but INVENT a different main subject yourself (a different character, animal, object or scene that fits this theme and that a buyer of this calendar would love). Never redraw the reference's subject again. If the reference has text in its artwork area, write a NEW text of the same kind instead of copying it (e.g. a different Bible verse with its reference line, a different quote or phrase of similar length and tone), with the same font style, color, hierarchy and placement rules; spell it correctly and never repeat a text already used in another artwork. If the reference has no text, the NEW artwork has NO text.
+KEEP ARTWORKS
+Preserve the recognizable identity, appearance, characteristic colors, materials and important details of the assigned reference's subject.
 
-VARIETY ACROSS THE SET
-All 12 artworks must be clearly different from each other. Never show the same main subject twice in the same pose, action or arrangement. Vary the subject, pose, action, props and mood across the set, so the calendar does not feel repetitive.
+Create a genuinely different scene around that subject: a new action, interaction, narrative moment or meaningful arrangement, with a clearly different overall composition.
 
-Then generate a BRAND-NEW artwork from scratch with a completely different background, camera angle and composition.
-Do NOT reuse or slightly modify the background of any reference. Invent a new environment for every artwork.
+Do not copy the reference's pose and arrangement into a different background.
 
-COMPOSITION AND BACKGROUND (your free choice):
-Choose the composition, camera angle and background of every artwork yourself. Vary them widely across the set (for example wide shots, close-ups, low or high angles, indoor and outdoor scenes, different times of day), so that every artwork has a composition and background that is unique in the set and clearly different from its reference."""
+If two references depict the same subject, their KEEP artworks must show clearly different situations and visual stories. Preserve each reference's own style and artwork text.
 
-ART_OUTPUT = """OUTPUT RULES (VERY IMPORTANT):
-- Output ONLY images. No text reply, no descriptions, no captions.
-- 10 SEPARATE image outputs, one artwork per image.
-- NEVER combine artworks into one image: no grid, no collage, no split panels.
-- Each image: landscape 4:3, full bleed, single finished artwork filling the whole frame.
-- No calendar elements, no dates, no spiral binding, no paper edges, no border, no frame, no mockup, no watermark, no logo."""
+NEW-CONCEPT ARTWORKS
+Use the assigned reference as a guide to style and theme, then invent a new central idea that is not already represented by the reference set or another planned artwork.
+
+When the theme allows multiple subjects, introduce a different relevant subject, interaction or meaningful arrangement that naturally belongs in the same collection.
+
+When the collection centers on one specific recurring figure or subject, keep that identity consistent, but invent a substantially different action, situation or narrative moment. Do not introduce unrelated subjects merely to create variety.
+
+Limited reference material is not a reason to repeat an image. Develop additional ideas from the theme while preserving the assigned reference's artistic style and visual quality.
+
+WHAT COUNTS AS A DISTINCT ARTWORK
+Every artwork must have its own central visual idea and clearly different composition.
+
+The following changes ALONE are NOT enough:
+- changing only the background or location
+- changing only the camera angle, crop or zoom
+- mirroring the image
+- changing only the lighting, color or time of day
+- making a small change to the pose
+- replacing a minor prop
+- changing only the text
+
+Do not reuse the same central arrangement or near-identical silhouette across the collection.
+
+For static subjects, create meaningful variety through the main arrangement, relationships between elements and visual emphasis, rather than forcing an inappropriate action.
+
+TEXT ON THE ARTWORK
+Artwork text means a quote, verse, phrase, title or reference line belonging to the illustration itself. Calendar labels are not artwork text.
+
+For KEEP artworks:
+- Copy the exact artwork text from that artwork's assigned reference.
+- Preserve its spelling, punctuation and line breaks.
+- Keep a similar font style, color and hierarchy.
+- Never borrow or mix text from other references.
+- If two KEEP references contain the same text, preserve it as required, but make their visual scenes clearly different.
+
+For NEW-concept artworks:
+- If the assigned reference contains artwork text, choose a different text of the same kind that fits the new concept.
+- Never repeat text already used elsewhere in the collection.
+- Use an authentic, correctly attributed verse or quotation when applicable. Do not invent wording and present it as a real quotation.
+- Keep the reference's typography style, color and hierarchy.
+
+If the assigned reference has no artwork text, the corresponding artwork must have NO text.
+
+Keep required text highly legible in a naturally calm area of the composition.
+Never include dates, month names, weekday names or the calendar year.
+
+COMPOSITION AND BACKGROUND
+Choose the composition, camera angle and environment freely for each artwork, as appropriate to its subject and theme.
+
+Vary the visual storytelling across the set. Each background must support that artwork's distinct idea, rather than serve as the only difference between repeated subjects and arrangements.
+
+Do not impose a fixed season, location or mood unless it is essential to the reference's subject.
+
+FINAL CHECK BEFORE EACH IMAGE
+Silently compare the planned image with all references, the other planned concepts and the artworks already generated in this conversation.
+
+If it repeats another artwork's central idea or composition, revise the idea before generating.
+Check that its assigned reference's style and text rules are still respected."""
+
+ART_OUTPUT = """OUTPUT FOR THIS TURN
+- Generate ONLY Artwork 1 through Artwork 10, in that exact order.
+- Keep Artwork 11 and Artwork 12 planned for the next request; do not generate them yet.
+- Output 10 SEPARATE images, one finished artwork per image.
+- No written reply, explanations, captions or artwork-number labels.
+- Never combine artworks into a grid, collage, contact sheet or split-panel image.
+- Each image must be landscape 4:3, full bleed, with one finished artwork filling the frame.
+- No calendar elements, spiral binding, paper edges, borders, frames, mockup backgrounds, watermarks or logos.
+- Required artwork text is allowed only under the TEXT ON THE ARTWORK rules above."""
 
 
 
@@ -61,8 +124,8 @@ def art_plan(n_refs: int) -> str:
     n = max(1, int(n_refs))
     lines = ["ARTWORK PLAN:"]
     for i in range(1, 13):
-        kind = "KEEP its subject" if i <= n else "NEW subject (invent it, same style and theme)"
-        lines.append(f"- Artwork {i}: reference {(i - 1) % n + 1} - {kind}")
+        kind = "KEEP its subject" if i <= n else "NEW concept within the same theme"
+        lines.append(f"- Artwork {i}: reference {(i - 1) % n + 1} — {kind}")
     return "\n".join(lines)
 
 
@@ -77,30 +140,81 @@ def art_prompt(n_refs: int) -> str:
 # ChatGPT tự chọn, chỉ cần khác hẳn 10 artwork trước và khác nhau.
 ART_EXTRA = """  • Artwork 11 and Artwork 12: choose the composition, camera angle and background yourself, freely. Each must be clearly different from artworks 1–10 and from each other. No forced season, theme or mood."""
 
-ART_CONTINUE = """Continue: generate ONLY the 2 artworks that are still missing from the set, following ALL the same rules as before.
+ART_CONTINUE = """Continue the same collection. Generate ONLY Artwork 11 and Artwork 12 from the 12-artwork plan established earlier.
 
-- Check which artwork numbers have not been generated yet, and create exactly those 2.
-- Use each missing artwork's assigned reference from the ARTWORK PLAN, with a composition and background of your own choice.
-- If artworks 1–10 are all done, generate artwork 11 and 12 instead:
-""" + ART_EXTRA + """
+Artworks 1–10 are already complete. Do not regenerate, replace or repeat any of them.
 
-For each artwork follow the ARTWORK PLAN (KEEP or NEW subject) and keep, from ITS OWN reference only:
-- the subject (KEEP), or a NEW invented subject of the same theme (NEW) that is different from every artwork so far
-- the same stroke style
-- the same color tone
-- for KEEP artworks only: the EXACT text from the artwork area (word for word, same line breaks), if any. NEW artworks: a new text of the same kind (only if the reference has text), never a copy. Never include calendar text (dates, month names, weekdays, year).
+REFERENCE ASSIGNMENT
+- Artwork 11: reference {ref11} — NEW concept within the same theme.
+- Artwork 12: reference {ref12} — NEW concept within the same theme.
 
-Background, camera angle and composition must be clearly different from the reference and from all previously generated artworks.
+Follow ALL the original rules for reference interpretation, artistic style, distinct concepts, composition and artwork text.
 
-Output ONLY 2 separate images. No text reply, no grid, no collage.
-Landscape 4:3, full bleed, no calendar elements, no border, no watermark."""
+COLLECTION COLOR AND MATERIAL LOCK
+Treat the completed Artworks 1–10 as the visual color master for these two images. Silently compare them as a collection before generating: identify the established palette, saturation, warm/cool balance, brightness, contrast, highlight and shadow colors, and material finish. Match those properties in both new artworks.
+
+Use the dominant, consistent treatment across the collection; do not copy an accidental color outlier. If the collection intentionally uses multiple palettes, follow the completed artworks based on the same assigned reference. The original reference guides subject and technique, but must not reintroduce colors absent from that established treatment.
+
+If the completed collection is monochrome or near-monochrome, keep BOTH new images within that same restricted palette across the entire scene, including skin, clothing, foliage, flowers, sky, architecture and distant scenery. Do not restore the objects' natural colors. For example, an ivory/cream/sepia collection must keep leaves, skies and garments in those same ivory/cream/sepia tones, without new green foliage, blue skies, blue-gray clothing or pink skin. This example applies only when that is the actual collection palette; do not impose it on other collections.
+
+Preserve the established material language as well: carved relief, stone, paper, paint or photography must retain the same finish and depth treatment. Do not turn a sculpted monochrome collection into naturally colored, lifelike scenes.
+
+Create variety through subject, action, narrative and composition while keeping the palette and rendering consistent. A new concept, setting, time of day or mood is not permission to change the color grading, saturation or lighting contrast.
+
+DEVELOP TWO DISTINCT IDEAS
+Review the 10 artworks already generated and the original references before generating.
+
+Use the two ideas reserved for Artwork 11 and Artwork 12. If either idea now resembles an artwork already generated, revise it into a clearly different concept.
+
+Each new artwork must:
+- preserve its assigned reference's artistic style, rendering technique, stroke quality and texture, with color tone and material finish governed by the COLLECTION COLOR AND MATERIAL LOCK above
+- belong naturally to the same theme and visual world
+- have a central visual idea and overall composition clearly different from Artworks 1–10
+- be clearly different from the other new artwork
+
+When the theme allows multiple subjects, introduce a different relevant subject, interaction or meaningful arrangement.
+
+If the collection centers on one recurring figure or subject, preserve that identity but create a substantially different action, situation or narrative moment. Do not add unrelated subjects merely to create variety.
+
+Changing only the background, camera angle, crop, lighting, color, a minor prop or a small pose detail is NOT enough.
+
+COMPOSITION AND BACKGROUND
+Choose the composition, camera angle, environment and mood freely to suit each new concept, within the locked collection palette, tonal range and material treatment.
+
+Do not automatically make these images winter scenes or end-of-year scenes because they are Artwork 11 and Artwork 12. No forced season or mood.
+
+TEXT ON THE ARTWORK
+Follow each artwork's assigned reference:
+- If the reference has artwork text, use a NEW text of the same kind that fits the new concept.
+- Do not repeat any text from the references or Artworks 1–10.
+- The two new artworks must not repeat each other's text.
+- Use an authentic, correctly attributed verse or quotation when applicable. Do not invent wording and present it as a real quotation.
+- Preserve the assigned reference's typography style, color and hierarchy, with highly legible placement.
+- If the assigned reference has no artwork text, the new artwork must have NO text.
+- Never include calendar dates, month names, weekdays or the year.
+
+FINAL CHECK
+Before generating, silently compare both concepts against the references, Artworks 1–10 and each other.
+
+Revise any repeated central idea or near-identical composition. Keep the assigned artistic style consistent.
+
+Also imagine Artworks 11 and 12 placed beside Artworks 1–10 at thumbnail size. If either stands out because of new hues, stronger saturation, a different white balance, harsher contrast or a different material finish, revise its planned treatment to match the collection before rendering. Check the background and small details as well as the main subject.
+
+OUTPUT
+- Output ONLY 2 SEPARATE images: Artwork 11 first, then Artwork 12.
+- One finished artwork per image.
+- No written reply, explanations, captions or artwork-number labels.
+- No grid, collage, contact sheet or split panels.
+- Landscape 4:3, full bleed.
+- No calendar elements, spiral binding, paper edges, borders, frames, mockup backgrounds, watermarks or logos.
+- Required artwork text is allowed only under the text rules above."""
 
 
-def art_continue(missing: list[int]) -> str:
-    """Nhắc tiếp trong cùng phiên. Đúng 2 ảnh 11-12 còn thiếu: prompt nguyên văn của người dùng; còn lại (lượt trước
+def art_continue(missing: list[int], n_refs: int) -> str:
+    """Nhắc tiếp trong cùng phiên. Đúng 2 ảnh 11-12 còn thiếu: prompt đã duyệt, điền số ảnh mẫu; còn lại (lượt trước
     ra thiếu ảnh) thì nói rõ số artwork cần vẽ - code biết chính xác ảnh nào đã về."""
     if missing == [11, 12]:
-        return ART_CONTINUE
+        return ART_CONTINUE.format(ref11=10 % max(1, n_refs) + 1, ref12=11 % max(1, n_refs) + 1)
     nums = ", ".join(str(n) for n in missing)
     extra = ("\n" + ART_EXTRA) if any(n > 10 for n in missing) else ""
     return (f"Continue: generate ONLY artwork {nums} (still missing), following ALL the same rules as before.\n"
@@ -117,9 +231,10 @@ def art_resume(missing: list[int], n_refs: int) -> str:
     extra = ("\nArtworks 11 and 12 (if requested):\n" + ART_EXTRA) if any(n > 10 for n in missing) else ""
     return (art_rules(n_refs) + extra + f"\n\nTHIS TIME: generate ONLY artwork {nums} from the plan above (the others are "
             "already done). Use each one's assigned reference, with a composition and background of your own choice.\n\n"
-            + ART_OUTPUT.replace("- 10 SEPARATE image outputs, one artwork per image.",
-                                 f"- {len(missing)} SEPARATE image output{'s' if len(missing) > 1 else ''}, "
-                                 "one artwork per image."))
+            + f"OUTPUT FOR THIS TURN\n- Output {len(missing)} SEPARATE image outputs, one artwork per image, "
+              f"in this exact order: {nums}.\n"
+            + ART_OUTPUT[ART_OUTPUT.index("- No written reply"):])
+
 
 
 # ------------------------------------------------------------------ tên cuốn + listing (cùng phiên, ChatGPT thấy ảnh)
