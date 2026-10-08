@@ -83,7 +83,7 @@ class PromptTest(unittest.TestCase):
         self.assertEqual(prompts.art_plan(1).count("KEEP"), 1)
         self.assertIn("WHAT COUNTS AS A DISTINCT ARTWORK", prompts.art_prompt(2))
         self.assertIn("choose a different text of the same kind", prompts.art_prompt(2))
-        self.assertIn("Do not repeat any text", prompts.ART_CONTINUE)
+        self.assertIn("Do not repeat any text", prompts.art_continue([11, 12], 3))
         self.assertNotIn("{plan}", prompts.art_resume([4], 2))
         for count in range(1, 11):
             continuation = prompts.art_continue([11, 12], count)
@@ -700,3 +700,19 @@ class AnyFileTypeTest(unittest.TestCase):
             with self.assertRaises(ValueError) as e:
                 store.add(tmp, [("mau.pdf", doc.tobytes()), ("a.bmp", self.raw("BMP")), ("b.bmp", self.raw("BMP"))])
             self.assertIn("trang PDF", str(e.exception))
+
+
+class GridOrderTest(BookGridTest):
+    def accept(self, path, year, month):
+        real = self.pages.get(Path(path).read_bytes())               # OCR thật: báo sai CỘT, không báo tên tháng
+        return None if real == month else "lịch sai: ngày 1 nằm ở cột MON, đúng phải là FRI"
+
+    def test_shuffled_pages_with_column_errors_are_all_kept(self):
+        """Lỗi 09/10/2026: trang đúng của tháng 2-9 bị đem so với tháng 1 rồi loại hết."""
+        shuffled = self.grid_pages([2, 3, 4, 5, 6, 7, 8, 9, 10, 1])
+        s = FakeSession([session.Turn(shuffled), session.Turn(self.grid_pages([11, 12], 50))])
+        with mock.patch("calforge.imagegen.generate.accept_grid_page", self.accept):
+            self.b.grid_work(s, "acc4")
+        self.assertEqual(self.b.missing("g"), [])
+        self.assertFalse([p for p, *_ in s.sent if "you just made has calendar errors" in p])   # không phải vẽ lại
+        self.assertFalse(list((layout.tech(Path(self.b.item["book"])) / "anh_bi_loai").glob("grid-*")))

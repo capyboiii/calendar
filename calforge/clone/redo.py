@@ -108,6 +108,7 @@ def redo(concept_dir: Path, pages: list[str], cfg: dict, on_event=print, accts: 
             if not first:                                   # mỗi trang một chat riêng ("ảnh đính kèm" không lẫn)
                 driver.open_home(s.page, driver.URL)
                 s.w._find(s.page, driver.SEL_PROMPT, 60_000)
+                session.ensure_chat_mode(s.page)
             first = False
             if not p.startswith("g"):
                 describe_and_redraw(s, name, p, src)
@@ -134,7 +135,7 @@ def redo(concept_dir: Path, pages: list[str], cfg: dict, on_event=print, accts: 
     def describe_and_redraw(s, name: str, p: str, src: Path) -> None:
         """Tranh tháng / bìa: (1) đính ảnh lỗi, hỏi chữ - ChatGPT tả lại thành prompt vẽ; (2) chat mới, không đính ảnh,
         vẽ lại từ đúng bản chữ đó."""
-        s.w._attach(s.page, [src])
+        (s.attach([src]) if hasattr(s, "attach") else s.w._attach(s.page, [src]))
         desc = description_from(s.ask_text(DESCRIBE_PROMPT))
         if len(desc) < 80:
             raise TempError(f"{p}: ChatGPT chưa tả được ảnh")
@@ -142,6 +143,7 @@ def redo(concept_dir: Path, pages: list[str], cfg: dict, on_event=print, accts: 
         on_event(f"[{name}] {p}: đã tả ảnh ({len(desc.split())} từ) - vẽ lại từ bản mô tả trong chat mới")
         driver.open_home(s.page, driver.URL)                 # chat mới: không còn ảnh cũ để ChatGPT bám vào
         s.w._find(s.page, driver.SEL_PROMPT, 60_000)
+        session.ensure_chat_mode(s.page)
         turn = s.ask_images(DRAW_PREFIX + desc, 1)
         if not turn.images:
             raise turn.problem or TempError(f"{p}: ChatGPT không trả ảnh vẽ lại")

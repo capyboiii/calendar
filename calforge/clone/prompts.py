@@ -12,6 +12,27 @@ WEEKDAY = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "
 
 # ------------------------------------------------------------------ 12 artwork (phiên 1, tài khoản A)
 # Artwork prompts approved on 2026-10-08; reference assignments are filled dynamically.
+ARTWORK_TEXT_RULES = """TEXT ON THE ARTWORK
+UNDERSTAND THE REFERENCES BEFORE DECIDING ABOUT TEXT
+
+Study all attached references together. Infer the intended visual language of the monthly artworks, distinguishing the artwork itself from the calendar, cover, packaging or promotional presentation around it.
+
+Decide whether text is an essential part of each assigned artwork by its meaning, placement and role in the reference collection. Do not assume that every visible word should be reproduced, or that all artworks should contain text because one reference does.
+
+If a reference is a cover or product mockup, extract its underlying artwork. Exclude text serving as the product title, cover headline, year, calendar label, branding or sales information. Do not turn that excluded text into a new phrase.
+
+Preserve meaningful text that is genuinely part of the artwork's creative content, such as scripture, prayers, quotations or illustrated messages—even when that artwork is presented on a cover. When both artwork text and product text appear, retain only the artwork text.
+
+Use the other references to resolve ambiguity. If the interior artworks are text-free and lettering appears only as a cover headline, keep the monthly artworks free of added text. If the collection incorporates meaningful lettering into its artworks, preserve that approach only where supported by the assigned reference.
+
+For KEEP artworks, reproduce the integral artwork text exactly, preserving its spelling, punctuation, line breaks and scripture citation when present. Never borrow text from another reference. If two KEEP references contain the same integral text, preserve it but make their scenes clearly different.
+For NEW-concept artworks, choose a different text of the same kind that fits the new concept. Do not repeat any text from the references or other artworks. Scripture and attributed quotations must be authentic and accurately cited; do not invent or misattribute them.
+If no integral artwork text is supported by the reference, add none.
+
+When integral artwork text is required, preserve its typography style, color and hierarchy, with highly legible placement. Exclude calendar dates, month names, weekdays and the calendar year used as product labels; scripture citation numbers are permitted.
+
+Apply this interpretation consistently whenever a reference is reused, including Artworks 11 and 12. Before rendering each image, check that any proposed lettering belongs to the artwork rather than to the source product's presentation."""
+
 ART_RULES_T = """I have attached reference images. These are visual references, NOT images to edit. Create new artworks from scratch. Do not retouch or make minor variations of the attached images.
 
 REFERENCE FORMAT
@@ -45,7 +66,7 @@ Create a genuinely different scene around that subject: a new action, interactio
 
 Do not copy the reference's pose and arrangement into a different background.
 
-If two references depict the same subject, their KEEP artworks must show clearly different situations and visual stories. Preserve each reference's own style and artwork text.
+If two references depict the same subject, their KEEP artworks must show clearly different situations and visual stories. Preserve each reference's own style and only its integral artwork text, as determined by the TEXT ON THE ARTWORK rules below.
 
 NEW-CONCEPT ARTWORKS
 Use the assigned reference as a guide to style and theme, then invent a new central idea that is not already represented by the reference set or another planned artwork.
@@ -72,26 +93,7 @@ Do not reuse the same central arrangement or near-identical silhouette across th
 
 For static subjects, create meaningful variety through the main arrangement, relationships between elements and visual emphasis, rather than forcing an inappropriate action.
 
-TEXT ON THE ARTWORK
-Artwork text means a quote, verse, phrase, title or reference line belonging to the illustration itself. Calendar labels are not artwork text.
-
-For KEEP artworks:
-- Copy the exact artwork text from that artwork's assigned reference.
-- Preserve its spelling, punctuation and line breaks.
-- Keep a similar font style, color and hierarchy.
-- Never borrow or mix text from other references.
-- If two KEEP references contain the same text, preserve it as required, but make their visual scenes clearly different.
-
-For NEW-concept artworks:
-- If the assigned reference contains artwork text, choose a different text of the same kind that fits the new concept.
-- Never repeat text already used elsewhere in the collection.
-- Use an authentic, correctly attributed verse or quotation when applicable. Do not invent wording and present it as a real quotation.
-- Keep the reference's typography style, color and hierarchy.
-
-If the assigned reference has no artwork text, the corresponding artwork must have NO text.
-
-Keep required text highly legible in a naturally calm area of the composition.
-Never include dates, month names, weekday names or the calendar year.
+{artwork_text_rules}
 
 COMPOSITION AND BACKGROUND
 Choose the composition, camera angle and environment freely for each artwork, as appropriate to its subject and theme.
@@ -130,7 +132,7 @@ def art_plan(n_refs: int) -> str:
 
 
 def art_rules(n_refs: int) -> str:
-    return ART_RULES_T.replace("{plan}", art_plan(n_refs))
+    return ART_RULES_T.replace("{plan}", art_plan(n_refs)).replace("{artwork_text_rules}", ARTWORK_TEXT_RULES)
 
 
 def art_prompt(n_refs: int) -> str:
@@ -183,15 +185,9 @@ Choose the composition, camera angle, environment and mood freely to suit each n
 
 Do not automatically make these images winter scenes or end-of-year scenes because they are Artwork 11 and Artwork 12. No forced season or mood.
 
-TEXT ON THE ARTWORK
-Follow each artwork's assigned reference:
-- If the reference has artwork text, use a NEW text of the same kind that fits the new concept.
-- Do not repeat any text from the references or Artworks 1–10.
-- The two new artworks must not repeat each other's text.
-- Use an authentic, correctly attributed verse or quotation when applicable. Do not invent wording and present it as a real quotation.
-- Preserve the assigned reference's typography style, color and hierarchy, with highly legible placement.
-- If the assigned reference has no artwork text, the new artwork must have NO text.
-- Never include calendar dates, month names, weekdays or the year.
+{artwork_text_rules}
+
+Artworks 11 and 12 are NEW-concept artworks. Apply the NEW-concept text rules above to each assigned reference; their integral messages, if any, must differ from each other and from Artworks 1–10. Do not perpetuate cover/product lettering accidentally generated in earlier artworks.
 
 FINAL CHECK
 Before generating, silently compare both concepts against the references, Artworks 1–10 and each other.
@@ -214,12 +210,12 @@ def art_continue(missing: list[int], n_refs: int) -> str:
     """Nhắc tiếp trong cùng phiên. Đúng 2 ảnh 11-12 còn thiếu: prompt đã duyệt, điền số ảnh mẫu; còn lại (lượt trước
     ra thiếu ảnh) thì nói rõ số artwork cần vẽ - code biết chính xác ảnh nào đã về."""
     if missing == [11, 12]:
-        return ART_CONTINUE.format(ref11=10 % max(1, n_refs) + 1, ref12=11 % max(1, n_refs) + 1)
+        return ART_CONTINUE.format(artwork_text_rules=ARTWORK_TEXT_RULES, ref11=10 % max(1, n_refs) + 1, ref12=11 % max(1, n_refs) + 1)
     nums = ", ".join(str(n) for n in missing)
     extra = ("\n" + ART_EXTRA) if any(n > 10 for n in missing) else ""
     return (f"Continue: generate ONLY artwork {nums} (still missing), following ALL the same rules as before.\n"
             "Use each artwork's assigned reference from the ARTWORK PLAN, with a composition and background of your own "
-            f"choice.{extra}\n\nOutput ONLY {len(missing)} separate image{'s' if len(missing) > 1 else ''}. "
+            f"choice.{extra}\n\n{ARTWORK_TEXT_RULES}\n\nOutput ONLY {len(missing)} separate image{'s' if len(missing) > 1 else ''}. "
             "No text reply, no grid, no collage.\nLandscape 4:3, full bleed, no calendar elements, no border, "
             "no watermark.")
 
@@ -250,7 +246,7 @@ FIELDS
 - "style_name": the art style in 2-4 words (e.g. "Soft watercolor").
 - "buyer": who buys this calendar, one short phrase.
 - "keyword": the main search phrase buyers type, 2-4 words.
-- "months": 12 short captions (3-8 words), one per artwork in order, describing what each artwork shows.
+- "months": 12 short captions, one per artwork in order: a 2-5 word title for each artwork (e.g. "Rebel Heart"), no dash, no description sentence.
 - "etsy_title", "etsy_description", "tags": the Etsy listing, following ALL the rules below.
 
 ETSY RULES (must all be met)

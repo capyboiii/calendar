@@ -8,6 +8,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="app.css">
+  <link rel="stylesheet" href="clone.css">
 </head>
 <body>
   <header class="top">
@@ -17,8 +18,7 @@
       </span>
       <span class="brand-name">CalForge <small>STUDIO</small></span>
     </div>
-    <a class="btn btn-ghost" href="/clone" style="margin-left:auto" title="Tải ảnh mẫu lên, ChatGPT Plus vẽ theo">Làm theo ảnh mẫu</a>
-    <a class="btn btn-ghost" href="/huong-dan" target="_blank">Hướng dẫn</a>
+    <a class="btn btn-ghost" href="/huong-dan" target="_blank" style="margin-left:auto">Hướng dẫn</a>
     <button class="btn btn-ghost" id="btnAccounts">
       <span class="dot" id="accDot"></span> Tài khoản ChatGPT <span id="accSummary"></span>
     </button>
@@ -36,6 +36,18 @@
     <!-- 1. Làm lịch mới -->
     <section class="card start" id="startCard">
       <h1>Làm lịch mới</h1>
+      <fieldset class="kinds" id="modePicker">
+        <legend>Cách làm</legend>
+        <label class="kind">
+          <input type="radio" name="make_mode" value="idea" checked>
+          <span><strong>Theo ý tưởng</strong><small>Nhập chủ đề, ChatGPT nghĩ ý tưởng + prompt cho từng cuốn</small></span>
+        </label>
+        <label class="kind">
+          <input type="radio" name="make_mode" value="clone">
+          <span><strong>Clone sản phẩm</strong><small>Tải ảnh mẫu lên, ChatGPT vẽ theo (chỉ tài khoản Plus)</small></span>
+        </label>
+      </fieldset>
+      <div class="mode-panel" id="ideaPanel" data-mode="idea">
       <fieldset class="kinds" id="productPicker">
         <legend>Loại lịch</legend>
         <label class="kind">
@@ -124,6 +136,52 @@
         <button class="btn btn-primary btn-big" id="btnStart">Bắt đầu</button>
       </div>
       <p class="hint" id="startHint"></p>
+      </div>
+      <!-- Clone sản phẩm: tải ảnh mẫu lên, ChatGPT (chỉ tài khoản Plus) vẽ theo -->
+      <div class="mode-panel" id="clonePanel" data-mode="clone" hidden>
+        <div class="notice" id="clonePlusNotice" hidden></div>
+        <fieldset class="kinds refs-box">
+          <legend>Ảnh mẫu <small class="muted">(1–10 ảnh: tranh, trang lịch hoặc ảnh mockup · mọi định dạng ảnh, cả PDF - mỗi trang PDF là 1 ảnh · dán ảnh bằng Ctrl+V)</small></legend>
+          <div class="drop" id="cloneDrop" tabindex="0">
+            <input type="file" id="cloneFiles" multiple hidden>
+            <p><strong>Kéo thả ảnh vào đây</strong> hoặc <button class="btn btn-small" id="clonePick" type="button">Chọn ảnh</button></p>
+            <p class="hint">Thứ tự ảnh = artwork 1, 2, 3… Ảnh mẫu ít hơn 12 thì các artwork còn lại giữ nét vẽ + tông màu,
+              ChatGPT tự nghĩ chủ thể mới (và câu chữ mới nếu ảnh mẫu có chữ).</p>
+          </div>
+          <ol class="ref-list" id="cloneRefList"></ol>
+        </fieldset>
+        <fieldset class="kinds" id="cloneMockupPicker">
+          <legend>Ảnh quảng cáo</legend>
+          <label class="kind">
+            <input type="radio" name="clone_mockup_mode" value="ai" checked>
+            <span><strong>AI gen mockup</strong><small>8 ảnh: 7 ảnh bối cảnh riêng (+7 lượt vẽ) + ảnh 12 tháng</small></span>
+          </label>
+          <label class="kind">
+            <input type="radio" name="clone_mockup_mode" value="template">
+            <span><strong>Dùng mockup đã có</strong><small>Ảnh ghép sẵn, không tốn lượt</small></span>
+          </label>
+        </fieldset>
+        <div class="start-row">
+          <label class="field grow">
+            <span>Chủ đề (tên thư mục)</span>
+            <input id="cloneGroup" type="text" placeholder="Ví dụ: cats-clone, bible-verse…" maxlength="40" autocomplete="off">
+          </label>
+          <label class="field narrow">
+            <span>Năm lịch</span>
+            <div class="stepper-y">
+              <button type="button" data-ystep="-1" aria-label="Bớt một năm">−</button>
+              <input id="cloneYear" type="number" min="2025" max="2100" value="2027">
+              <button type="button" data-ystep="1" aria-label="Thêm một năm">+</button>
+            </div>
+          </label>
+          <label class="field narrow show-chrome" title="Bật: các cửa sổ ChatGPT hiện ra để xem tool làm việc. Tắt: chạy ngầm.">
+            <span>Chrome</span>
+            <span class="check"><input type="checkbox" id="cloneShowChrome"> Hiện cửa sổ</span>
+          </label>
+          <button class="btn btn-primary btn-big" id="btnCloneStart" disabled>Bắt đầu</button>
+        </div>
+        <p class="hint" id="cloneStartHint">Thêm ảnh mẫu để bắt đầu. Chỉ dùng tài khoản ChatGPT Plus: 12 artwork + bìa (1 tài khoản), 12 trang lịch (tài khoản khác).</p>
+      </div>
     </section>
 
     <!-- 2. Đang chạy -->
@@ -157,6 +215,31 @@
         <ul class="queue-list" id="queueDone"></ul>
         <button class="btn btn-small btn-ghost" id="btnQueueClear">Xoá danh sách đã xong</button>
       </details>
+    </section>
+
+    <!-- 2c. Clone sản phẩm: đang chạy + hàng đợi -->
+    <section class="card running" id="cloneRunCard" hidden>
+      <div class="run-head">
+        <div>
+          <h2 id="cloneRunTitle">Đang clone sản phẩm</h2>
+          <p class="lead" id="cloneRunSub">Đang chuẩn bị…</p>
+        </div>
+        <button class="btn btn-danger-ghost" id="btnCloneStop">Dừng</button>
+      </div>
+      <ol class="steps" id="cloneRunSteps"></ol>
+      <div class="bar"><div class="bar-fill" id="cloneRunBar"></div></div>
+      <details class="advanced" id="cloneLogBox">
+        <summary>Chi tiết</summary>
+        <pre id="cloneRunLog"></pre>
+      </details>
+    </section>
+    <section class="card queue" id="cloneQueueCard" hidden>
+      <div class="run-head">
+        <h2>Hàng đợi clone sản phẩm</h2>
+        <span class="grow"></span>
+        <button class="btn btn-small btn-accent" id="btnCloneRun" hidden>Chạy hàng đợi</button>
+      </div>
+      <ol class="queue-list" id="cloneQueue"></ol>
     </section>
 
     <!-- 3. Kết quả -->
@@ -277,5 +360,6 @@
 
   <div class="toasts" id="toasts"></div>
   <script src="app.js"></script>
+  <script src="clone.js"></script>
 </body>
 </html>

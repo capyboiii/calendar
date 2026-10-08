@@ -103,16 +103,46 @@ def human_pause(lo: float = 0.6, hi: float = 2.0) -> None:
     time.sleep(random.uniform(lo, hi))
 
 
+LEASE = ".calforge_lease"     # file khoá trong profile: tiến trình nào đang giữ tài khoản (pid)
+
+
+def _pid_alive(pid: int) -> bool:
+    """Tiến trình còn chạy không (Windows: OpenProcess + GetExitCodeProcess; nơi khác: os.kill(pid, 0))."""
+    import os
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        import ctypes
+        k = ctypes.windll.kernel32
+        h = k.OpenProcess(0x1000, False, pid)          # PROCESS_QUERY_LIMITED_INFORMATION
+        if not h:
+            return False
+        try:
+            code = ctypes.c_ulong()
+            return bool(k.GetExitCodeProcess(h, ctypes.byref(code))) and code.value == 259   # STILL_ACTIVE
+        finally:
+            k.CloseHandle(h)
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
 class AccountPool:
     def __init__(self, profiles_dir: Path, names: list[str], *, cap: int, launch_gap_s: float = 5.0,
                  locked=None, state_file: Path | None = None, clock=time.monotonic, sleep=time.sleep,
-                 free_ram=None, notify=None):
+                 free_ram=None, notify=None, leases: bool = False, later=None):
         self.profiles_dir = Path(profiles_dir)
         self.names = list(names)
         self.cap = max(1, int(cap))
         self.launch_gap_s = float(launch_gap_s)
         self.state_file = state_file
         self._locked = locked or (lambda name: False)
+        # Khoá giữa các TIẾN TRÌNH (batch theo ý tưởng và clone sản phẩm chạy song song, mỗi bên một bộ điều phối):
+        # mượn tài khoản = tạo file khoá trong profile; tiến trình khác thấy khoá thì bỏ qua tài khoản đó.
+        self._leases = leases
+        self._later = later or (lambda: set())            # tài khoản nên để dành cho tiến trình khác (lấy sau cùng)
         self._clock, self._sleep = clock, sleep
         self._cv = threading.Condition()
         self.use: dict[str, str] = {}                      # tài khoản -> vai đang giữ
@@ -146,7 +176,61 @@ class AccountPool:
 
     def _free_for(self, name: str, role: str) -> bool:
         return (name not in self.use and name not in self.dead and not self._resting(name, role)
-                and not self._locked(name))
+                and not self._locked(name) and not self._leased_elsewhere(name))
+
+    # ---------- khoá tài khoản giữa các tiến trình ----------
+    def _lease_file(self, name: str) -> Path:
+        return self.profiles_dir / name / LEASE
+
+    def _lease_owner(self, name: str) -> int:
+        try:
+            return int((self._lease_file(name).read_text(encoding="utf-8") or "0").split()[0])
+        except (OSError, ValueError, IndexError):
+            return 0
+
+    def _leased_elsewhere(self, name: str) -> bool:
+        if not self._leases:
+            return False
+        import os
+        owner = self._lease_owner(name)
+        return bool(owner and owner != os.getpid() and _pid_alive(owner))
+
+    def _take_lease(self, name: str) -> bool:
+        """Tạo file khoá (O_EXCL: hai tiến trình cùng tạo thì chỉ một bên được). Khoá của tiến trình đã chết thì dọn."""
+        if not self._leases or not (self.profiles_dir / name).is_dir():
+            return True
+        import os
+        f = self._lease_file(name)
+        for _ in range(2):
+            try:
+                fd = os.open(str(f), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            except FileExistsError:
+                owner = self._lease_owner(name)
+                if owner == os.getpid():
+                    return True
+                if owner and _pid_alive(owner):
+                    return False
+                try:                                     # khoá mồ côi (tiến trình đã tắt): dọn rồi thử lại
+                    f.unlink()
+                except OSError:
+                    return False
+                continue
+            except OSError:
+                return True                              # không ghi được file khoá: không chặn việc chính
+            with os.fdopen(fd, "w", encoding="utf-8") as h:
+                h.write(str(os.getpid()))
+            return True
+        return False
+
+    def _drop_lease(self, name: str) -> None:
+        if not self._leases:
+            return
+        import os
+        if self._lease_owner(name) == os.getpid():
+            try:
+                self._lease_file(name).unlink()
+            except OSError:
+                pass
 
     def _count(self, role: str) -> int:
         return sum(1 for r in self.use.values() if r == role)
@@ -277,8 +361,12 @@ class AccountPool:
             if role == IMAGE and self._count(IMAGE) >= self._image_slots():
                 return None
             order = [only] if only else (prefer or []) + [n for n in self.names if n not in (prefer or [])]
+            if not only:                                  # tài khoản để dành cho tiến trình khác: lấy sau cùng
+                later = self._later()
+                if later:
+                    order = [n for n in order if n not in later] + [n for n in order if n in later]
             for name in order:
-                if name in self.names and self._free_for(name, role):
+                if name in self.names and self._free_for(name, role) and self._take_lease(name):
                     self.use[name] = role
                     self._save()
                     return name
@@ -287,6 +375,7 @@ class AccountPool:
     def release(self, name: str) -> None:
         with self._cv:
             self.use.pop(name, None)
+            self._drop_lease(name)
             self._save()
             self._cv.notify_all()
 
@@ -390,11 +479,47 @@ def get_pool(cfg: dict | None = None) -> AccountPool:
             cap = browser_cap(cfg.get("max_browsers", 40))
             _POOL = AccountPool(pdir, names, cap=cap, launch_gap_s=cfg.get("launch_gap_s", 5),
                                 locked=lambda n: is_profile_locked(pdir / n), free_ram=free_ram_gb,
-                                state_file=Path(cfg["projects_dir"]) / ".tai_khoan_live.json")
+                                state_file=Path(cfg["projects_dir"]) / ".tai_khoan_live.json",
+                                leases=True, later=_plus_saved_for_clone(cfg))
             _POOL.rest_s = float(cfg.get("quota_wait_s", 1800))
             print(f"[tài khoản] {len(names)} tài khoản, tối đa {cap} Chrome cùng lúc "
                   f"(RAM trống {free_ram_gb():.1f} GB), mở cách nhau {_POOL.launch_gap_s:.0f}s", flush=True)
         return _POOL
+
+
+def _plus_saved_for_clone(cfg: dict):
+    """Khi hàng đợi "Clone sản phẩm" đang có việc (cuốn chờ / đang chạy), tiến trình KHÁC (batch theo ý tưởng) lấy
+    tài khoản Free trước, tài khoản Plus sau cùng - clone chỉ dùng được Plus. Đọc lại tối đa 30 giây một lần."""
+    import os
+    cache = {"at": -1e9, "names": set()}
+
+    def later() -> set[str]:
+        if os.environ.get("CALFORGE_CLONE_RUN"):        # chính tiến trình clone: không để dành gì
+            return set()
+        now = time.monotonic()
+        if now - cache["at"] < 30:
+            return cache["names"]
+        cache["at"] = now
+        names: set[str] = set()
+        try:
+            from ..clone import store
+            if store.pending(cfg["projects_dir"]):
+                from . import plan
+                pdir = config_profiles(cfg)
+                for d in pdir.iterdir() if pdir.exists() else []:
+                    info = plan.read(d) if d.is_dir() else None
+                    if info and info.get("plan") in ("plus", "pro") and not info.get("expired"):
+                        names.add(d.name)
+        except Exception:  # noqa: BLE001 - chỉ là thứ tự ưu tiên, lỗi thì bỏ qua
+            names = set()
+        cache["names"] = names
+        return names
+    return later
+
+
+def config_profiles(cfg: dict):
+    from .. import config
+    return config.get_profiles_dir(cfg)
 
 
 def peek_pool() -> AccountPool | None:

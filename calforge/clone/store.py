@@ -140,8 +140,22 @@ def items(projects_dir) -> list[dict]:
                 data = {"id": d.name, "status": "failed", "group": "", "year": "", "stage": "",
                         "reason": "item.json hỏng - xoá cuốn này rồi thêm lại ảnh mẫu"}
             data["refs"] = len(refs(d))
+            if data.get("status") in ("running", "failed") and _book_finished(data.get("book")):
+                write(d, status="done", reason="")         # trang chính đã hoàn thiện cuốn (Làm tiếp / Hoàn thiện)
+                data.update(status="done", reason="")
             out.append(data)
     return out
+
+
+def _book_finished(book) -> bool:
+    """Cuốn đã xong hẳn (status.json của cuốn: ok ở bước listing / printify) - trang chính có thể đã làm nốt."""
+    if not book:
+        return False
+    try:
+        st = json.loads((Path(book) / "_he_thong" / "status.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return bool(isinstance(st, dict) and st.get("ok") and st.get("stage") in ("listing", "printify"))
 
 
 def pending(projects_dir) -> list[Path]:
@@ -151,11 +165,28 @@ def pending(projects_dir) -> list[Path]:
         if r.is_dir() else []
 
 
-def remove(projects_dir, item_id: str) -> None:
+def remove(projects_dir, item_id: str, *, running_now: bool = True) -> None:
+    """Bỏ một cuốn khỏi hàng đợi. running_now=False: không có lượt clone nào đang chạy thật, nên trạng thái
+    "running" chỉ là dấu cũ (bị Dừng / tắt tool giữa chừng) - cho bỏ."""
     d = item_dir(projects_dir, item_id)
-    if read(d).get("status") == "running":
-        raise ValueError("cuốn đang chạy - dừng trước rồi mới xoá")
+    if running_now and read(d).get("status") == "running":
+        raise ValueError("cuốn đang chạy - bấm Dừng trước rồi mới bỏ")
     shutil.rmtree(d, ignore_errors=True)
+
+
+STOPPED = "đã dừng giữa chừng - bấm Làm tiếp để làm phần còn thiếu"
+
+
+def mark_stopped(projects_dir) -> int:
+    """Lượt clone đã dừng (bấm Dừng / tắt tool / tiến trình chết): cuốn còn ghi "running" chuyển về "Bị dở".
+    Ảnh đã vẽ giữ nguyên; Làm tiếp chỉ làm phần thiếu."""
+    n = 0
+    r = root(projects_dir)
+    for d in sorted(r.iterdir()) if r.is_dir() else []:
+        if d.is_dir() and read(d).get("status") == "running":
+            write(d, status="failed", reason=STOPPED)
+            n += 1
+    return n
 
 
 def retry(projects_dir, item_id: str) -> None:

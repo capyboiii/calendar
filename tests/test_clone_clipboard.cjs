@@ -6,13 +6,13 @@ const handlers = {};
 const state = {refs: []};
 let errors = [];
 const context = vm.createContext({
-  Promise, Array, MAX_REFS: 10, S: state,
+  Promise, Array, MAX_REFS: 10, C: state,
   loadImage: async f => { await Promise.resolve(); return {name: f.name}; },
   renderRefs: () => {}, toast: msg => errors.push(msg),
   $: () => ({addEventListener: (name, fn) => handlers[name] = fn, focus: () => {}}),
 });
 vm.runInContext(source.slice(source.indexOf('let fileQueue'), source.indexOf('function renderRefs')), context);
-vm.runInContext(source.slice(source.indexOf("const drop = $('drop');"), source.indexOf("drop.addEventListener('dragover'")), context);
+vm.runInContext(source.slice(source.indexOf("const drop = $('cloneDrop');"), source.indexOf("drop.addEventListener('dragover'")), context);
 (async () => {
   let prevented = 0;
   const image = {name: 'clipboard.png', type: 'image/png'};

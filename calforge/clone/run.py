@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import copy
 import json
+import queue
 import shutil
 import threading
 import time
@@ -182,15 +183,52 @@ def run_stage(accts: Accounts, label: str, work, *, avoid: set[str] | None = Non
                 fails += 1
                 accts.on_event(f"[{name}] {label}: lỗi ({last[:140]}) - thử phiên mới ({fails}/{MAX_SESSIONS})")
         except Exception as e:  # noqa: BLE001 - Chrome hỏng, lỗi lạ: thử phiên mới
-            fails += 1
             last = f"{type(e).__name__}: {str(e)[:200]}"
-            accts.on_event(f"[{name}] {label}: lỗi ({last[:140]}) - thử phiên mới ({fails}/{MAX_SESSIONS})")
-            if "không mở được" in last or "Target" in last:
-                accts.pool.rest(name, IMAGE, 300, last)
+            if _network_error(last):                     # mạng chập / Playwright hết giờ: như lỗi trang, đổi tài khoản
+                accts.pool.rest(name, IMAGE, driver.NAV_REST_S, last)
+                nav += 1
+                accts.on_event(f"[{name}] {label}: lỗi mạng ({last[:100]}) - đổi tài khoản ({nav}/{driver.NAV_MAX})")
+                if nav >= driver.NAV_MAX:
+                    nav, fails = 0, fails + 1
+            else:
+                fails += 1
+                accts.on_event(f"[{name}] {label}: lỗi ({last[:140]}) - thử phiên mới ({fails}/{MAX_SESSIONS})")
+                if "không mở được" in last or "Target" in last:
+                    accts.pool.rest(name, IMAGE, 300, last)
         finally:
             accts.release(name)
         if fails >= MAX_SESSIONS:
             raise StageFailed(f"{label}: chưa xong sau {fails} phiên ({last[:160]})")
+
+
+@contextmanager
+def ocr_memo():
+    """Trong lúc soát một lượt trang lịch: nhớ kết quả OCR theo nội dung ảnh, để soát cùng một trang với nhiều tháng
+    (trang về lệch thứ tự) không phải OCR lại. Chỉ trong tiến trình clone; code soát của trang chính không đổi."""
+    import hashlib
+    from ..imagegen import grid_check
+    real = grid_check._ocr_scored
+    memo: dict = {}
+    lock = threading.Lock()
+
+    def cached(img):
+        key = (img.size, hashlib.md5(img.tobytes()).hexdigest())
+        with lock:
+            if key in memo:
+                return memo[key]
+        out = real(img)
+        with lock:
+            memo[key] = out
+        return out
+    with _OCR_MEMO_LOCK:
+        grid_check._ocr_scored = cached
+        try:
+            yield
+        finally:
+            grid_check._ocr_scored = real
+
+
+_OCR_MEMO_LOCK = threading.Lock()
 
 
 def _month_named(reason: str) -> int | None:
@@ -201,6 +239,16 @@ def _month_named(reason: str) -> int | None:
     return names.index(m.group(1).lower()) + 1 if m and m.group(1).lower() in names else None
 
 
+NET_HINTS = ("timeout", "timed out", "net::", "err_", "connection", "network", "socket", "đính kèm",
+             "upload", "econnreset", "getaddrinfo", "dns")
+
+
+def _network_error(text: str) -> bool:
+    """Lỗi do mạng / trang chưa tải (Playwright hết giờ chờ, net::ERR_*, mất kết nối, tải ảnh lên lỗi)."""
+    low = text.lower()
+    return any(k in low for k in NET_HINTS)
+
+
 def _server_side(text: str) -> bool:
     """Lỗi tạm do phía ChatGPT (server báo lỗi, tab kẹt không phản hồi, lượt xong mà không ra ảnh)."""
     low = text.lower()
@@ -208,19 +256,41 @@ def _server_side(text: str) -> bool:
 
 
 # ------------------------------------------------------------------ một cuốn
+GRID_WAIT_S = 1200        # trang lịch chạy sớm: chờ artwork 11-12 bấy lâu trong cùng phiên rồi mới thôi
+GRID_POLL_S = 10
+_ITEM_LOCKS: dict[str, threading.RLock] = {}
+_ITEM_LOCKS_GUARD = threading.Lock()
+
+
+def _item_lock(name: str) -> threading.RLock:
+    """Một khoá cho mỗi cuốn: bước artwork và bước trang lịch của CÙNG cuốn chạy song song, không được ghi file
+    đúng lúc thư mục work/ đang được chuyển sang thư mục SKU."""
+    with _ITEM_LOCKS_GUARD:
+        return _ITEM_LOCKS.setdefault(name, threading.RLock())
+
+
 class Book:
     def __init__(self, cfg: dict, d: Path, on_event=print):
         self.cfg, self.d, self.on_event = cfg, d, on_event
         self.item = store.read(d)
         self.year = int(self.item.get("year") or 2027)
+        self.lock = _item_lock(d.name)
+        self.on_grid_ready = None                      # gọi (thư mục mục) khi đủ artwork 1-10: trang lịch chạy sớm
+        self._grid_signalled = False
 
     @property
     def dir(self) -> Path:
-        """Thư mục đang chứa ảnh: thư mục SKU nếu đã có tên, chưa thì work/ của mục."""
-        book = self.item.get("book")
+        """Thư mục đang chứa ảnh: thư mục SKU nếu đã có tên, chưa thì work/ của mục. Đọc lại item.json mỗi lần: bước
+        kia của cùng cuốn có thể vừa chuyển ảnh sang thư mục SKU."""
+        book = store.read(self.d).get("book") or self.item.get("book")
         if book and Path(book).is_dir():
             return Path(book)
         return self.d / "work"
+
+    def _grid_ready_check(self) -> None:
+        if self.on_grid_ready and not self._grid_signalled and all(self.done(f"m{m:02d}") for m in range(1, 11)):
+            self._grid_signalled = True
+            self.on_grid_ready(self.d)
 
     def raw(self, job: str) -> Path:
         return layout.raw(self.dir) / job
@@ -241,9 +311,19 @@ class Book:
         self.item = store.write(self.d, **kw)
 
     # -------------------------------------------------------------- phiên A: artwork + tên + bìa
+    def _watch(self, s, name: str, what: str) -> None:
+        """Báo tiến độ mỗi phút trong lúc chờ một lượt nhiều ảnh (nhật ký + dòng trạng thái của cuốn)."""
+        def report(got, want, busy, secs):
+            state = "ChatGPT đang vẽ" if busy else "chờ ChatGPT phản hồi"
+            self.on_event(f"[{name}] {what}: đã ra {got}/{want} ảnh trong lượt này - {state} ({secs // 60} phút)")
+        s.progress = report
+
     def art_work(self, s, name: str) -> None:
         refs = store.refs(self.d)
+        self._watch(s, name, "artwork")
         missing = self.missing("m")
+        self.status(art_account=name)                   # trang lịch chạy sớm tránh tài khoản này
+        self._grid_ready_check()
         if missing:
             self.status(stage=f"vẽ artwork ({12 - len(missing)}/12)")
             if not self._reopen_chat(s, name):
@@ -255,6 +335,7 @@ class Book:
                 s.on_sent = None
                 s.has_art = True                        # phiên này đã có artwork: bìa/tên hỏi ngay trong phiên
                 self._take_art(turn, name)
+            self._grid_ready_check()
             idle = 0
             while self.missing("m"):
                 missing = self.missing("m")
@@ -262,6 +343,7 @@ class Book:
                 before = len(missing)
                 turn = s.ask_images(prompts.art_continue(missing, len(refs)), len(missing))
                 self._take_art(turn, name)
+                self._grid_ready_check()
                 idle = idle + 1 if len(self.missing("m")) == before else 0
                 if idle >= 2:
                     raise TempError(f"ChatGPT không vẽ thêm artwork (còn thiếu {self.missing('m')})")
@@ -278,7 +360,8 @@ class Book:
                                 1, attach=attach)
             why = session.landscape_ok(turn.images[0]) if turn.images else None
             if turn.images and why is None:
-                session.save(turn.images[0], self.raw("cover"))
+                with self.lock:
+                    session.save(turn.images[0], self.raw("cover"))
                 self.on_event(f"[{name}] bìa: xong")
             elif turn.problem:
                 raise turn.problem
@@ -296,6 +379,7 @@ class Book:
         try:
             driver.open_home(s.page, chat["url"])
             s.w._find(s.page, driver.SEL_PROMPT, 60_000)
+            session.ensure_chat_mode(s.page)
             images = s.harvest()
         except NavError:
             raise
@@ -326,23 +410,29 @@ class Book:
                 self.on_event(f"[{name}] bỏ 1 ảnh artwork: {why}")
                 continue
             m = missing.pop(0)
-            session.save(data, self.raw(f"m{m:02d}"))
+            with self.lock:
+                session.save(data, self.raw(f"m{m:02d}"))
             got += 1
         self.on_event(f"[{name}] artwork: +{got} ảnh, còn thiếu {len(self.missing('m'))}")
         if turn.problem and (not got or isinstance(turn.problem, (QuotaExceeded, ThirdPartyIPRefused))):
             raise turn.problem
 
     def _reject(self, data: bytes, tag: str) -> None:
-        d = layout.tech(self.dir) / "anh_bi_loai"
-        d.mkdir(parents=True, exist_ok=True)
-        (d / f"{tag}-{time.strftime('%H%M%S')}{session.ext_of(data)}").write_bytes(data)
+        with self.lock:
+            d = layout.tech(self.dir) / "anh_bi_loai"
+            d.mkdir(parents=True, exist_ok=True)
+            stamp = time.strftime('%H%M%S')
+            n = 0
+            while (d / f"{tag}-{stamp}-{n}{session.ext_of(data)}").exists():   # nhiều ảnh cùng giây: không ghi đè
+                n += 1
+            (d / f"{tag}-{stamp}-{n}{session.ext_of(data)}").write_bytes(data)
 
     def _ask_meta(self, s, attach_art: bool) -> None:
         from ..ideation.extract import extract_json
         ask = prompts.meta_prompt(self.year)
         if attach_art:                                  # phiên mới: ChatGPT chưa thấy ảnh -> đính 10 artwork đầu
             arts = [self.done(f"m{m:02d}") for m in range(1, 11)]
-            s.w._attach(s.page, arts)
+            (s.attach(arts) if hasattr(s, "attach") else s.w._attach(s.page, arts))
             ask = ("I have attached 10 of the 12 artworks of this calendar (January to October).\n" + ask)
         for attempt in range(3):
             answer = s.ask_text(ask)
@@ -353,9 +443,10 @@ class Book:
             errors = validate_meta(data)
             if not errors:
                 data["months"] = month_captions(data.get("months"))
-                layout.tech(self.dir).mkdir(parents=True, exist_ok=True)
-                (layout.tech(self.dir) / "clone_meta.json").write_text(json.dumps(data, ensure_ascii=False, indent=1),
-                                                                      encoding="utf-8")
+                with self.lock:
+                    layout.tech(self.dir).mkdir(parents=True, exist_ok=True)
+                    (layout.tech(self.dir) / "clone_meta.json").write_text(
+                        json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
                 self.on_event(f"  ✔ Tên cuốn: {data['title']}")
                 return
             self.on_event(f"  ⚠ JSON tên/listing chưa đạt ({'; '.join(errors)[:140]}) - nhờ ChatGPT sửa")
@@ -363,7 +454,12 @@ class Book:
         raise TempError("ChatGPT chưa trả được tên cuốn + listing hợp lệ")
 
     def _adopt(self) -> None:
+        with self.lock:                                 # bước trang lịch của cùng cuốn chờ chuyển xong mới ghi tiếp
+            self._adopt_locked()
+
+    def _adopt_locked(self) -> None:
         """Có tên: tạo thư mục SKU thật, chuyển ảnh sang, ghi concept.json + listing."""
+        self.item = store.read(self.d) or self.item
         if self.item.get("book") and Path(self.item["book"]).is_dir():
             return
         meta = self.meta()
@@ -387,12 +483,29 @@ class Book:
 
     # -------------------------------------------------------------- phiên B: 12 trang lịch
     def grid_work(self, s, name: str) -> None:
-        arts = {m: self.done(f"m{m:02d}") for m in range(1, 13)}
+        """Vẽ trang lịch cho các tháng ĐÃ có artwork. Chạy sớm (song song lúc tài khoản kia còn vẽ artwork 11-12 /
+        đặt tên / vẽ bìa) thì vẽ 10 tháng đầu trước, rồi chờ artwork 11-12 ngay trong phiên (GRID_WAIT_S) để nhắn
+        tiếp; quá lâu thì dừng bước, bộ điều phối chạy lại phần còn thiếu sau."""
         first_round = [m for m in range(1, 11)]
         idle = 0
+        self._watch(s, name, "trang lịch")
         while self.missing("g"):
-            missing = self.missing("g")
-            self.status(stage=f"vẽ trang lịch ({12 - len(missing)}/12)")
+            ready = [m for m in self.missing("g") if self.done(f"m{m:02d}")]
+            if not ready:                               # artwork tháng còn thiếu chưa vẽ xong: chờ trong phiên
+                waited = 0.0
+                while not ready and waited < GRID_WAIT_S:
+                    if store.read(self.d).get("art_state") not in (None, "running"):
+                        break                           # bước artwork đã dừng (xong / lỗi): khỏi chờ nữa
+                    self.status(stage=f"vẽ trang lịch ({12 - len(self.missing('g'))}/12) - chờ artwork tháng "
+                                      + ", ".join(str(m) for m in self.missing("g")))
+                    time.sleep(GRID_POLL_S)
+                    waited += GRID_POLL_S
+                    ready = [m for m in self.missing("g") if self.done(f"m{m:02d}")]
+                if not ready:
+                    return                              # bộ điều phối chạy lại bước này khi artwork xong
+            arts = {m: self.done(f"m{m:02d}") for m in range(1, 13)}
+            missing = ready
+            self.status(stage=f"vẽ trang lịch ({12 - len(self.missing('g'))}/12)")
             if not getattr(s, "grid_started", False):
                 done = [m for m in range(1, 13) if m not in missing]
                 if not done:
@@ -408,7 +521,7 @@ class Book:
                 prompt, attach = prompts.grid_continue(self.year, batch), [arts[m] for m in batch]
             turn = s.ask_images(prompt, len(batch), attach=attach)
             self._take_grid(s, turn, batch, name)
-            if set(missing) == set(self.missing("g")):    # cả lượt không thêm được trang nào
+            if set(missing) <= set(self.missing("g")):    # cả lượt không thêm được trang nào
                 idle += 1
                 if turn.problem and not turn.images:
                     raise turn.problem
@@ -421,29 +534,36 @@ class Book:
         from ..imagegen.generate import accept_grid_page
         left = [m for m in batch if self.done(f"g{m:02d}") is None]
         failed: dict[int, str] = {}
-        for data in turn.images:
-            if not left:
-                break
-            tmp = layout.tech(self.dir) / f"grid_check_{left[0]:02d}{session.ext_of(data)}"
-            tmp.parent.mkdir(parents=True, exist_ok=True)
-            tmp.write_bytes(data)
-            month, why = None, accept_grid_page(tmp, self.year, left[0])   # thường về đúng thứ tự
-            if why is None:
-                month = left[0]
-            else:                                         # tiêu đề ghi tháng khác (về lệch thứ tự): soát đúng tháng đó
-                other = _month_named(why)
-                if other in left and other != left[0] and accept_grid_page(tmp, self.year, other) is None:
-                    month = other
-            if month is None:
-                failed.setdefault(left[0], why or "sai lịch")
-                self._reject(data, f"grid-{left[0]:02d}")
-                self.on_event(f"[{name}] trang lịch ảnh {len(batch) - len(left) + 1}: OCR loại ({(why or '')[:90]})")
-            else:
-                session.save(data, self.raw(f"g{month:02d}"))
-                left.remove(month)
-                failed.pop(month, None)
-                self.on_event(f"[{name}] trang lịch tháng {month}: OCR đạt, đã lưu")
-            tmp.unlink(missing_ok=True)
+        with ocr_memo():                                  # mỗi trang OCR một lần, so với nhiều tháng không đọc lại
+            for pos, data in enumerate(turn.images):
+                if not left:
+                    break
+                check_dir = Path(self.d) / "ocr"        # file soát OCR tạm: nằm ngoài thư mục bị chuyển
+                check_dir.mkdir(parents=True, exist_ok=True)
+                tmp = check_dir / f"grid_check_{pos:02d}{session.ext_of(data)}"
+                tmp.write_bytes(data)
+                # ChatGPT hay trả trang lệch thứ tự: thử tháng đúng vị trí trước, rồi lần lượt các tháng còn thiếu
+                expected = batch[pos] if pos < len(batch) and batch[pos] in left else left[0]
+                month, first_why = None, None
+                for m in [expected] + [x for x in left if x != expected]:
+                    why = accept_grid_page(tmp, self.year, m)
+                    if why is None:
+                        month = m
+                        break
+                    first_why = first_why or why
+                if month is None:
+                    failed.setdefault(expected, first_why or "sai lịch")
+                    self._reject(data, f"grid-{expected:02d}")
+                    self.on_event(f"[{name}] trang lịch ảnh {pos + 1}: OCR loại - không khớp tháng còn thiếu nào "
+                                  f"(so với tháng {expected}: {(first_why or '')[:80]})")
+                else:
+                    with self.lock:
+                        session.save(data, self.raw(f"g{month:02d}"))
+                    left.remove(month)
+                    failed.pop(month, None)
+                    note = "" if month == expected else f" (ảnh {pos + 1} về lệch thứ tự)"
+                    self.on_event(f"[{name}] trang lịch tháng {month}: OCR đạt, đã lưu{note}")
+                tmp.unlink(missing_ok=True)
         self.on_event(f"[{name}] trang lịch: còn thiếu {len(self.missing('g'))}/12")
         if turn.problem and isinstance(turn.problem, (QuotaExceeded, ThirdPartyIPRefused)) and left:
             raise turn.problem
@@ -453,12 +573,14 @@ class Book:
                 self.on_event(f"[{name}] trang lịch tháng {m}: {reason[:100]} - vẽ lại ({i + 1}/{GRID_REDO})")
                 redo = s.ask_images(prompts.grid_redo(self.year, m, reason[:160]), 1)
                 if redo.images:
-                    tmp = layout.tech(self.dir) / f"grid_check_{m:02d}{session.ext_of(redo.images[0])}"
+                    (Path(self.d) / "ocr").mkdir(parents=True, exist_ok=True)
+                    tmp = Path(self.d) / "ocr" / f"grid_check_{m:02d}{session.ext_of(redo.images[0])}"
                     tmp.write_bytes(redo.images[0])
                     why = accept_grid_page(tmp, self.year, m)
                     tmp.unlink(missing_ok=True)
                     if why is None:
-                        session.save(redo.images[0], self.raw(f"g{m:02d}"))
+                        with self.lock:
+                            session.save(redo.images[0], self.raw(f"g{m:02d}"))
                         break
                     failed[m] = why
                     self._reject(redo.images[0], f"grid-{m:02d}")
@@ -500,8 +622,20 @@ def month_captions(months) -> list[str]:
             entry = entry.get("caption")
         if not isinstance(entry, str) or not entry.strip():
             raise ValueError(f'"months[{i}]" must be a non-empty caption string')
-        out.append(entry.strip())
+        out.append(short_caption(entry))
     return out
+
+
+CAPTION_WORDS = 5
+
+
+def short_caption(text: str) -> str:
+    """Chú thích tháng in dưới ảnh nhỏ ở bìa sau + trên trang: ngắn như trang chính (2-5 từ). ChatGPT hay viết
+    "Rebel Heart — A relaxed portrait in ..." -> lấy phần tên trước dấu gạch / hai chấm, tối đa 5 từ."""
+    import re
+    head = re.split(r"\s+[—–-]\s+|:\s+|\.\s", text.strip(), maxsplit=1)[0].strip(" .,;:—–-")
+    words = head.split()
+    return " ".join(words[:CAPTION_WORDS]) or text.strip()[:30]
 
 
 def repair_month_captions(book: Path) -> None:
@@ -573,8 +707,11 @@ def write_concept(book: Path, meta: dict, year: int, item: dict) -> dict:
 
 # ------------------------------------------------------------------ cả hàng đợi
 def run_book(cfg: dict, d: Path, accts: Accounts, plus: list[str], stop: threading.Event | None = None,
-             on_event=print, *, step: str = "all") -> dict:
-    """Chạy cả cuốn hoặc một bước; bước thành công trả `next` cho bộ điều phối."""
+             on_event=print, *, step: str = "all", on_grid_ready=None) -> dict:
+    """Chạy cả cuốn hoặc một bước; bước thành công trả `next` cho bộ điều phối.
+    step "art": artwork + tên + bìa (on_grid_ready(d) được gọi ngay khi đủ artwork 1-10 để trang lịch chạy SONG SONG
+    trên tài khoản khác). step "grid": trang lịch các tháng đã có artwork - còn tháng chưa có artwork thì trả
+    next="grid_wait" để chạy lại sau. step "finish": dựng sách."""
     b = Book(cfg, d, on_event)
     b.status(status="running", reason="")
     try:
@@ -582,20 +719,29 @@ def run_book(cfg: dict, d: Path, accts: Accounts, plus: list[str], stop: threadi
             raise StageFailed("người dùng dừng")
         art_acc = b.item.get("art_account", "")
         if step in ("all", "art"):
-            art_acc = run_stage(accts, f"{d.name} artwork", b.art_work, stop=stop,
-                                prefer=lambda: (b.item.get("art_chat") or {}).get("account")) \
-                if (b.missing("m") or b.meta() is None or b.done("cover") is None or not b.item.get("book")) else art_acc
-            b._adopt() if b.meta() else None
-            b.status(art_account=art_acc)
+            b.on_grid_ready = on_grid_ready
+            b.status(art_state="running")
+            try:
+                art_acc = run_stage(accts, f"{d.name} artwork", b.art_work, stop=stop,
+                                    prefer=lambda: (b.item.get("art_chat") or {}).get("account")) \
+                    if (b.missing("m") or b.meta() is None or b.done("cover") is None or not b.item.get("book")) \
+                    else art_acc
+                b._adopt() if b.meta() else None
+            except BaseException:
+                b.status(art_state="failed")
+                raise
+            b.status(art_account=art_acc, art_state="done")
             if step == "art":
-                b.status(stage="chờ pool trang lịch")
+                b.status(stage="chờ trang lịch" if b.missing("g") else "chờ hậu kỳ")
                 return {"next": "grid"}
         if step in ("all", "grid"):
             if b.missing("g"):
                 run_stage(accts, f"{b.item.get('sku') or d.name} trang lịch", b.grid_work,
                           avoid={art_acc} if art_acc else None, stop=stop)
             if step == "grid":
-                b.status(stage="chờ pool hậu kỳ")
+                if b.missing("g"):                      # còn tháng chưa có artwork: chạy lại khi artwork xong
+                    return {"next": "grid_wait"}
+                b.status(stage="chờ hậu kỳ")
                 return {"next": "finish"}
         if stop and stop.is_set():
             raise StageFailed("người dùng dừng")
@@ -611,7 +757,7 @@ def run_book(cfg: dict, d: Path, accts: Accounts, plus: list[str], stop: threadi
     except Exception as e:  # noqa: BLE001 - lỗi lạ của một cuốn không làm dừng cả hàng đợi
         b.status(status="failed", reason=f"{type(e).__name__}: {str(e)[:250]}")
     on_event(f"✘ {d.name}: {b.item.get('reason', '')}")
-    return {"ok": False}
+    return {"ok": False, "status": b.item.get("status"), "reason": b.item.get("reason", "")}
 
 
 def run_queue(cfg: dict, on_event=print, stop: threading.Event | None = None, accts: Accounts | None = None,
@@ -644,26 +790,63 @@ def run_queue(cfg: dict, on_event=print, stop: threading.Event | None = None, ac
     ready = deque()
     finishing = deque()
     results: list[dict] = []
+    early: "queue.Queue[Path]" = queue.Queue()      # cuốn vừa đủ artwork 1-10 (báo từ luồng artwork)
+    stage: dict[str, dict] = {}                     # mục -> {"art": ..., "grid": ..., "fail": (status, reason)}
 
     def record(d, res):
         active.discard(d.name)
+        st = stage.pop(d.name, {})
+        if not res.get("ok") and st.get("fail"):    # lỗi của bước kia: ghi lại đúng trạng thái + lý do cuối
+            status, reason = st["fail"]
+            store.write(d, status=status or "failed", reason=reason)
         results.append(res)
         on_event(f"◆ CUỐN {'XONG' if res.get('ok') else 'LỖI'}: {store.read(d).get('sku') or d.name}")
 
     def cancelled(d):
         store.write(d, status="failed", reason="người dùng dừng; chạy tiếp để làm phần còn thiếu")
-        record(d, {"ok": False})
+        stage.pop(d.name, None)
+        active.discard(d.name)
+        results.append({"ok": False})
+        on_event(f"◆ CUỐN LỖI: {store.read(d).get('sku') or d.name}")
+
+    def queue_grid(d):
+        st = stage.setdefault(d.name, {})
+        if st.get("grid") in (None, "wait"):
+            st["grid"] = "queued"
+            ready.appendleft((d, "grid"))           # trang lịch sẵn sàng: ưu tiên trước cuốn mới
+
+    def settle(d):
+        """Cả hai bước đã dừng: đủ thì hậu kỳ, không thì ghi lỗi."""
+        st = stage.get(d.name, {})
+        art, grid = st.get("art"), st.get("grid")
+        if art in ("queued", "running") or grid in ("queued", "running"):
+            return
+        if art == "done" and grid == "done":
+            finishing.append((d, "finish"))
+        elif art == "done" and grid == "wait":
+            queue_grid(d)
+        elif art == "failed" or grid == "failed":
+            record(d, {"ok": False})
 
     with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="clone-ai") as ai, \
             ThreadPoolExecutor(max_workers=finish_workers, thread_name_prefix="clone-finish") as post:
         jobs = {}
         while True:
+            while True:                                 # trang lịch chạy sớm cho cuốn vừa đủ artwork 1-10
+                try:
+                    d = early.get_nowait()
+                except queue.Empty:
+                    break
+                if d.name in stage and not (stop and stop.is_set()):
+                    on_event(f"▶ {store.read(d).get('title') or d.name}: đủ artwork 1-10 - vẽ trang lịch song song")
+                    queue_grid(d)
             stopping = stop and stop.is_set()
             if stopping:
-                for queue in (ready, finishing):
-                    while queue:
-                        d, _ = queue.popleft()
-                        cancelled(d)
+                for q in (ready, finishing):
+                    while q:
+                        d, _ = q.popleft()
+                        if not any(dd.name == d.name for dd, _, _ in jobs.values()):
+                            cancelled(d)
             else:
                 # Rescan throughout the run, even while all earlier books are busy.
                 for d in store.pending(projects):
@@ -672,18 +855,25 @@ def run_queue(cfg: dict, on_event=print, stop: threading.Event | None = None, ac
                     if d.name not in claimed:
                         claimed.add(d.name)
                         active.add(d.name)
+                        stage[d.name] = {"art": "queued", "grid": None}
                         store.write(d, status="running", stage="chờ pool artwork", reason="")
                         ready.append((d, "art"))
-                for queue, executor, capacity, kind in ((ready, ai, workers, "ai"),
-                                                         (finishing, post, finish_workers, "finish")):
+                for q, executor, capacity, kind in ((ready, ai, workers, "ai"),
+                                                     (finishing, post, finish_workers, "finish")):
                     free = capacity - sum(k == kind for _, _, k in jobs.values())
-                    for _ in range(min(free, len(queue))):
-                        d, step = queue.popleft()
-                        future = executor.submit(run_book, cfg, d, accts, plus, stop, on_event, step=step)
+                    for _ in range(min(free, len(q))):
+                        d, step = q.popleft()
+                        st = stage.setdefault(d.name, {})
+                        if step in ("art", "grid"):
+                            st[step] = "running"
+                        cb = early.put if step == "art" else None
+                        future = executor.submit(run_book, cfg, d, accts, plus, stop, on_event, step=step,
+                                                 on_grid_ready=cb)
                         jobs[future] = (d, step, kind)
             if not jobs:
-                if not ready and not finishing:
+                if not ready and not finishing and early.empty():
                     break
+                time.sleep(0.05)
                 continue
             completed, _ = wait(jobs, timeout=0.25, return_when=FIRST_COMPLETED)
             for future in completed:
@@ -692,16 +882,79 @@ def run_queue(cfg: dict, on_event=print, stop: threading.Event | None = None, ac
                     res = future.result()
                 except Exception as e:  # isolate even failures before Book initialization
                     store.write(d, status="failed", reason=f"{type(e).__name__}: {str(e)[:250]}")
-                    res = {"ok": False}
+                    res = {"ok": False, "status": "failed", "reason": f"{type(e).__name__}: {str(e)[:250]}"}
+                st = stage.setdefault(d.name, {})
                 next_step = res.get("next")
-                if next_step and stop and stop.is_set():
-                    cancelled(d)
-                elif next_step == "grid":
-                    ready.appendleft((d, "grid"))  # finish ready books before opening more
-                elif next_step == "finish":
-                    finishing.append((d, "finish"))
-                else:
+                if step == "finish":
                     record(d, res)
+                    continue
+                if next_step and stop and stop.is_set():
+                    if step == "art":
+                        st["art"] = "failed"
+                    else:
+                        st["grid"] = "failed"
+                    st.setdefault("fail", ("failed", "người dùng dừng; chạy tiếp để làm phần còn thiếu"))
+                    settle(d)
+                    continue
+                if step == "art":
+                    if next_step == "grid":
+                        st["art"] = "done"
+                        if st.get("grid") is None:
+                            queue_grid(d)
+                        else:
+                            settle(d)
+                    else:
+                        st["art"] = "failed"
+                        st["fail"] = (res.get("status") or "failed", res.get("reason", ""))
+                        if st.get("grid") == "queued":      # trang lịch chưa bắt đầu: bỏ luôn
+                            for item in list(ready):
+                                if item[0].name == d.name and item[1] == "grid":
+                                    ready.remove(item)
+                            st["grid"] = "failed"
+                        settle(d)
+                elif step == "grid":
+                    if next_step == "finish":
+                        st["grid"] = "done"
+                    elif next_step == "grid_wait":
+                        st["grid"] = "wait"
+                    else:
+                        st["grid"] = "failed"
+                        st["fail"] = (res.get("status") or "failed", res.get("reason", ""))
+                    settle(d)
     ok = sum(1 for r in results if r.get("ok"))
     on_event(f"🏁 Xong {ok}/{len(results)} cuốn")
     return results
+
+
+def resume_book(book: Path, cfg: dict, on_event=print) -> dict | None:
+    """Nút "Làm tiếp" của trang chính cho cuốn clone còn thiếu ảnh: tìm mục hàng đợi của cuốn (angle_id clone-<id>),
+    đưa về chờ chạy, rồi chạy riêng phần vẽ (artwork / trang lịch) của mục đó. Hậu kỳ do trang chính làm tiếp."""
+    try:
+        concept = json.loads(layout.concept_file(book).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    item_id = str(concept.get("angle_id") or "").removeprefix("clone-")
+    try:
+        d = store.item_dir(cfg["projects_dir"], item_id)
+    except ValueError:
+        return None
+    if not (d / "item.json").is_file():
+        return None
+    plus = plus_accounts(cfg, on_event=on_event)
+    if not plus:
+        on_event("✘ Không có tài khoản ChatGPT Plus nào còn hạn - clone sản phẩm chỉ dùng tài khoản Plus")
+        return None
+    store.write(d, status="running", reason="")
+    accts = Accounts(cfg, plus, on_event)
+    b = Book(cfg, d, on_event)
+    try:
+        if b.missing("m") or b.meta() is None or b.done("cover") is None:
+            run_stage(accts, f"{d.name} artwork", b.art_work,
+                      prefer=lambda: (b.item.get("art_chat") or {}).get("account"))
+        if b.missing("g"):
+            run_stage(accts, f"{b.item.get('sku') or d.name} trang lịch", b.grid_work)
+        store.write(d, status="running", stage="dựng trang in + mockup + listing")
+        return {"ok": True}
+    except (StageFailed, BookRejected) as e:
+        store.write(d, status="rejected" if isinstance(e, BookRejected) else "failed", reason=str(e)[:300])
+        return {"ok": False}

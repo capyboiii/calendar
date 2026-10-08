@@ -27,7 +27,7 @@ class ClonePoolsTest(unittest.TestCase):
         calls = {}
         lock = threading.Lock()
 
-        def work(cfg, d, *args, step):
+        def work(cfg, d, *args, step, **kw):
             with lock:
                 calls.setdefault(d.name, []).append(step)
             if step == "art":
@@ -43,7 +43,7 @@ class ClonePoolsTest(unittest.TestCase):
         advanced = threading.Event()
         added = []
 
-        def work(cfg, d, *args, step):
+        def work(cfg, d, *args, step, **kw):
             if step == "finish" and d == self.first:
                 _, second = new_item(self.root)
                 added.append(second)
@@ -60,7 +60,7 @@ class ClonePoolsTest(unittest.TestCase):
     def test_new_books_use_idle_slots_while_first_art_is_still_running(self):
         started = threading.Barrier(4)
 
-        def work(cfg, d, *args, step):
+        def work(cfg, d, *args, step, **kw):
             if step == "art":
                 if d == self.first:
                     for _ in range(3):
@@ -76,7 +76,7 @@ class ClonePoolsTest(unittest.TestCase):
         stop = threading.Event()
         calls = []
 
-        def work(cfg, d, *args, step):
+        def work(cfg, d, *args, step, **kw):
             calls.append(step)
             stop.set()
             return {"next": "grid"}
@@ -88,7 +88,7 @@ class ClonePoolsTest(unittest.TestCase):
     def test_worker_exception_does_not_abort_other_books(self):
         new_item(self.root)
 
-        def work(cfg, d, *args, step):
+        def work(cfg, d, *args, step, **kw):
             if d == self.first:
                 raise RuntimeError("broken book")
             return {"next": {"art": "grid", "grid": "finish"}[step]} if step != "finish" else {"ok": True}

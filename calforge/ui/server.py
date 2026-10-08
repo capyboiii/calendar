@@ -128,11 +128,17 @@ class TaskManager:
             task = self.tasks.get(task_id)
             return task.to_dict(since) if task else None
 
-    def running(self, include_login: bool = False) -> Task | None:
-        """Việc chính đang chạy. Cửa sổ đăng nhập một tài khoản không tính (không được chặn batch)."""
+    def running(self, include_login: bool = False, include_clone: bool = False) -> Task | None:
+        """Việc chính đang chạy. Không tính: cửa sổ đăng nhập một tài khoản (không được chặn batch), và lượt
+        "Clone sản phẩm" (chạy SONG SONG với batch theo ý tưởng - hai bên chia tài khoản bằng khoá trong profile)."""
         with self.lock:
             return next((t for t in self.tasks.values() if t.status == "running"
-                         and (include_login or t.action != "login")), None)
+                         and (include_login or t.action != "login")
+                         and (include_clone or t.action != "clone")), None)
+
+    def clone_running(self) -> Task | None:
+        with self.lock:
+            return next((t for t in self.tasks.values() if t.status == "running" and t.action == "clone"), None)
 
     def login_running(self, profile: str) -> Task | None:
         with self.lock:
@@ -180,6 +186,10 @@ def _clone_items() -> dict:
     from ..llm import accounts, plan
     from ..llm.pool import read_dead
     cfg = config.load()
+    # Không còn việc nào đang chạy (lượt clone bị Dừng / tắt tool / tiến trình chết) mà cuốn vẫn ghi "running":
+    # dấu cũ - chuyển về "Bị dở" để giao diện không báo "Đang làm" mãi và bỏ / làm tiếp được.
+    if not TASK_MANAGER.running(include_clone=True):
+        store.mark_stopped(cfg["projects_dir"])
     pdir = accounts.get_profiles_dir(cfg)
     plus, unknown = [], []
     for d in sorted(p for p in pdir.iterdir() if p.is_dir() and not p.name.startswith(".")) if pdir.exists() else []:
@@ -446,8 +456,11 @@ class StudioHandler(SimpleHTTPRequestHandler):
             return self._serve_file(ROOT / "HUONG_DAN.html", "text/html; charset=utf-8")
         if path == "/" or path == "/index.html":
             return self._serve_file(STATIC_DIR / "index.html", "text/html; charset=utf-8")
-        if path == "/clone":                   # trang "Làm theo ảnh mẫu" (chỉ tài khoản Plus)
-            return self._serve_file(STATIC_DIR / "clone.html", "text/html; charset=utf-8")
+        if path == "/clone":                   # trang cũ "Làm theo ảnh mẫu": nay là "Clone sản phẩm" ở trang chính
+            self.send_response(HTTPStatus.FOUND)
+            self.send_header("Location", "/?mode=clone")
+            self.end_headers()
+            return None
         
         static_file = STATIC_DIR / path.lstrip("/")
         if static_file.is_file() and str(static_file.resolve()).startswith(str(STATIC_DIR.resolve())):
@@ -714,7 +727,11 @@ class StudioHandler(SimpleHTTPRequestHandler):
                 return self._send_json({"error": f"Invalid JSON: {e}"}, status=HTTPStatus.BAD_REQUEST)
             if path == "/api/task/stop":
                 batch_queue().stopped_by_user(str(body.get("id", "")))
-                return self._send_json({"ok": TASK_MANAGER.stop_task(str(body.get("id", "")))})
+                ok = TASK_MANAGER.stop_task(str(body.get("id", "")))
+                if not TASK_MANAGER.clone_running():          # vừa dừng lượt clone: cuốn dở về "Bị dở", bỏ được
+                    from ..clone import store
+                    store.mark_stopped(config.load()["projects_dir"])
+                return self._send_json({"ok": ok})
             target = (ROOT / str(body.get("path", "")).lstrip("/\\")).resolve()
             # CHỈ mở THƯ MỤC nằm trong tool: mở file bằng os.startfile = chạy file đó (python.exe, .bat...)
             if not target.is_relative_to(ROOT.resolve()) or not target.is_dir():
@@ -750,7 +767,7 @@ class StudioHandler(SimpleHTTPRequestHandler):
                 body = json.loads(self.rfile.read(length).decode("utf-8")) if length > 0 else {}
             except Exception:
                 return self._send_json({"error": "Dữ liệu không hợp lệ"}, status=HTTPStatus.BAD_REQUEST)
-            busy = TASK_MANAGER.running()
+            busy = TASK_MANAGER.running(include_clone=True)
             if busy and busy.action != "login":
                 return self._send_json({"error": f"Đang chạy: {busy.description}. Chờ xong rồi đăng nhập."},
                                        status=HTTPStatus.CONFLICT)
@@ -1053,11 +1070,13 @@ class StudioHandler(SimpleHTTPRequestHandler):
                 store.add(projects, images, group=str(body.get("group", "")), year=int(body.get("year") or 2027),
                           mockup_mode=str(body.get("mockup_mode") or "ai"))
             elif op == "remove":
-                store.remove(projects, str(body.get("id", "")))
+                store.remove(projects, str(body.get("id", "")), running_now=bool(TASK_MANAGER.clone_running()))
             elif op == "retry":
                 store.retry(projects, str(body.get("id", "")))
             elif op == "start":
-                busy = TASK_MANAGER.running()
+                # chạy SONG SONG với batch theo ý tưởng (hai bên chia tài khoản bằng khoá trong profile); chỉ chặn khi
+                # đã có một lượt clone đang chạy
+                busy = TASK_MANAGER.clone_running()
                 if busy:
                     return self._send_json({"error": f"Đang chạy việc khác: {busy.description}. Chờ xong hoặc bấm Dừng."},
                                            status=HTTPStatus.CONFLICT)

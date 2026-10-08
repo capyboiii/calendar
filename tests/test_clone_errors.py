@@ -426,3 +426,33 @@ class CloneRedoTest(unittest.TestCase):
         st = pipeline.produce_images(book, {**cfg, "imagegen": {}}, on_event=lambda *_: None)
         self.assertEqual(st["stage"], "images")
         self.assertIn("g07", st["reason"])
+
+
+class CloneManyAccountsTest(unittest.TestCase):
+    def test_twenty_plus_accounts_twenty_four_books_random_faults(self):
+        """Như bộ test 40 tài khoản của trang chính: nhiều tài khoản Plus chạy song song, lỗi ngẫu nhiên (hết lượt
+        giữa chừng, lỗi server, tài khoản bị đăng xuất) - đủ cuốn, không tài khoản nào làm 2 việc một lúc."""
+        import random
+        rnd = random.Random(42)
+        lock = threading.Lock()
+        plus = [f"acc{i}" for i in range(1, 21)]
+
+        def faults(acc, kind, n):
+            with lock:
+                r = rnd.random()
+            if acc == "acc7" and kind == "open":
+                return NavError("tài khoản bị đăng xuất: trang ChatGPT đòi đăng nhập lại")
+            if r < 0.04:
+                return partial(QuotaExceeded("You've hit the plus plan limit"))
+            if r < 0.10:
+                return TempError("ChatGPT báo lỗi: 'Internal server error'")
+            return None
+        cfg, ds, world, pool, go = setup(self, n_books=24, faults=faults, plus=plus)
+        with mock.patch.object(run, "MAX_SESSIONS", 12):
+            go()
+        for d in ds:
+            complete(self, d)
+        self.assertEqual(world.peak_same, 1)                               # một tài khoản chỉ một việc một lúc
+        self.assertGreater(len(set(world.used)), 10)                       # thật sự chạy trải trên nhiều tài khoản
+        self.assertIn(("acc7", "logged_out"), pool.dropped)
+        self.assertEqual(pool.use, {})

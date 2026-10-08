@@ -218,10 +218,14 @@ def produce_images(concept_dir: Path, cfg: dict, *, on_event=print) -> dict | No
     if concept.get("source") == "clone":
         # cuốn "Làm theo ảnh mẫu": không có ý tưởng/cảnh để dựng prompt của trang chính - ảnh do trang kia vẽ
         lacking = [j for j in products.art_jobs(concept) if plan.job_done(concept_dir, j) is None]
+        if lacking:          # vẽ tiếp phần còn thiếu bằng luồng clone (chỉ tài khoản Plus), rồi xem lại
+            from .clone.run import resume_book
+            on_event(f"===== Clone sản phẩm: {concept_dir.name} còn thiếu {', '.join(lacking)} - vẽ tiếp =====")
+            resume_book(concept_dir, cfg, on_event)
+            lacking = [j for j in products.art_jobs(concept) if plan.job_done(concept_dir, j) is None]
         if lacking:
             return _status(concept_dir, stage="images", ok=False,
-                           reason="cuốn làm theo ảnh mẫu còn thiếu ảnh " + ", ".join(lacking)
-                                  + " - bấm Làm tiếp ở trang Làm theo ảnh mẫu")
+                           reason="cuốn clone còn thiếu ảnh " + ", ".join(lacking) + " - bấm Làm tiếp khi tài khoản Plus có lượt")
         on_event(f"===== Sản xuất: {concept_dir.name} (làm theo ảnh mẫu: đủ ảnh) =====")
         upscale_concept(concept_dir, on_event)
         return None

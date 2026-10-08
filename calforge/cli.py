@@ -310,7 +310,9 @@ def cmd_rename_sku(args, cfg):
 
 
 def cmd_clone_run(args, cfg):
+    import os
     from .clone.run import run_queue
+    os.environ["CALFORGE_CLONE_RUN"] = "1"          # bộ điều phối của tiến trình clone: không để dành Plus cho ai
     if args.show:                                   # hiện cửa sổ Chrome để người dùng xem tool làm việc
         cfg.setdefault("imagegen", {})["headless"] = False
     res = run_queue(cfg)

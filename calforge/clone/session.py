@@ -24,6 +24,7 @@ THINK_LABEL_JS = """() => { const s = document.querySelector('[role="menu"] [rol
 EAGER_JS = """() => { for (const im of document.querySelectorAll('main img, [role="main"] img, article img'))
   if (im.loading === 'lazy') im.loading = 'eager'; }"""
 STUCK_S = 240             # số ảnh đứng yên bấy nhiêu giây mà trang vẫn còn dấu "đang vẽ" (kẹt): nhận phần đã có
+PROGRESS_S = 60           # lúc chờ một lượt nhiều ảnh: báo tiến độ mỗi phút
 PER_IMAGE_S = 300        # một ảnh vẽ tối đa ~5 phút
 SETTLE_S = 20             # số ảnh mới đứng yên bấy nhiêu giây (không còn vẽ) mới chốt lượt
 QUIET_S = 90              # đã có vài ảnh, lượt im hẳn bấy nhiêu giây mà vẫn thiếu: chốt phần đã có
@@ -65,6 +66,7 @@ class Session:
         self.clock = clock
         self.started = False
         self.on_sent = None                          # gọi (link chat) ngay sau khi gửi tin nhắn đầu: để chạy lại lấy ảnh cũ
+        self.progress = None                         # gọi (đã có, cần, đang vẽ?, số giây) mỗi phút khi chờ ảnh
 
     def open(self, url: str | None = None) -> None:
         """Mở ChatGPT (url = mở lại một cuộc chat cũ để lấy ảnh đã vẽ và nhắn tiếp trong đó)."""
@@ -72,6 +74,7 @@ class Session:
             self.page._calforge_rate = driver.RateWatch(self.page)
         driver.open_home(self.page, url or driver.URL)
         self.w._find(self.page, driver.SEL_PROMPT, 60_000)
+        ensure_chat_mode(self.page)                   # tài khoản Edu/K12: về "Chat / Trò chuyện" trước khi gửi
         from ..llm import plan
         plan.record(self.page, self.w.profile_dir)    # gói Plus + hạn: cập nhật luôn
         self.thinking = self.set_thinking_high()      # mức thinking cao nhất trước khi prompt
@@ -106,10 +109,32 @@ class Session:
                 pass
             return ""
 
+    def attach(self, files: list[Path]) -> None:
+        """Đính ảnh vào ô chat cho chắc: đổi sang JPG nhẹ (artwork PNG 2-3MB -> ~0.4MB, tải nhanh ~5 lần), đính
+        không kịp thì xoá ảnh dở trong ô chat rồi đính lại một lần. Vẫn không được = lỗi mạng (NavError): bộ điều
+        phối cho tài khoản nghỉ ngắn rồi chuyển tài khoản khác, không tính là phiên hỏng."""
+        light = [light_copy(Path(f)) for f in files]
+        for attempt in range(2):
+            try:
+                self.w._attach(self.page, light)
+                return
+            except TempError as e:
+                if attempt:
+                    raise driver.NavError(f"không đính kèm được ảnh (mạng chậm / tải ảnh lên lỗi): {e}") from e
+                self._clear_attachments()
+                self.page.wait_for_timeout(2000)
+
+    def _clear_attachments(self) -> None:
+        try:
+            for b in self.page.locator('form button[aria-label*="Remove" i]').all():
+                b.click(timeout=2000)
+        except Exception:  # noqa: BLE001 - không xoá được thì lần đính sau vẫn thử
+            pass
+
     def ask_images(self, prompt: str, want: int, attach: list[Path] | None = None) -> Turn:
         """Gửi prompt (+ ảnh đính kèm), chờ lượt xong, trả mọi ảnh mới (tối đa `want`, bỏ ảnh trùng)."""
         if attach:
-            self.w._attach(self.page, list(attach))
+            self.attach(list(attach))
         before = self.w._send(self.page, prompt)
         if self.on_sent:
             try:
@@ -183,6 +208,7 @@ class Session:
         old = {im["src"] for im in before.get("pageImgs", []) + before.get("imgs", [])}
         srcs: list[str] = []
         last_change, progressed = start, False
+        reported = start
         turn = Turn()
         tail = ""
         while self.clock() < deadline:
@@ -217,6 +243,12 @@ class Session:
                     turn.problem = QuotaExceeded(limited)
                     break
             idle = self.clock() - last_change
+            if self.progress and self.clock() - reported >= PROGRESS_S:   # nhịp báo: lượt nhiều ảnh mất 15-25 phút
+                reported = self.clock()
+                try:
+                    self.progress(len(srcs), want, busy, int(self.clock() - start))
+                except Exception:  # noqa: BLE001 - báo tiến độ lỗi không làm hỏng lượt vẽ
+                    pass
             # Đủ ảnh mà trang vẫn giữ dấu "đang vẽ" (khung chờ / nút Stop kẹt sau lượt nhiều ảnh): ảnh đứng yên 60s
             # là xong. Thiếu ảnh mà đứng yên STUCK_S giây: nhận phần đã có, phần thiếu nhắn vẽ tiếp.
             if new_turn and srcs and ((len(srcs) >= want and idle >= 60) or idle >= STUCK_S * self.scale):
@@ -249,6 +281,59 @@ def _problem(kind: str, tail: str) -> Exception:
     if kind in ("refused", "ip_refused"):
         return ThirdPartyIPRefused(tail[-300:])
     return TempError(f"ChatGPT báo lỗi: {tail[-160:]!r}")
+
+
+def light_copy(src: Path, long_side: int = 1600) -> Path:
+    """Bản JPG nhẹ để đính kèm (cạnh dài tối đa 1600px, chất lượng 90): ChatGPT vẫn thấy rõ màu, nét, chữ; tải lên
+    nhanh hơn nhiều khi mạng chậm. Lưu ở ky_thuat/dinh_kem, dùng lại nếu ảnh gốc không đổi."""
+    from PIL import Image
+    src = Path(src)
+    try:
+        if src.stat().st_size <= 600_000 and src.suffix.lower() in (".jpg", ".jpeg"):
+            return src
+        out_dir = src.parent.parent / "ky_thuat" / "dinh_kem"   # _he_thong/ky_thuat/dinh_kem (không lẫn vào anh_ai)
+        out = out_dir / f"{src.stem}.jpg"
+        if out.is_file() and out.stat().st_mtime >= src.stat().st_mtime:
+            return out
+        out_dir.mkdir(parents=True, exist_ok=True)
+        with Image.open(src) as im:
+            im = im.convert("RGB")
+            im.thumbnail((long_side, long_side))
+            tmp = out.with_suffix(".tmp")
+            im.save(tmp, "JPEG", quality=90)
+        tmp.replace(out)
+        return out
+    except Exception:  # noqa: BLE001 - không làm được bản nhẹ: đính ảnh gốc
+        return src
+
+
+# Tài khoản ChatGPT Edu / K12 có công tắc "Chat | Work" ("Trò chuyện | Công việc") ở đầu trang (nhóm nút aria-label
+# "Composer mode", nút đầu = Chat, nút đang chọn có aria-pressed="true"; xem thật trên acc1 09/10/2026). Chỉ dùng cho
+# Clone sản phẩm: luôn về Chat trước khi gửi prompt.
+MODE_JS = """() => {
+  const g = document.querySelector('[role="group"][aria-label="Composer mode"]');
+  if (!g) return {has: false};
+  const b = Array.from(g.querySelectorAll('button'));
+  const on = (x) => (x.getAttribute('aria-pressed') || x.getAttribute('aria-selected')) === 'true';
+  return {has: b.length > 0, chat: b.length ? on(b[0]) : true};
+}"""
+
+
+def ensure_chat_mode(page) -> str:
+    """Đang ở "Work / Công việc" thì bấm về "Chat / Trò chuyện". "" = không có công tắc / đã ở Chat, "switched" =
+    vừa chuyển, "failed" = không chuyển được (vẫn gửi bình thường, không chặn việc)."""
+    try:
+        st = page.evaluate(MODE_JS)
+        if not st.get("has") or st.get("chat"):
+            return ""
+        page.locator('[role="group"][aria-label="Composer mode"] button').first.click(timeout=8000)
+        for _ in range(10):
+            page.wait_for_timeout(500)
+            if page.evaluate(MODE_JS).get("chat"):
+                return "switched"
+        return "failed"
+    except Exception:  # noqa: BLE001 - giao diện đổi: không chặn việc vẽ
+        return "failed"
 
 
 def ext_of(data: bytes) -> str:
