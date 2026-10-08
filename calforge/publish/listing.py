@@ -56,6 +56,11 @@ def write_listing(concept_dir: Path, cfg: dict | None = None, on_event=print) ->
     """listing.json của cuốn. Cuốn chọn "Listing: Etsy" (concept["listing_style"]) và có cfg: ChatGPT viết bản
     chuẩn Etsy (publish/etsy_listing.py); không được thì lùi về bản thường dựng từ concept."""
     concept = json.loads(layout.concept_file(concept_dir).read_text(encoding="utf-8"))
+    if concept.get("source") == "clone" and layout.listing_file(concept_dir).is_file():
+        # trang "Làm theo ảnh mẫu": ChatGPT đã viết listing Etsy lúc nhìn 12 artwork - giữ nguyên, không hỏi lại
+        listing = json.loads(layout.listing_file(concept_dir).read_text(encoding="utf-8"))
+        write_listing_txt(concept_dir, listing)
+        return listing
     if cfg is not None and concept.get("listing_style") == "etsy":
         from .etsy_listing import write as write_etsy
         layout.tech(concept_dir, "listing_etsy").mkdir(parents=True, exist_ok=True)

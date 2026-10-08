@@ -20,6 +20,23 @@ HEADER = [
 ]
 
 
+CATEGORY = "Calendars & Planners"            # cố định (người dùng chốt 08/10/2026)
+# Bảng giá cố định USD (giá bán, giá gạch) theo khổ + định dạng; GBP / CAD quy đổi theo tỉ giá trong cài đặt shop.
+PRICES = {("11", False): (19.95, 29.95), ("11", True): (7.95, 12.95),
+          ("14", False): (24.95, 39.95), ("14", True): (9.95, 14.95)}
+
+
+def body_html(listing: dict) -> str:
+    """Mô tả HTML có phần Details đủ 2 khổ (11 x 8.5 và 14 x 11.5): cuốn làm trước khi thêm khổ 14 thì thay phần
+    Details cũ bằng bản hiện tại."""
+    from .etsy_listing import DETAILS_HTML
+    desc = listing.get("description", "") or ""
+    if "14 x 11.5" in desc:
+        return desc
+    cut = desc.find("<p><strong>Details</strong></p>")
+    return (desc[:cut] if cut >= 0 else desc) + DETAILS_HTML
+
+
 def _money(value: float) -> str:
     return f"{float(value):.2f}"
 
@@ -46,18 +63,25 @@ def _book_rows(cdir: Path, shop: dict) -> list[dict]:
         cover = (files.get(f"{label}/front_cover.png") or {}).get("url", "")
         if not cover:
             continue
+        design = "|".join((files.get(f"{label}/{pg.name}") or {}).get("url", "")
+                          for pg in r2.print_pages(cdir, size["format_id"]))
         for variant in shop["variants"]:
             printable = variant["format"].lower() == "printable"
             if printable and not (files.get(layout.printable_file(cdir, size["format_id"]).name) or {}).get("url"):
                 continue
             if not printable and variant["finish"] not in finishes.get(label, [variant["finish"]]):
                 continue
-            usd = float(variant["price"]) + (0 if printable else float(size.get("spiral_add", 0)))
-            compare = float(variant["compare"]) + (0 if printable else float(size.get("spiral_add", 0)))
+            fixed = PRICES.get((str(size["sku"]), printable))
+            if fixed:
+                usd, compare = fixed
+            else:                                     # khổ / định dạng ngoài bảng: tính như cũ
+                usd = float(variant["price"]) + (0 if printable else float(size.get("spiral_add", 0)))
+                compare = float(variant["compare"]) + (0 if printable else float(size.get("spiral_add", 0)))
             sku = f"{base_sku}-{size['sku']}{variant['sku']}"
             row = dict.fromkeys(HEADER, "")
             row.update({
-                "Handle": handle, "Product Category": "Calendaria",
+                "Handle": handle, "Product Category": CATEGORY,
+                "Is Digital": "TRUE" if printable else "FALSE",       # từng biến thể: bản in tại nhà là hàng số
                 "Option1 Value": size["label"], "Option2 Value": variant["format"],
                 # Calendaria requires every variant to have the same number of option values.
                 # The storefront can hide Paper when format=Printable, but the import still needs a placeholder.
@@ -70,12 +94,14 @@ def _book_rows(cdir: Path, shop: dict) -> list[dict]:
                 "Variant Image": previews[0] if previews else cover,
                 "Variant File": (files.get(layout.printable_file(cdir, size["format_id"]).name) or {}).get("url", "")
                     if printable else "",
+                # bản in (Spiral): link các trang PNG in của khổ đó đã đẩy lên R2, đúng thứ tự cuốn, nối bằng "|"
+                "Variant Design": "" if printable else design,
             })
             if first:
                 row.update({
-                    "Title": listing["title"], "Body (HTML)": listing.get("description", ""),
+                    "Title": listing["title"], "Body (HTML)": body_html(listing),
                     "Type": shop["type"], "Tags": ", ".join(listing.get("tags", [])),
-                    "Is Digital": "FALSE", "Is Trademark": "FALSE",
+                    "Is Trademark": "FALSE",
                     "Option1 Name": shop["size_option"], "Option2 Name": shop["format_option"],
                     "Option3 Name": "Paper", "Image Src": previews[0] if previews else cover,
                 })
@@ -84,7 +110,7 @@ def _book_rows(cdir: Path, shop: dict) -> list[dict]:
 
     for image_url in previews[1:]:
         row = dict.fromkeys(HEADER, "")
-        row.update({"Handle": handle, "Product Category": "Calendaria", "Image Src": image_url})
+        row.update({"Handle": handle, "Product Category": CATEGORY, "Image Src": image_url})
         rows.append(row)
     return rows
 

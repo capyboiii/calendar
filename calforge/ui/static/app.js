@@ -78,6 +78,7 @@ function bindEvents() {
   $('btnNoticeAccounts').addEventListener('click', openAccounts);
   $('btnAccAdd').addEventListener('click', addAccount);
   $('btnBulkGo').addEventListener('click', startBulkLogin);
+  $('btnPlanCheck').addEventListener('click', checkPlans);
   $('btnR2Settings').addEventListener('click', openR2);
   $('btnR2Save').addEventListener('click', saveR2);
   $('btnShop').addEventListener('click', () => openShopPicker('printify'));
@@ -838,6 +839,43 @@ function openAccounts() {
   $('accModal').hidden = false;
 }
 
+// Nhãn gói ChatGPT: Plus (hết hạn dd/mm, còn N ngày) - đọc lúc tool mở Chrome tài khoản hoặc bấm "Kiểm tra gói".
+function planTag(p) {
+  if (!p) return '<span class="plan-tag" title="Chưa đọc được gói - bấm Kiểm tra gói Plus">Gói: ?</span>';
+  const d = (p.expires_date || '').split('-').reverse().join('/');
+  let cls = '', text = p.label;
+  if (p.expired) {
+    cls = 'expired'; text += ` · đã hết hạn ${d}`;
+  } else if (p.plan !== 'free' && p.days_left != null) {
+    cls = p.days_left <= 3 ? 'soon' : 'paid';
+    text += ` · hết hạn ${d} (còn ${p.days_left} ngày)`;
+  } else if (p.plan === 'free' && d) {
+    text += ` · Plus đã hết ${d}`;
+  }
+  return `<span class="plan-tag ${cls}" title="Kiểm tra lúc ${esc(p.checked_at || '')}">${esc(text)}</span>`;
+}
+
+let planPoll = null;
+async function checkPlans() {
+  const res = await api('/api/accounts/plan-check', {}).catch((e) => ({ error: e.message }));
+  if (res.error) { toast(res.error, 'error'); return; }
+  $('btnPlanCheck').disabled = true;
+  clearInterval(planPoll);
+  const tick = async () => {
+    const s = await api('/api/accounts/plan-check/status').catch(() => null);
+    if (!s) return;
+    $('planCheckNote').textContent = s.active ? `Đang kiểm tra ${s.done}/${s.total}…`
+      : `Xong lúc ${s.at}` + (s.skipped.length ? ` · bỏ qua: ${s.skipped.join('; ')}` : '');
+    if (!s.active) {
+      clearInterval(planPoll);
+      $('btnPlanCheck').disabled = false;
+      loadAccounts();
+    }
+  };
+  planPoll = setInterval(tick, 2000);
+  tick();
+}
+
 function renderAccounts() {
   const ul = $('accList');
   if (!S.accounts.length) {
@@ -851,9 +889,11 @@ function renderAccounts() {
       : acc.is_locked ? ['Đang mở', 'warn'] : acc.has_session ? ['Sẵn sàng', 'ok'] : ['Chưa đăng nhập', 'bad'];
     li.innerHTML = `
       <span class="dot ${state[1]}"></span>
-      <strong>${esc(acc.name)}</strong>
-      <span class="muted">${state[0]}${acc.email ? ` · ${esc(acc.email)}` : ''}</span>
-      <span class="grow"></span>`;
+      <div class="acc-info">
+        <div class="acc-line"><strong>${esc(acc.name)}</strong>
+          <span class="muted" title="${esc(acc.email || '')}">${state[0]}${acc.email ? ` · ${esc(acc.email)}` : ''}</span></div>
+        <div>${planTag(acc.plan)}</div>
+      </div>`;
     const busy = LOGGING_IN.has(acc.name);
     const lb = button(busy ? 'Đang đăng nhập…' : acc.has_session ? 'Đăng nhập lại' : 'Đăng nhập', 'btn-small',
       () => loginAccount(acc.name));

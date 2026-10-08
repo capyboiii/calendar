@@ -160,6 +160,44 @@ class TaskManager:
 
 
 TASK_MANAGER = TaskManager()
+CLONE_MAX_BODY = 120 * 1024 * 1024
+
+
+def _clone_cover(book: str | None) -> str:
+    """Ảnh đại diện của cuốn: ảnh quảng cáo bìa nếu đã có, chưa thì tranh bìa AI."""
+    if not book or not Path(book).is_dir():
+        return ""
+    for pattern in ("preview/01_*.jpg", "_he_thong/anh_ai/cover.*", "_he_thong/anh_ai/m01.*"):
+        hit = sorted(Path(book).glob(pattern))
+        if hit:
+            return str(hit[0])
+    return ""
+
+
+def _clone_items() -> dict:
+    """Hàng đợi trang "Làm theo ảnh mẫu" + tài khoản Plus (đọc nhãn gói đã lưu, không mở Chrome) + việc đang chạy."""
+    from ..clone import store
+    from ..llm import accounts, plan
+    from ..llm.pool import read_dead
+    cfg = config.load()
+    pdir = accounts.get_profiles_dir(cfg)
+    plus, unknown = [], []
+    for d in sorted(p for p in pdir.iterdir() if p.is_dir() and not p.name.startswith(".")) if pdir.exists() else []:
+        if read_dead(d) or not accounts.has_chatgpt_session(d):
+            continue
+        info = plan.read(d)
+        if info is None:
+            unknown.append(d.name)
+        elif info.get("plan") in ("plus", "pro") and info.get("active", True) and not info.get("expired"):
+            plus.append({"name": d.name, "expires": info.get("expires_date", ""), "days_left": info.get("days_left")})
+    items = store.items(Path(cfg["projects_dir"]))
+    for it in items:
+        d = store.root(cfg["projects_dir"]) / it.get("id", "")
+        it["ref_paths"] = [str(p) for p in store.refs(d)]
+        it["cover"] = _clone_cover(it.get("book"))
+    task = next(({k: v for k, v in t.items() if k != "logs"} for t in TASK_MANAGER.list_tasks()
+                 if t.get("action") == "clone"), None)
+    return {"items": items, "plus": plus, "unknown": unknown, "task": task}
 
 
 def _free_profile(name: str) -> str:
@@ -408,6 +446,8 @@ class StudioHandler(SimpleHTTPRequestHandler):
             return self._serve_file(ROOT / "HUONG_DAN.html", "text/html; charset=utf-8")
         if path == "/" or path == "/index.html":
             return self._serve_file(STATIC_DIR / "index.html", "text/html; charset=utf-8")
+        if path == "/clone":                   # trang "Làm theo ảnh mẫu" (chỉ tài khoản Plus)
+            return self._serve_file(STATIC_DIR / "clone.html", "text/html; charset=utf-8")
         
         static_file = STATIC_DIR / path.lstrip("/")
         if static_file.is_file() and str(static_file.resolve()).startswith(str(STATIC_DIR.resolve())):
@@ -486,6 +526,11 @@ class StudioHandler(SimpleHTTPRequestHandler):
         if path == "/api/queue":
             return self._send_json(batch_queue().snapshot())
 
+        if path == "/api/clone/items":
+            return self._send_json(_clone_items())
+        if path == "/api/accounts/plan-check/status":
+            from ..llm import plan
+            return self._send_json(plan.status())
         if path == "/api/accounts/bulk-login/status":
             from ..llm import bulk_login
             return self._send_json(bulk_login.status())
@@ -688,6 +733,15 @@ class StudioHandler(SimpleHTTPRequestHandler):
             data = {k: str(body[k]).strip() for k in keep if k in body and str(body[k]).strip()}
             config.save_section("r2", data)
             return self._send_json({"ok": True})
+
+        if path.startswith("/api/clone/"):
+            return self._api_clone(path.rsplit("/", 1)[-1])
+
+        if path == "/api/accounts/plan-check":
+            # Mở ngầm lần lượt từng tài khoản (không đang dùng) để đọc gói Free/Plus + ngày hết hạn.
+            from ..llm import plan
+            started = plan.start_check(config.load())
+            return self._send_json({"ok": True, "started": started, **plan.status()})
 
         if path == "/api/accounts/bulk-login":
             # Mật khẩu chỉ đi qua RAM của máy chủ tới cửa sổ Chrome: không ghi log, không trả về, không lưu đĩa.
@@ -973,6 +1027,52 @@ class StudioHandler(SimpleHTTPRequestHandler):
             self.wfile.write(data)
         except Exception as e:
             self._send_json({"error": str(e)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+
+    def _api_clone(self, op: str):
+        """Trang "Làm theo ảnh mẫu": thêm cuốn (ảnh tham chiếu base64), xoá, chạy lại, bắt đầu chạy hàng đợi."""
+        import base64
+        from ..clone import store
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+            if length > CLONE_MAX_BODY:
+                self.rfile.read(min(length, 1 << 20))
+                return self._send_json({"error": "Ảnh tải lên quá lớn (tối đa ~120 MB mỗi lần)"},
+                                       status=HTTPStatus.REQUEST_ENTITY_TOO_LARGE)
+            body = json.loads(self.rfile.read(length).decode("utf-8")) if length > 0 else {}
+        except Exception as e:
+            return self._send_json({"error": f"Invalid JSON: {e}"}, status=HTTPStatus.BAD_REQUEST)
+        cfg = config.load()
+        projects = Path(cfg["projects_dir"])
+        try:
+            if op == "add":
+                images = []
+                for im in body.get("images") or []:
+                    data = str(im.get("data", ""))
+                    images.append((str(im.get("name", "anh.png"))[:80],
+                                   base64.b64decode(data.split(",", 1)[-1], validate=False)))
+                store.add(projects, images, group=str(body.get("group", "")), year=int(body.get("year") or 2027),
+                          mockup_mode=str(body.get("mockup_mode") or "ai"))
+            elif op == "remove":
+                store.remove(projects, str(body.get("id", "")))
+            elif op == "retry":
+                store.retry(projects, str(body.get("id", "")))
+            elif op == "start":
+                busy = TASK_MANAGER.running()
+                if busy:
+                    return self._send_json({"error": f"Đang chạy việc khác: {busy.description}. Chờ xong hoặc bấm Dừng."},
+                                           status=HTTPStatus.CONFLICT)
+                show = bool(body.get("show"))
+                tid = TASK_MANAGER.start_task(["clone-run"] + (["--show"] if show else []),
+                                              "Làm theo ảnh mẫu (chỉ tài khoản Plus)"
+                                              + (" - hiện Chrome" if show else ""), "clone")
+                return self._send_json({"task_id": tid, **_clone_items()})
+            else:
+                return self._send_json({"error": "Not found"}, status=HTTPStatus.NOT_FOUND)
+        except ValueError as e:
+            return self._send_json({"error": str(e)}, status=HTTPStatus.BAD_REQUEST)
+        except OSError as e:
+            return self._send_json({"error": f"Không lưu được: {e}"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+        return self._send_json(_clone_items())
 
     def _send_json(self, data: Any, status: HTTPStatus = HTTPStatus.OK):
         payload = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")

@@ -302,6 +302,12 @@ input[type="text"], input[type="number"], select {
 .pill.done { background: var(--ok-soft); color: var(--ok); }
 .pill.error { background: var(--bad-soft); color: var(--bad); }
 .pill.rejected { background: #f6d8d2; color: #8f2f20; }
+.plan-tag { flex: none; font-size: .75rem; font-weight: 600; padding: 2px 9px; border-radius: 999px;
+  background: var(--surface-2); color: var(--muted); white-space: nowrap; }
+.plan-tag.paid { background: var(--ok-soft); color: var(--ok); }
+.plan-tag.soon { background: var(--warn-soft); color: var(--warn); }
+.plan-tag.expired { background: var(--bad-soft); color: var(--bad); }
+.acc-plan-bar { display: flex; gap: 10px; align-items: center; margin: 10px 0 4px; flex-wrap: wrap; }
 .pill.pending { background: var(--warn-soft); color: var(--warn); }
 
 /* ---------- modal ---------- */
@@ -378,7 +384,13 @@ input[type="text"], input[type="number"], select {
 .bulk-list:empty { display: none; }
 .bulk-list li { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: .9rem; }
 .bulk-list .why { flex-basis: 100%; padding: 0 0 0 17px; }
-.acc-list .muted { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 260px; }
+#accModal .modal-card { width: min(680px, 100%); }
+.acc-list .acc-info { flex: 1; min-width: 0; display: grid; gap: 4px; }
+.acc-list .acc-line { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.acc-list .acc-line strong { flex: none; }
+.acc-list .muted { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.acc-list li > .btn { flex: none; white-space: nowrap; }
+.acc-list .plan-tag { display: inline-block; }
 
 /* ---------- toast ---------- */
 .toasts { position: fixed; right: 20px; bottom: 20px; display: grid; gap: 8px; z-index: 30; max-width: min(420px, calc(100vw - 32px)); }

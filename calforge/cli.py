@@ -228,8 +228,17 @@ def cmd_redo(args, cfg):
     from .pipeline import produce, redo_pages
 
     d = _concept_dir(args.concept)
+    pages = [p.strip() for p in args.pages.split(",") if p.strip()]
+    from .clone.redo import is_clone, redo as clone_redo
+    if is_clone(d):              # cuốn "Làm theo ảnh mẫu": đính đúng ảnh lỗi, vẽ lại y chang + sửa lỗi nhân vật (acc Plus)
+        try:
+            st = clone_redo(d, pages, cfg)
+        except ValueError as e:
+            sys.exit(f"✘ {e}")
+        _print_status([{"concept": args.concept, **st}])
+        sys.exit(0 if st.get("ok") else 1)
     try:
-        redo_pages(d, [p.strip() for p in args.pages.split(",") if p.strip()])
+        redo_pages(d, pages)
     except ValueError as e:
         sys.exit(f"✘ {e}")
     st = produce(d, cfg, printify=False)
@@ -298,6 +307,14 @@ def cmd_rename_sku(args, cfg):
     from .sku_rename import rename_all
     done = rename_all(Path(cfg["projects_dir"]), shop=shop_settings(cfg))
     print(f"Đã đổi tên {len(done)} cuốn sang SKU" if done else "Không còn cuốn nào cần đổi tên")
+
+
+def cmd_clone_run(args, cfg):
+    from .clone.run import run_queue
+    if args.show:                                   # hiện cửa sổ Chrome để người dùng xem tool làm việc
+        cfg.setdefault("imagegen", {})["headless"] = False
+    res = run_queue(cfg)
+    sys.exit(0 if res and all(r.get("ok") for r in res) else (1 if res else 0))
 
 
 def cmd_ui(args, cfg):
@@ -455,6 +472,10 @@ def main(argv=None):
 
     p = sub.add_parser("rename-sku", help="đổi tên thư mục các cuốn cũ sang mã SKU (giữ SKU đã xuất)")
     p.set_defaults(func=cmd_rename_sku)
+
+    p = sub.add_parser("clone-run", help="chạy hàng đợi trang Làm theo ảnh mẫu (chỉ tài khoản Plus)")
+    p.add_argument("--show", action="store_true", help="hiện cửa sổ Chrome (mặc định chạy ngầm)")
+    p.set_defaults(func=cmd_clone_run)
 
     p = sub.add_parser("ui", help="mở giao diện web CalForge Studio")
     p.add_argument("--port", type=int, default=8080, help="cổng mạng (mặc định 8080)")

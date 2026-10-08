@@ -1,0 +1,26 @@
+/* Trang "Làm theo ảnh mẫu" - cùng khung với trang chính (app.css), chỉ thêm phần riêng */
+.tab-on { background: var(--surface-2); font-weight: 600; cursor: default; }
+.acc-pill { cursor: default; }
+.refs-box legend small { font-weight: 400; }
+.drop { border: 2px dashed var(--line); border-radius: 14px; padding: 18px; text-align: center; }
+.drop.over { border-color: var(--primary); background: var(--surface-2); }
+.drop p { margin: 0; }
+.drop .hint { margin-top: 8px; }
+.ref-list { list-style: none; display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 10px;
+  padding: 0; margin: 12px 0 0; }
+.ref-list:empty { display: none; }
+.ref-list li { position: relative; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--surface-2); }
+.ref-list img { display: block; width: 100%; aspect-ratio: 4 / 3; object-fit: cover; }
+.ref-list .no { position: absolute; left: 6px; top: 6px; background: rgba(0, 0, 0, .6); color: #fff; font-size: .75rem;
+  font-weight: 600; padding: 1px 7px; border-radius: 999px; }
+.ref-list .tools { display: flex; justify-content: space-between; padding: 2px 4px; }
+.ref-list .tools button { border: 0; background: transparent; cursor: pointer; font-size: .95rem; padding: 2px 6px; color: var(--text); }
+.ref-list .tools button:hover { background: var(--line); border-radius: 6px; }
+.show-chrome .check { display: flex; align-items: center; gap: 6px; height: 44px; white-space: nowrap; cursor: pointer; }
+.queue-list .thumbs { display: inline-flex; gap: 3px; vertical-align: middle; }
+.queue-list .thumbs img { width: 36px; height: 27px; object-fit: cover; border-radius: 4px; }
+.queue-list .why { color: var(--bad); font-size: .85rem; }
+.books .book .stage { font-size: .8rem; color: var(--muted); margin: 0; }
+.stepper input#year { width: 64px; }
+.ref-list .file-ph { aspect-ratio: 4 / 3; display: grid; place-content: center; text-align: center; gap: 2px; padding: 6px; }
+.ref-list .file-ph small { color: var(--muted); font-size: .7rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100px; }

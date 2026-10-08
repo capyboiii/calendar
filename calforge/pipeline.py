@@ -214,6 +214,17 @@ def produce_images(concept_dir: Path, cfg: dict, *, on_event=print) -> dict | No
     if previous.get("terminal") and previous.get("stage") == "ip_rejected":
         on_event(f"  ↷ Bỏ qua {concept_dir.name}: cuốn đã bị loại vì TM/bản quyền, nội dung nhạy cảm hoặc vi phạm chính sách")
         return previous
+    concept = json.loads(layout.concept_file(concept_dir).read_text(encoding="utf-8"))
+    if concept.get("source") == "clone":
+        # cuốn "Làm theo ảnh mẫu": không có ý tưởng/cảnh để dựng prompt của trang chính - ảnh do trang kia vẽ
+        lacking = [j for j in products.art_jobs(concept) if plan.job_done(concept_dir, j) is None]
+        if lacking:
+            return _status(concept_dir, stage="images", ok=False,
+                           reason="cuốn làm theo ảnh mẫu còn thiếu ảnh " + ", ".join(lacking)
+                                  + " - bấm Làm tiếp ở trang Làm theo ảnh mẫu")
+        on_event(f"===== Sản xuất: {concept_dir.name} (làm theo ảnh mẫu: đủ ảnh) =====")
+        upscale_concept(concept_dir, on_event)
+        return None
     ig = cfg["imagegen"]
     on_event(f"===== Sản xuất: {concept_dir.name} =====")
     plan.write_plan(concept_dir)

@@ -72,6 +72,7 @@ def list_accounts(cfg: dict | None = None) -> list[dict[str, Any]]:
     last_used = rot_data.get("last")
     counts = rot_data.get("count", {})
 
+    from . import plan
     from .bulk_login import _emails
     emails = _emails()
     accounts = []
@@ -96,6 +97,7 @@ def list_accounts(cfg: dict | None = None) -> list[dict[str, Any]]:
             "is_last_used": (d.name == last_used),
             "modified_at": time.strftime("%Y-%m-%d %H:%M", time.localtime(mtime)),
             "email": emails.get(d.name, ""),
+            "plan": plan.read(d),
         })
 
     return accounts
@@ -387,6 +389,8 @@ def verify_session(udir: Path, wait_s: float = 30.0) -> str:
                 while time.time() < end:
                     email = logged_in_email(ctx)
                     if email:
+                        from . import plan
+                        plan.record(page, udir)           # vừa xác nhận đăng nhập: đọc luôn gói + hạn
                         return email
                     page.wait_for_timeout(1500)
                 return ""
