@@ -34,7 +34,14 @@ PLAN_JS = r"""async (url) => {
 }"""
 
 LABEL = {"free": "Free", "plus": "Plus", "pro": "Pro", "team": "Team", "enterprise": "Enterprise", "edu": "Edu",
-         "go": "Go"}
+         "go": "Go", "k12": "K12"}
+# Gói vẽ ảnh mạnh như Plus. Tài khoản K12 / Edu (có nút Trò chuyện / Công việc) = workspace trả phí: tính như Plus.
+NOT_PAID = {"", "free", "guest", "go"}
+
+
+def is_paid(info: dict | None) -> bool:
+    """Gói trả phí còn hạn (Plus / Pro / K12 / Edu / Team / Enterprise...)."""
+    return bool(info) and str(info.get("plan") or "").lower() not in NOT_PAID         and info.get("active", True) is not False and not info.get("expired")
 
 
 def parse(raw: dict | None) -> dict | None:
@@ -42,7 +49,15 @@ def parse(raw: dict | None) -> dict | None:
     if not isinstance(raw, dict) or not raw.get("logged_in") or not raw.get("items"):
         return None
     items = raw["items"]
-    item = next((i for i in items if i.get("structure") == "personal"), items[0])
+    # Một đăng nhập có thể có nhiều không gian (cá nhân Free + workspace K12/Edu trả phí): lấy gói trả phí đang
+    # hoạt động nếu có, không thì không gian cá nhân như trước
+    # (workspace K12/Edu: has_active_subscription luôn false, không có ngày hết hạn - vẫn là gói dùng được)
+    paid = [i for i in items if str(i.get("plan") or "").lower() not in NOT_PAID
+            and (i.get("active") or i.get("structure") == "workspace")]
+    paid.sort(key=lambda i: i.get("structure") != "personal")    # cá nhân trả phí (Plus) trước workspace
+    item = paid[0] if paid else next((i for i in items if i.get("structure") == "personal"), items[0])
+    if paid and item.get("structure") == "workspace":
+        item = {**item, "active": True}
     plan = str(item.get("plan") or "").lower()
     if not plan:
         return None

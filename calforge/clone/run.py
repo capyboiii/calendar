@@ -29,7 +29,6 @@ from ..imagegen.driver import BANNED, LOGGED_OUT, NavError, QuotaExceeded, TempE
 from ..imagegen.plan import job_done
 from . import prompts, session, store
 
-PAID = {"plus", "pro"}
 MAX_TURNS = 4             # một phiên nhắn "vẽ tiếp" tối đa bấy nhiêu lượt không ra ảnh mới thì đổi phiên
 MAX_SESSIONS = 4          # một bước hỏng (không phải lỗi tài khoản) bấy nhiêu phiên thì tạm bỏ cuốn (chạy lại sau)
 GRID_REDO = 2             # một trang lịch OCR sai: vẽ lại trong phiên bấy nhiêu lần
@@ -62,7 +61,7 @@ def plus_accounts(cfg: dict, check_unknown: bool = True, on_event=print) -> list
             except Exception:  # noqa: BLE001
                 pass
             info = plan.read(d)
-        if info and info.get("plan") in PAID and info.get("active", True) and not info.get("expired"):
+        if plan.is_paid(info):
             out.append(d.name)
     return out
 
@@ -85,7 +84,7 @@ class Accounts:
         while not (stop and stop.is_set()):
             alive = [n for n in self.names if n not in self.pool.dead]
             if not alive:
-                raise StageFailed("không còn tài khoản Plus nào dùng được")
+                raise StageFailed("không còn tài khoản Plus / K12 nào dùng được")
             order = [n for n in alive if n not in (avoid or set())] + [n for n in alive if n in (avoid or set())]
             if prefer in order:                          # tài khoản có chat dở của cuốn này: dùng lại trước
                 order.remove(prefer)
@@ -95,7 +94,7 @@ class Accounts:
                     return n
             if all(self.pool._resting(n, IMAGE) for n in alive):
                 if time.monotonic() - waited_from > self.max_wait_s:
-                    raise StageFailed("mọi tài khoản Plus đều hết lượt quá lâu - chạy lại sau")
+                    raise StageFailed("mọi tài khoản Plus / K12 đều hết lượt quá lâu - chạy lại sau")
             self.pool.wait_change(3.0)
         raise StageFailed("người dùng dừng")
 
@@ -122,8 +121,12 @@ class Accounts:
 
 
 def run_stage(accts: Accounts, label: str, work, *, avoid: set[str] | None = None,
-              stop: threading.Event | None = None, session_factory=None, prefer=None) -> str:
-    """Chạy `work(session)` tới khi xong, đổi tài khoản khi cần. Trả tên tài khoản đã làm xong bước."""
+              stop: threading.Event | None = None, session_factory=None, prefer=None,
+              refusal_tries: int | None = None) -> str:
+    """Chạy `work(session)` tới khi xong, đổi tài khoản khi cần. Trả tên tài khoản đã làm xong bước.
+    ChatGPT từ chối (TM / bản quyền / nội dung nhạy cảm): mở phiên mới làm lại, tổng `refusal_tries` lần
+    (mặc định như trang chính) rồi mới bỏ cuốn."""
+    refusal_tries = refusal_tries or driver.REFUSAL_TRIES
     from ..llm.pool import IMAGE
     session_factory = session_factory or session.Session
     fails = refusals = nav = 0
@@ -145,14 +148,14 @@ def run_stage(accts: Accounts, label: str, work, *, avoid: set[str] | None = Non
                 return name
         except QuotaExceeded as e:
             accts.pool.rest(name, IMAGE, accts.pool.rest_s, str(e))
-            accts.on_event(f"[{name}] {label}: HẾT LƯỢT, nghỉ tài khoản này, chuyển tài khoản Plus khác: {str(e)[:100]}")
+            accts.on_event(f"[{name}] {label}: HẾT LƯỢT, nghỉ tài khoản này, chuyển tài khoản Plus / K12 khác: {str(e)[:100]}")
             if any(h in str(e).lower() for h in driver.RATE_HINTS):
                 accts.pool.trouble(name, str(e))
         except NavError as e:
             kind = "banned" if BANNED in str(e) else "logged_out" if LOGGED_OUT in str(e) else ""
             if kind:
                 accts.pool.drop(name, kind, str(e))
-                accts.on_event(f"[{name}] ✘ TÀI KHOẢN CHẾT ({kind}) - đã bỏ, chuyển tài khoản Plus khác")
+                accts.on_event(f"[{name}] ✘ TÀI KHOẢN CHẾT ({kind}) - đã bỏ, chuyển tài khoản Plus / K12 khác")
             else:
                 accts.pool.rest(name, IMAGE, driver.NAV_REST_S, str(e))
                 accts.pool.trouble(name, str(e))
@@ -163,8 +166,8 @@ def run_stage(accts: Accounts, label: str, work, *, avoid: set[str] | None = Non
         except ThirdPartyIPRefused as e:
             refusals += 1
             accts.on_event(f"[{name}] {label}: ChatGPT từ chối (TM/bản quyền/nội dung nhạy cảm) lần "
-                           f"{refusals}/{driver.REFUSAL_TRIES}: {str(e)[:120]}")
-            if refusals >= driver.REFUSAL_TRIES:
+                           f"{refusals}/{refusal_tries} - mở phiên mới làm lại: {str(e)[:120]}")
+            if refusals >= refusal_tries:
                 raise BookRejected(str(e)[:300]) from e
         except (BookRejected, StageFailed):
             raise
@@ -463,8 +466,9 @@ class Book:
         if self.item.get("book") and Path(self.item["book"]).is_dir():
             return
         meta = self.meta()
-        kdir = products.root(Path(self.cfg["projects_dir"]), "wall_grid") / self.item.get("group", "lam-theo-mau")
-        book = layout.new_book_dir(kdir, meta["title"], f"clone-{self.item['id']}", "wall_grid")
+        product = "wall_grid"
+        kdir = products.root(Path(self.cfg["projects_dir"]), product) / self.item.get("group", "lam-theo-mau")
+        book = layout.new_book_dir(kdir, meta["title"], f"clone-{self.item['id']}", product)
         work = self.d / "work"
         for sub in (layout.RAW, f"{layout.SYSTEM}/ky_thuat"):
             src = work / sub
@@ -507,7 +511,8 @@ class Book:
             missing = ready
             self.status(stage=f"vẽ trang lịch ({12 - len(self.missing('g'))}/12)")
             if not getattr(s, "grid_started", False):
-                done = [m for m in range(1, 13) if m not in missing]
+                done = [m for m in range(1, 13) if self.done(f"g{m:02d}")]   # tháng ĐÃ có trang lịch (không phải
+                #                                                     "chưa sẵn sàng": tháng 11-12 chưa có artwork)
                 if not done:
                     batch = [m for m in missing if m in first_round]
                     prompt, attach = prompts.grid_prompt(self.year, batch), [arts[m] for m in batch]
@@ -771,18 +776,18 @@ def run_queue(cfg: dict, on_event=print, stop: threading.Event | None = None, ac
         return []
     plus = plus if plus is not None else plus_accounts(cfg, on_event=on_event)
     if not plus:
-        on_event("✘ Không có tài khoản ChatGPT Plus nào còn hạn - trang này chỉ dùng tài khoản Plus")
+        on_event("✘ Không có tài khoản ChatGPT Plus / K12 nào còn hạn - trang này chỉ dùng tài khoản Plus / K12")
         for d in todo:
-            store.write(d, status="failed", reason="không có tài khoản Plus còn hạn")
+            store.write(d, status="failed", reason="không có tài khoản Plus / K12 còn hạn")
         return []
-    on_event(f"▶ {len(todo)} cuốn, chỉ dùng {len(plus)} tài khoản Plus: {', '.join(plus)}")
+    on_event(f"▶ {len(todo)} cuốn, chỉ dùng {len(plus)} tài khoản Plus / K12: {', '.join(plus)}")
     accts = accts or Accounts(cfg, plus, on_event)
     # Artwork and grid borrow the same accounts: idle capacity is never reserved
     # for a stage with no ready work. The global pool still enforces RAM/Chrome limits.
     workers = max(1, len(set(plus)))
     finish_workers = max(1, min(2, int(cfg.get("finish_workers") or 1)))
     max_inflight = workers * 2 + finish_workers
-    on_event(f"▶ Chia pool động: {workers} luồng artwork/trang lịch dùng chung tài khoản Plus, "
+    on_event(f"▶ Chia pool động: {workers} luồng artwork/trang lịch dùng chung tài khoản Plus / K12, "
              f"{finish_workers} luồng hậu kỳ; trần Chrome/RAM do pool chung điều phối. "
              "Ưu tiên trang lịch đã sẵn sàng, không giữ cặp acc cố định cho từng cuốn.")
     claimed: set[str] = set()
@@ -942,7 +947,7 @@ def resume_book(book: Path, cfg: dict, on_event=print) -> dict | None:
         return None
     plus = plus_accounts(cfg, on_event=on_event)
     if not plus:
-        on_event("✘ Không có tài khoản ChatGPT Plus nào còn hạn - clone sản phẩm chỉ dùng tài khoản Plus")
+        on_event("✘ Không có tài khoản ChatGPT Plus / K12 nào còn hạn - clone sản phẩm chỉ dùng tài khoản Plus / K12")
         return None
     store.write(d, status="running", reason="")
     accts = Accounts(cfg, plus, on_event)

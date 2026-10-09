@@ -66,7 +66,7 @@ def write(d: Path, **kw) -> dict:
 
 def _group(name: str) -> str:
     g = re.sub(r'[<>:"/\\|?*\x00-\x1f]', " ", str(name or "")).strip(" .")
-    return re.sub(r"\s+", "-", g)[:40].lower() or "lam-theo-mau"
+    return re.sub(r"\s+", "-", g)[:80].strip("-.").lower() or "lam-theo-mau"
 
 
 def to_images(name: str, data: bytes) -> list[tuple[str, bytes]]:
@@ -104,7 +104,7 @@ def to_images(name: str, data: bytes) -> list[tuple[str, bytes]]:
 
 
 def add(projects_dir, images: list[tuple[str, bytes]], *, group: str = "", year: int = 2027,
-        mockup_mode: str = "ai") -> dict:
+        mockup_mode: str = "ai", kind: str = "normal") -> dict:
     """Thêm một cuốn: 1-10 ảnh tham chiếu (giữ đúng thứ tự tải lên = artwork 1, 2, ...). Nhận mọi loại file ảnh
     (đổi sang PNG khi cần) và PDF (mỗi trang một ảnh)."""
     if not 2024 <= int(year) <= 2100:
@@ -127,7 +127,7 @@ def add(projects_dir, images: list[tuple[str, bytes]], *, group: str = "", year:
         (d / "refs" / f"ref{i:02d}{ext}").write_bytes(data)
     return write(d, id=item_id, created=time.strftime("%Y-%m-%d %H:%M:%S"), group=_group(group), year=int(year),
                  status="pending", stage="", reason="", book="", title="", names=[n for n, _ in images],
-                 mockup_mode=mockup_mode if mockup_mode in ("ai", "template") else "ai")
+                 mockup_mode=mockup_mode if mockup_mode in ("ai", "template") else "ai", kind="normal")
 
 
 def items(projects_dir) -> list[dict]:

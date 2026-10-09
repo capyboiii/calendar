@@ -152,7 +152,7 @@
     $('cloneStartHint').textContent = !C.refs.length
       ? 'Thêm ảnh mẫu để bắt đầu. Chỉ dùng tài khoản ChatGPT Plus: 12 artwork + bìa (1 tài khoản), 12 trang lịch (tài khoản khác).'
       : `${C.refs.length} ảnh mẫu → 1 cuốn lịch ${$('cloneYear').value}.`
-        + (running() ? ' Đang chạy: cuốn này được làm ngay khi có tài khoản Plus rảnh.' : '');
+        + (running() ? ' Đang chạy: cuốn này được làm ngay khi có tài khoản rảnh.' : '');
   }
 
   async function start() {
@@ -168,7 +168,7 @@
       renderRefs();
       const wasRunning = running();
       if (!wasRunning) data = await api('/api/clone/start', { show: $('cloneShowChrome').checked });
-      toast(wasRunning ? 'Đã thêm vào hàng đợi clone - làm ngay khi có tài khoản Plus rảnh.' : 'Đã bắt đầu clone sản phẩm.', 'success');
+      toast(wasRunning ? 'Đã thêm vào hàng đợi clone - làm ngay khi có tài khoản rảnh.' : 'Đã bắt đầu clone sản phẩm.', 'success');
       render(data);
     } catch (e) {
       toast(e.message, 'error');
@@ -259,7 +259,7 @@
     const d = C.data;
     const note = $('clonePlusNotice');
     note.hidden = d.plus.length > 0;
-    note.innerHTML = '<strong>Không có tài khoản ChatGPT Plus nào còn hạn.</strong> Clone sản phẩm chỉ dùng tài khoản Plus.'
+    note.innerHTML = '<strong>Không có tài khoản ChatGPT Plus / K12 nào còn hạn.</strong> Clone sản phẩm chỉ dùng tài khoản Plus / K12.'
       + (d.unknown.length ? ` Chưa rõ gói: ${esc(d.unknown.join(', '))} - bấm "Kiểm tra gói Plus" trong Tài khoản ChatGPT.` : '');
   }
 

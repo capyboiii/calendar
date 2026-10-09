@@ -29,7 +29,7 @@ SEL_SEND = ['button[data-testid="send-button"]', 'button[aria-label*="Send" i]']
 # tưởng chưa có ảnh và gen lại nhiều lần dù ChatGPT đã gen xong.
 MIN_SIDE = 768  # ảnh gen thật cạnh dài >= 1024; icon/nền giao diện <= 512 -> loại
 
-from ..llm.limits import QUOTA_PAT, REFUSE_PAT, TEMP_PAT, RateWatch, classify, page_notice  # noqa: E402,F401
+from ..llm.limits import QUOTA_PAT, REFUSE_PAT, TEMP_PAT, RateWatch, classify, page_notice, quota_hint  # noqa: E402,F401
 
 STATE_JS = """() => {
   const pick = (s) => Array.from(document.querySelectorAll(s));
@@ -394,8 +394,8 @@ class _Worker:
                 # Chỉ kết luận khi lượt trả lời ĐÃ CÓ CHỮ, không còn dấu hiệu đang vẽ, mà vẫn không có ảnh.
                 kind = classify(st["tail"])
                 quiet_since = quiet_since or time.monotonic()
-                if kind == "quota":
-                    raise QuotaExceeded(st["tail"][-200:])
+                if kind == "quota":                # ghi đúng câu bị nhận là hết lượt (không chỉ đuôi trả lời)
+                    raise QuotaExceeded(f"«{quota_hint(st['tail'])}» | {st['tail'][-120:]}")
                 if wants_source(st["tail"]):
                     raise WantsSourceImage(st["tail"][-200:])
                 if kind == "ip_refused":
@@ -530,7 +530,7 @@ def run_jobs(jobs: list[GenJob], profiles_dir: Path, profiles: list[str], *, hea
             job.attempts -= 1                         # không tính lượt: lỗi của tài khoản
             q.put(job)
             pool.rest(profile, IMAGE, pool.rest_s, str(e))
-            on_event(f"[{profile}] HẾT LƯỢT VẼ, nghỉ vẽ tài khoản này: {str(e)[:120]}")
+            on_event(f"[{profile}] HẾT LƯỢT VẼ, nghỉ vẽ tài khoản này: {str(e)[:220]}")
             if any(h in str(e).lower() for h in RATE_HINTS):
                 pool.trouble(profile, str(e))             # bị chặn tốc độ: nhiều tài khoản cùng bị thì giảm số Chrome
             return False

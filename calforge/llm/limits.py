@@ -160,6 +160,16 @@ NOTICE_JS = f"""() => Array.from(document.querySelectorAll('{NOTICE_SELECTOR}'))
   .filter((e) => e.getBoundingClientRect().width > 0).map((e) => e.innerText).join(' ').slice(-1500)"""
 
 
+def quota_hint(text: str) -> str:
+    """Câu nào trên trang khiến classify() kết luận hết lượt - ghi vào log để soát bắt nhầm."""
+    low, _plain = _normalized(text)
+    for p in QUOTA_PAT + QUOTA_WEAK:
+        if p in low:
+            i = low.find(p)
+            return low[max(0, i - 60):i + len(p) + 60].strip()
+    return ""
+
+
 def classify(text: str) -> str:
     """Chữ trên trang -> "ip_refused" | "quota" | "refused" | "error" | ""."""
     low, _plain = _normalized(text)

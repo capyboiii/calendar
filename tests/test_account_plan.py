@@ -131,3 +131,27 @@ class DriverRecordsPlanTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class K12WorkspaceTest(unittest.TestCase):
+    """Tài khoản K12 (có nút Trò chuyện / Công việc): API trả workspace plan "k12", active=false, không hạn."""
+    RAW = {"logged_in": True, "status": 200, "items": [
+        {"structure": "workspace", "plan": "k12", "active": False, "expires": None},
+        {"structure": "personal", "plan": "free", "active": False, "expires": None}]}
+
+    def test_k12_workspace_counts_as_paid(self):
+        info = plan.parse(self.RAW)
+        self.assertEqual((info["plan"], info["label"], info["active"]), ("k12", "K12", True))
+        self.assertTrue(plan.is_paid(info))
+
+    def test_personal_free_stays_free(self):
+        info = plan.parse({"logged_in": True, "items": [self.RAW["items"][1]]})
+        self.assertEqual(info["plan"], "free")
+        self.assertFalse(plan.is_paid(info))
+
+    def test_paid_kinds(self):
+        for p in ("plus", "pro", "edu", "team", "enterprise", "k12"):
+            self.assertTrue(plan.is_paid({"plan": p, "active": True}), p)
+        for p in ("free", "go", ""):
+            self.assertFalse(plan.is_paid({"plan": p, "active": True}), p)
+        self.assertFalse(plan.is_paid({"plan": "plus", "active": True, "expired": True}))

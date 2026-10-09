@@ -8,6 +8,7 @@ Không có GPU / spandrel / trọng số thì lùi về Lanczos + unsharp và b�
 from __future__ import annotations
 
 import threading
+import time
 
 import warnings
 from functools import lru_cache
@@ -41,6 +42,7 @@ def engine() -> str:
 
 
 _GPU_LOCK = threading.Lock()
+TILE_YIELD_S = 0.008
 
 
 def _esrgan_x4(img: Image.Image, tile: int = 384, pad: int = 16) -> Image.Image:
@@ -64,6 +66,7 @@ def _esrgan_x4(img: Image.Image, tile: int = 384, pad: int = 16) -> Image.Image:
                 th, tw = min(tile, h - y) * 4, min(tile, w - x) * 4
                 out[y * 4:y * 4 + th, x * 4:x * 4 + tw] = (
                     (res[oy:oy + th, ox:ox + tw] * 255 + 0.5).to(torch.uint8).cpu().numpy())
+                time.sleep(TILE_YIELD_S)        # nhường GPU cho màn hình + Chrome giữa các ô: máy không giật
     return Image.fromarray(out, "RGB")
 
 

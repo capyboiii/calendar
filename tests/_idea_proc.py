@@ -23,7 +23,8 @@ def main():
 
     names = sorted(p.name for p in pdir.iterdir() if p.is_dir())
     cfg = {"projects_dir": projects, "profiles_dir": str(pdir)}
-    pool = AccountPool(pdir, names, cap=6, launch_gap_s=0, leases=True, later=poolmod._plus_saved_for_clone(cfg))
+    cap = int(sys.argv[6]) if len(sys.argv) > 6 else 6
+    pool = AccountPool(pdir, names, cap=cap, launch_gap_s=0, leases=True, later=poolmod._plus_saved_for_clone(cfg))
     pool.rest_s = 0.3
     rnd = random.Random(seed)
     lock = threading.Lock()

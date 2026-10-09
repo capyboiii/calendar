@@ -307,8 +307,9 @@ def finish_book(concept_dir: Path, cfg: dict, *, printify: bool = True, publish:
     _status(concept_dir, stage="render", ok=True, pages=expected_pages(concept, product["formats"][0]),
             digital=digital)
 
-    # 5 ảnh preview (mockup) cho listing. Lỗi ở đây không chặn sản phẩm: trang in đã xong.
-    on_event("▶ Bước 4b: Ghép 5 ảnh preview mockup cho listing")
+    # ảnh preview (mockup) cho listing (5 / 8 ảnh tuỳ kiểu mockup). Lỗi ở đây không chặn sản phẩm: trang in đã xong.
+    from .render.mockups import preview_names
+    on_event(f"▶ Bước 4b: Ghép {len(preview_names(concept))} ảnh preview mockup cho listing")
     preview_error = ""
     if not product["mockups"]:
         on_event("  ↷ Loại lịch này chưa có ảnh mockup - bỏ qua")

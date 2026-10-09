@@ -66,6 +66,17 @@ def pending(cdir: Path) -> list[str]:
     return out
 
 
+def plus_last(pdir: Path, names: list[str]) -> list[str]:
+    """Mockup không cần Plus: lấy tài khoản Free trước, Plus sau cùng - để Plus cho việc vẽ artwork / trang lịch
+    (clone chỉ vẽ được bằng Plus) đang chạy song song trong batch."""
+    from ..llm import plan
+
+    def is_plus(n: str) -> bool:
+        info = plan.read(pdir / n) or {}
+        return plan.is_paid(info)
+    return sorted(names, key=is_plus)                    # sorted ổn định: giữ thứ tự xoay vòng trong từng nhóm
+
+
 def ai_previews(cdir: Path, cfg: dict, on_event=print) -> dict:
     """Gen AI các preview còn cần. Trả về {"ai": [...], "kept_code": [...]}."""
     from ..config import get_profiles_dir
@@ -107,7 +118,7 @@ def ai_previews(cdir: Path, cfg: dict, on_event=print) -> dict:
         return {"ai": [], "kept_code": todo}
     ig = cfg.get("imagegen") or {}
     pdir = get_profiles_dir(cfg)
-    names = rotate_profiles(available_profiles(pdir, ig.get("profiles")), pdir / ".image_rotation.json")
+    names = plus_last(pdir, rotate_profiles(available_profiles(pdir, ig.get("profiles")), pdir / ".image_rotation.json"))
     on_event(f"▶ AI gen {len(jobs)} ảnh quảng cáo (mockup bối cảnh riêng cho cuốn này)")
     run_jobs(jobs, pdir, names, headless=ig.get("headless", "hidden"), timeout_s=ig.get("timeout_s", 420),
              max_attempts=ig.get("max_attempts", 3), on_event=on_event)

@@ -31,9 +31,16 @@ FREE = ["acc1", "acc2"]
 
 
 def intervals(log: Path) -> dict:
-    """{tài khoản: [(bên, bắt đầu, kết thúc)]} từ file log chung của hai tiến trình."""
+    """{tài khoản: [(bên, bắt đầu, kết thúc)]} từ log của hai tiến trình: mỗi tiến trình ghi file riêng (<log>.idea /
+    <log>.clone) - hai tiến trình cùng ghi một file thì dòng có thể chen nhau."""
     open_at, out = {}, {}
-    for line in log.read_text(encoding="utf-8").splitlines():
+    lines = []
+    for f in (log, log.with_name(log.name + ".idea"), log.with_name(log.name + ".clone")):
+        if f.is_file():
+            lines += f.read_text(encoding="utf-8").splitlines()
+    for line in lines:
+        if len(line.split()) != 4:
+            continue
         side, acc, what, t = line.split()
         key = (side, acc)
         if what == "start":
@@ -83,7 +90,7 @@ class TwoModesTest(unittest.TestCase):
               for _ in range(n_books)]
         world, accts = self.clone_accounts(faults)
         idea = subprocess.Popen([sys.executable, "-m", "tests._idea_proc", str(self.pdir), self.cfg["projects_dir"],
-                                 str(self.log), str(idea_jobs), str(seed)], cwd=str(ROOT),
+                                 str(self.log.with_name(self.log.name + ".idea")), str(idea_jobs), str(seed)], cwd=str(ROOT),
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         self.addCleanup(lambda: idea.poll() is None and idea.kill())
         with mock.patch.object(run.session, "Session", lambda page, pdir: FakeSession(world, Path(pdir).name)), \

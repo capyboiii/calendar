@@ -44,7 +44,7 @@
         </label>
         <label class="kind">
           <input type="radio" name="make_mode" value="clone">
-          <span><strong>Clone sản phẩm</strong><small>Tải ảnh mẫu lên, ChatGPT vẽ theo (chỉ tài khoản Plus)</small></span>
+          <span><strong>Clone sản phẩm</strong><small>Tải ảnh mẫu lên, ChatGPT vẽ theo</small></span>
         </label>
       </fieldset>
       <div class="mode-panel" id="ideaPanel" data-mode="idea">
@@ -141,12 +141,12 @@
       <div class="mode-panel" id="clonePanel" data-mode="clone" hidden>
         <div class="notice" id="clonePlusNotice" hidden></div>
         <fieldset class="kinds refs-box">
-          <legend>Ảnh mẫu <small class="muted">(1–10 ảnh: tranh, trang lịch hoặc ảnh mockup · mọi định dạng ảnh, cả PDF - mỗi trang PDF là 1 ảnh · dán ảnh bằng Ctrl+V)</small></legend>
+          <legend>Ảnh mẫu <small class="muted">(1–10 ảnh)</small></legend>
           <div class="drop" id="cloneDrop" tabindex="0">
             <input type="file" id="cloneFiles" multiple hidden>
-            <p><strong>Kéo thả ảnh vào đây</strong> hoặc <button class="btn btn-small" id="clonePick" type="button">Chọn ảnh</button></p>
-            <p class="hint">Thứ tự ảnh = artwork 1, 2, 3… Ảnh mẫu ít hơn 12 thì các artwork còn lại giữ nét vẽ + tông màu,
-              ChatGPT tự nghĩ chủ thể mới (và câu chữ mới nếu ảnh mẫu có chữ).</p>
+            <p><strong>Kéo thả, dán (Ctrl+V)</strong> hoặc <button class="btn btn-small" id="clonePick" type="button">Chọn ảnh</button></p>
+            <p class="hint">Khuyến khích <strong>mỗi ảnh chỉ 1 artwork</strong> (tranh không có lịch) để vẽ giống nhất. Ảnh trang lịch, mockup, PDF vẫn được.<br>
+              Ảnh 1 → artwork 1, ảnh 2 → artwork 2… Thiếu thì ChatGPT tự vẽ thêm cùng phong cách.</p>
           </div>
           <ol class="ref-list" id="cloneRefList"></ol>
         </fieldset>
@@ -164,7 +164,7 @@
         <div class="start-row">
           <label class="field grow">
             <span>Chủ đề (tên thư mục)</span>
-            <input id="cloneGroup" type="text" placeholder="Ví dụ: cats-clone, bible-verse…" maxlength="40" autocomplete="off">
+            <input id="cloneGroup" type="text" placeholder="Ví dụ: cats-clone, bible-verse…" maxlength="80" autocomplete="off">
           </label>
           <label class="field narrow">
             <span>Năm lịch</span>

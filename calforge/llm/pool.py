@@ -508,7 +508,7 @@ def _plus_saved_for_clone(cfg: dict):
                 pdir = config_profiles(cfg)
                 for d in pdir.iterdir() if pdir.exists() else []:
                     info = plan.read(d) if d.is_dir() else None
-                    if info and info.get("plan") in ("plus", "pro") and not info.get("expired"):
+                    if plan.is_paid(info):
                         names.add(d.name)
         except Exception:  # noqa: BLE001 - chỉ là thứ tự ưu tiên, lỗi thì bỏ qua
             names = set()

@@ -6,6 +6,7 @@ Giữ danh sách ops thay vì vẽ thẳng để preflight kiểm tra được c
 """
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
@@ -203,7 +204,6 @@ def pdf_to_pngs(pdf: Path, outs: list[Path], dpi: int = 300) -> None:
     """Rasterize từng trang rồi nén PNG song song: nén PNG (zlib) là phần chậm nhất, cv2 nhả GIL nên
     chạy nhiều luồng được. Ảnh ra y hệt (PNG không mất dữ liệu), DPI ghi vào file như trước."""
     from concurrent.futures import ThreadPoolExecutor
-    import os
 
     import cv2
     import numpy as np
@@ -215,7 +215,7 @@ def pdf_to_pngs(pdf: Path, outs: list[Path], dpi: int = 300) -> None:
             raise RuntimeError(f"không nén được {out.name}")
         out.write_bytes(_png_with_dpi(buf.tobytes(), dpi))
 
-    with pymupdf.open(pdf) as doc, ThreadPoolExecutor(max_workers=min(8, os.cpu_count() or 4)) as pool:
+    with pymupdf.open(pdf) as doc, ThreadPoolExecutor(max_workers=RENDER_THREADS) as pool:
         jobs = []
         for page, out in zip(doc, outs):
             pix = page.get_pixmap(dpi=dpi, alpha=False)
@@ -223,6 +223,10 @@ def pdf_to_pngs(pdf: Path, outs: list[Path], dpi: int = 300) -> None:
             jobs.append(pool.submit(save, arr, out))
         for j in jobs:
             j.result()
+
+
+# nén PNG trang in: tối đa 4 luồng (trước 8) - batch còn Chrome, OCR, upscale chạy song song, 8 luồng làm máy giật
+RENDER_THREADS = max(1, min(4, (os.cpu_count() or 4) // 2))
 
 
 def _png_with_dpi(data: bytes, dpi: int) -> bytes:

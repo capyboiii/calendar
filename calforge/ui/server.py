@@ -198,7 +198,7 @@ def _clone_items() -> dict:
         info = plan.read(d)
         if info is None:
             unknown.append(d.name)
-        elif info.get("plan") in ("plus", "pro") and info.get("active", True) and not info.get("expired"):
+        elif plan.is_paid(info):
             plus.append({"name": d.name, "expires": info.get("expires_date", ""), "days_left": info.get("days_left")})
     items = store.items(Path(cfg["projects_dir"]))
     for it in items:
@@ -1068,7 +1068,7 @@ class StudioHandler(SimpleHTTPRequestHandler):
                     images.append((str(im.get("name", "anh.png"))[:80],
                                    base64.b64decode(data.split(",", 1)[-1], validate=False)))
                 store.add(projects, images, group=str(body.get("group", "")), year=int(body.get("year") or 2027),
-                          mockup_mode=str(body.get("mockup_mode") or "ai"))
+                          mockup_mode=str(body.get("mockup_mode") or "ai"), kind=str(body.get("kind") or "normal"))
             elif op == "remove":
                 store.remove(projects, str(body.get("id", "")), running_now=bool(TASK_MANAGER.clone_running()))
             elif op == "retry":
@@ -1082,7 +1082,7 @@ class StudioHandler(SimpleHTTPRequestHandler):
                                            status=HTTPStatus.CONFLICT)
                 show = bool(body.get("show"))
                 tid = TASK_MANAGER.start_task(["clone-run"] + (["--show"] if show else []),
-                                              "Làm theo ảnh mẫu (chỉ tài khoản Plus)"
+                                              "Clone sản phẩm"
                                               + (" - hiện Chrome" if show else ""), "clone")
                 return self._send_json({"task_id": tid, **_clone_items()})
             else:
