@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import base64
 import io
+import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -136,14 +137,22 @@ class Session:
         if attach:
             self.attach(list(attach))
         before = self.w._send(self.page, prompt)
+        sent = False
         if self.on_sent:
             try:
                 self.page.wait_for_timeout(1500)
-                if "/c/" in (self.page.url or ""):
+                if real_chat_url(self.page.url):        # link tạm "local-chatgpt:..." chưa phải chat thật: chờ
                     self.on_sent(self.page.url)
+                    sent = True
             except Exception:  # noqa: BLE001
                 pass
         turn = self._collect(before, want)
+        if self.on_sent and not sent:                  # lúc gửi mới có link tạm: lượt xong thì đã có link thật
+            try:
+                if real_chat_url(self.page.url):
+                    self.on_sent(self.page.url)
+            except Exception:  # noqa: BLE001
+                pass
         return turn
 
     def chat_url(self) -> str:
@@ -151,7 +160,7 @@ class Session:
             url = self.page.url or ""
         except Exception:  # noqa: BLE001
             return ""
-        return url if "/c/" in url else ""
+        return url if real_chat_url(url) else ""
 
     def harvest(self, settle_s: float = 12) -> list[bytes]:
         """Mọi ảnh lớn do ChatGPT vẽ trong cuộc chat đang mở, theo thứ tự trên trang (bỏ trùng). Dùng khi mở lại
@@ -317,6 +326,15 @@ MODE_JS = """() => {
   const on = (x) => (x.getAttribute('aria-pressed') || x.getAttribute('aria-selected')) === 'true';
   return {has: b.length > 0, chat: b.length ? on(b[0]) : true};
 }"""
+
+
+CHAT_ID = re.compile(r"/c/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:[/?#]|$)", re.I)
+
+
+def real_chat_url(url: str | None) -> str:
+    """Mã chat thật trong link (".../c/<uuid>"); "" nếu là link tạm ("local-chatgpt:...") / trang chủ / trang khác."""
+    m = CHAT_ID.search(url or "")
+    return m.group(1).lower() if m else ""
 
 
 def ensure_chat_mode(page) -> str:

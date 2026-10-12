@@ -60,7 +60,7 @@ Do not blend different reference styles into a hybrid style. If the references s
 {plan}
 
 KEEP ARTWORKS
-Preserve the recognizable identity, appearance, characteristic colors, materials and important details of the assigned reference's subject.
+Preserve the recognizable identity, appearance, characteristic colors, materials and important details of the assigned reference's subject. For people and characters, identity means face, hairstyle and identifying features, not the exact outfit: follow the WARDROBE rule below.
 
 Create a genuinely different scene around that subject: a new action, interaction, narrative moment or meaningful arrangement, with a clearly different overall composition.
 
@@ -75,6 +75,8 @@ When the theme allows multiple subjects, introduce a different relevant subject,
 
 When the collection centers on one specific recurring figure or subject, keep that identity consistent, but invent a substantially different action, situation or narrative moment. Do not introduce unrelated subjects merely to create variety.
 
+WARDROBE: When people or characters appear across the collection, keep each recurring figure's face, hairstyle and identifying features consistent, but give them a DIFFERENT outfit in every artwork, designed in the same style and color world as the collection and suited to that artwork's scene. Keep a garment only when it is part of the figure's identity (a uniform, signature costume, armor, religious or traditional dress); even then, vary accessories, layers or styling where it fits.
+
 Limited reference material is not a reason to repeat an image. Develop additional ideas from the theme while preserving the assigned reference's artistic style and visual quality.
 
 WHAT COUNTS AS A DISTINCT ARTWORK
@@ -88,6 +90,7 @@ The following changes ALONE are NOT enough:
 - making a small change to the pose
 - replacing a minor prop
 - changing only the text
+- changing only the outfit
 
 Do not reuse the same central arrangement or near-identical silhouette across the collection.
 
@@ -177,6 +180,8 @@ Each new artwork must:
 When the theme allows multiple subjects, introduce a different relevant subject, interaction or meaningful arrangement.
 
 If the collection centers on one recurring figure or subject, preserve that identity but create a substantially different action, situation or narrative moment. Do not add unrelated subjects merely to create variety.
+
+WARDROBE: recurring people or characters keep their face, hairstyle and identifying features, but each new artwork gives them an outfit different from every outfit already used in Artworks 1–10 and from each other, in the same style and color world (keep a garment only if it is part of the figure's identity).
 
 Changing only the background, camera angle, crop, lighting, color, a minor prop or a small pose detail is NOT enough.
 

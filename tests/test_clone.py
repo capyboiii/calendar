@@ -600,21 +600,59 @@ class StuckFlagsAndReopenTest(unittest.TestCase):
         self.assertEqual(len(turn.images), 3)
         self.assertLess(c.clock.t, session.STUCK_S + 30)
 
+    CHAT = "https://chatgpt.com/c/6ac85c8e-2710-83ec-88c2-16b0eac79564"
+
+    def reopen(self, saved_url, landed_url, harvested, turns):
+        """Mở lại chat cũ: trang thật mở ra ở `landed_url`, trong đó có `harvested` ảnh."""
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        cfg, d = new_item(Path(tmp.name))
+        store.write(d, art_chat={"url": saved_url, "account": "acc3", "saved": 0})
+        b = run.Book(cfg, d, on_event=lambda *_: None)
+        s = FakeSession(turns)
+        s.page = types.SimpleNamespace(url="")
+        s.harvest = lambda: harvested
+        s.w._find = lambda *a: None
+        opened = []
+
+        def open_home(page, url):
+            opened.append(url)
+            page.url = landed_url if url == saved_url else url
+        with mock.patch.object(run.driver, "open_home", open_home),                 mock.patch.object(run.session, "ensure_chat_mode", lambda page: ""):
+            b.art_work(s, "acc3")
+        return b, d, s, opened
+
     def test_reopen_old_chat_takes_unsaved_images_then_continues_there(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            cfg, d = new_item(Path(tmp))
-            store.write(d, art_chat={"url": "https://chatgpt.com/c/abc", "account": "acc3", "saved": 0})
-            b = run.Book(cfg, d, on_event=lambda *_: None)
-            s = FakeSession([session.Turn(distinct(2, 20)), session.Turn(distinct(1, 40))])
-            s.harvest = lambda: distinct(10)
-            s.w._find = lambda *a: None
-            opened = []
-            with mock.patch.object(run.driver, "open_home", lambda page, url: opened.append(url)):
-                b.art_work(s, "acc3")
-            self.assertEqual(opened, ["https://chatgpt.com/c/abc"])
-            self.assertEqual(s.sent[0][0], prompts.art_continue([11, 12], 3))          # không vẽ lại 10 ảnh đầu
+        b, d, s, opened = self.reopen(self.CHAT, self.CHAT, distinct(10),
+                                      [session.Turn(distinct(2, 20)), session.Turn(distinct(1, 40))])
+        self.assertEqual(opened, [self.CHAT])
+        self.assertEqual(s.sent[0][0], prompts.art_continue([11, 12], 3))              # không vẽ lại 10 ảnh đầu
+        self.assertEqual(b.missing("m"), [])
+        self.assertEqual(store.read(d)["art_chat"]["saved"], 12)
+
+    def test_temporary_local_chat_link_is_not_reopened(self):
+        """Lỗi 12/10/2026: link tạm "local-chatgpt:..." -> mở ra trang trống, nhắn "vẽ tiếp" không ảnh mẫu."""
+        local = "https://chatgpt.com/c/local-chatgpt%3Af90d429f-ddf1-4657-8e3f-997fa119517f"
+        b, d, s, opened = self.reopen(local, "https://chatgpt.com/", [],
+                                      [session.Turn(distinct(10)), session.Turn(distinct(2, 20)),
+                                       session.Turn(distinct(1, 40))])
+        self.assertNotIn(local, opened)
+        self.assertEqual(s.sent[0][0], prompts.art_prompt(3))                  # vẽ lại từ đầu trong chat mới
+        self.assertTrue(s.sent[0][2])                                          # có đính ảnh mẫu
+
+    def test_reopened_chat_without_images_or_redirected_starts_fresh_with_refs(self):
+        for landed, harvested in ((self.CHAT, []), ("https://chatgpt.com/", distinct(10))):
+            b, d, s, opened = self.reopen(self.CHAT, landed, harvested,
+                                          [session.Turn(distinct(10)), session.Turn(distinct(2, 20)),
+                                           session.Turn(distinct(1, 40))])
+            self.assertEqual(s.sent[0][0], prompts.art_prompt(3), landed)
+            self.assertTrue(s.sent[0][2], landed)
             self.assertEqual(b.missing("m"), [])
-            self.assertEqual(store.read(d)["art_chat"]["saved"], 12)
+
+    def test_only_real_chat_links_are_saved(self):
+        self.assertEqual(session.real_chat_url(self.CHAT), "6ac85c8e-2710-83ec-88c2-16b0eac79564")
+        self.assertEqual(session.real_chat_url("https://chatgpt.com/c/local-chatgpt%3Af90d429f-ddf1"), "")
+        self.assertEqual(session.real_chat_url("https://chatgpt.com/"), "")
 
     def test_old_chat_of_another_account_is_not_reused(self):
         with tempfile.TemporaryDirectory() as tmp:

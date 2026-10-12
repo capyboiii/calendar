@@ -379,16 +379,32 @@ class Book:
         chat = self.item.get("art_chat") or {}
         if chat.get("account") != name or not chat.get("url"):
             return False
+        want = session.real_chat_url(chat["url"])
+        if not want:                                    # link tạm (local-chatgpt:...) - không mở lại được
+            self.on_event(f"[{name}] link chat cũ không hợp lệ - vẽ trong chat mới, đính lại ảnh mẫu")
+            self.status(art_chat={})
+            return False
         try:
             driver.open_home(s.page, chat["url"])
             s.w._find(s.page, driver.SEL_PROMPT, 60_000)
             session.ensure_chat_mode(s.page)
-            images = s.harvest()
+            here = session.real_chat_url(s.page.url)
+            images = s.harvest() if here == want else []
         except NavError:
             raise
         except Exception as e:  # noqa: BLE001 - chat cũ mở không được: vẽ trong chat mới
             self.on_event(f"[{name}] không mở lại được chat cũ ({str(e)[:80]}) - vẽ trong chat mới")
             self.status(art_chat={})
+            return False
+        if here != want or not images:
+            # chat cũ không còn / bị chuyển sang trang khác / không có ảnh nào: nhắn "vẽ tiếp" ở đây thì ChatGPT
+            # không thấy ảnh mẫu lẫn artwork cũ -> vẽ lạc đề (lỗi cuốn "Scenic Little Escapes" 12/10/2026)
+            why = "không đúng chat đã lưu" if here != want else "không có ảnh nào"
+            self.on_event(f"[{name}] chat cũ {why} - vẽ trong chat mới, đính lại ảnh mẫu")
+            self.status(art_chat={})
+            driver.open_home(s.page, driver.URL)
+            s.w._find(s.page, driver.SEL_PROMPT, 60_000)
+            session.ensure_chat_mode(s.page)
             return False
         saved = int(chat.get("saved", 0))
         fresh = images[saved:]
