@@ -73,7 +73,17 @@ Use the assigned reference as a guide to style and theme, then invent a new cent
 
 When the theme allows multiple subjects, introduce a different relevant subject, interaction or meaningful arrangement that naturally belongs in the same collection.
 
-When the collection centers on one specific recurring figure or subject, keep that identity consistent, but invent a substantially different action, situation or narrative moment. Do not introduce unrelated subjects merely to create variety.
+When the collection centers on one specific recurring figure or subject, keep that identity consistent, but invent a substantially different action, situation or narrative moment.
+
+SUPPORTING CHARACTERS (REQUIRED)
+If the collection centers on recurring people or characters, the main figure(s) must not appear alone in every artwork. Artworks 4, 6, 8 and 10 MUST each include at least one clearly visible supporting character who actively takes part in the scene (talking, playing, celebrating, helping, competing, sharing an activity with the main figure(s)). Background passers-by or tiny distant figures do not count.
+Choose supporting characters that plausibly belong to the main figures' world — family members, friends, teammates, rivals, fans, coworkers, neighbors, children, pets or creatures from the same setting — and use a different supporting character or group in each of those artworks.
+Supporting characters must:
+- be drawn in the same artistic style, palette and visual world as the collection
+- stay secondary: the main figure(s) remain the clear focal point
+- be original, unnamed characters, never real people, celebrities or characters from other franchises
+If the collection has no recurring people or characters (e.g. landscapes, still life, patterns), ignore this rule.
+Do not introduce subjects that are unrelated to the collection's theme.
 
 WARDROBE: When people or characters appear across the collection, keep each recurring figure's face, hairstyle and identifying features consistent, but give them a DIFFERENT outfit in every artwork, designed in the same style and color world as the collection and suited to that artwork's scene. Keep a garment only when it is part of the figure's identity (a uniform, signature costume, armor, religious or traditional dress); even then, vary accessories, layers or styling where it fits.
 
@@ -109,6 +119,7 @@ FINAL CHECK BEFORE EACH IMAGE
 Silently compare the planned image with all references, the other planned concepts and the artworks already generated in this conversation.
 
 If it repeats another artwork's central idea or composition, revise the idea before generating.
+For Artworks 4, 6, 8 and 10, confirm that a supporting character is clearly visible and interacting with the main figure(s) before generating.
 Check that its assigned reference's style and text rules are still respected."""
 
 ART_OUTPUT = """OUTPUT FOR THIS TURN
@@ -117,6 +128,7 @@ ART_OUTPUT = """OUTPUT FOR THIS TURN
 - Output 10 SEPARATE images, one finished artwork per image.
 - No written reply, explanations, captions or artwork-number labels.
 - Never combine artworks into a grid, collage, contact sheet or split-panel image.
+- If you notice an image contains more than one scene or panel, it is wrong: discard it and generate that artwork again as a single scene.
 - Each image must be landscape 4:3, full bleed, with one finished artwork filling the frame.
 - No calendar elements, spiral binding, paper edges, borders, frames, mockup backgrounds, watermarks or logos.
 - Required artwork text is allowed only under the TEXT ON THE ARTWORK rules above."""
@@ -138,8 +150,27 @@ def art_rules(n_refs: int) -> str:
     return ART_RULES_T.replace("{plan}", art_plan(n_refs)).replace("{artwork_text_rules}", ARTWORK_TEXT_RULES)
 
 
+def output_first(n: int, nums: list[int] | None = None) -> str:
+    """Đặt lên ĐẦU prompt: prompt dài thì ChatGPT hay bỏ qua phần OUTPUT ở cuối và gom mọi cảnh vào một ảnh lưới
+    (người dùng test 12/10/2026). Nói trước + nhắc lại cuối thì ra đúng từng ảnh riêng."""
+    nums = nums or list(range(1, n + 1))
+    run = len(nums) > 2 and nums == list(range(nums[0], nums[-1] + 1))      # 1..10 liền nhau: viết gọn
+    order = (f"Artwork {nums[0]}, then Artwork {nums[1]}, … then Artwork {nums[-1]}" if run
+             else ", then ".join(f"Artwork {m}" for m in nums))
+    many = f"{n} SEPARATE image generations, one after another: {order}" if n > 1 else f"exactly ONE image: {order}"
+    return (f"OUTPUT FORMAT — MOST IMPORTANT RULE\nProduce {many}. Each generation contains exactly ONE artwork "
+            "filling the whole frame.\nNEVER put several artworks, scenes or panels into one image. No grid, collage, "
+            "contact sheet, storyboard, triptych or split-panel layout — even though you plan 12 ideas, you render them "
+            "one per image.\n\n")
+
+
+def reminder(n: int, first: int) -> str:
+    return (f"\n\nREMINDER: {n} separate image{'s' if n > 1 else ''}, one artwork per image, generated one at a time. "
+            f"Start with Artwork {first} now.")
+
+
 def art_prompt(n_refs: int) -> str:
-    return art_rules(n_refs) + "\n\n" + ART_OUTPUT
+    return output_first(10) + art_rules(n_refs) + "\n\n" + ART_OUTPUT + reminder(10, 1)
 
 # Artwork 11-12: không ép bố cục / mùa / không khí cố định (người dùng bỏ "snowy winter", "end-of-year" 08/10/2026) -
 # ChatGPT tự chọn, chỉ cần khác hẳn 10 artwork trước và khác nhau.
@@ -181,6 +212,8 @@ When the theme allows multiple subjects, introduce a different relevant subject,
 
 If the collection centers on one recurring figure or subject, preserve that identity but create a substantially different action, situation or narrative moment. Do not add unrelated subjects merely to create variety.
 
+SUPPORTING CHARACTERS: if the collection centers on recurring people or characters, at least one of Artworks 11 and 12 MUST include a clearly visible original supporting character (family, friend, teammate, rival, child, pet or creature from their world) who actively interacts with the main figure(s), drawn in the same style, secondary to the main figure(s), never a real person, celebrity or character from another franchise, and different from the supporting characters already used.
+
 WARDROBE: recurring people or characters keep their face, hairstyle and identifying features, but each new artwork gives them an outfit different from every outfit already used in Artworks 1–10 and from each other, in the same style and color world (keep a garment only if it is part of the figure's identity).
 
 Changing only the background, camera angle, crop, lighting, color, a minor prop or a small pose detail is NOT enough.
@@ -205,7 +238,7 @@ OUTPUT
 - Output ONLY 2 SEPARATE images: Artwork 11 first, then Artwork 12.
 - One finished artwork per image.
 - No written reply, explanations, captions or artwork-number labels.
-- No grid, collage, contact sheet or split panels.
+- No grid, collage, contact sheet or split panels. If an image contains more than one scene or panel, it is wrong: generate that artwork again as a single scene.
 - Landscape 4:3, full bleed.
 - No calendar elements, spiral binding, paper edges, borders, frames, mockup backgrounds, watermarks or logos.
 - Required artwork text is allowed only under the text rules above."""
@@ -221,7 +254,8 @@ def art_continue(missing: list[int], n_refs: int) -> str:
     return (f"Continue: generate ONLY artwork {nums} (still missing), following ALL the same rules as before.\n"
             "Use each artwork's assigned reference from the ARTWORK PLAN, with a composition and background of your own "
             f"choice.{extra}\n\n{ARTWORK_TEXT_RULES}\n\nOutput ONLY {len(missing)} separate image{'s' if len(missing) > 1 else ''}. "
-            "No text reply, no grid, no collage.\nLandscape 4:3, full bleed, no calendar elements, no border, "
+            "One artwork per image, never several scenes or panels in one image. No text reply, no grid, no collage."
+            "\nLandscape 4:3, full bleed, no calendar elements, no border, "
             "no watermark.")
 
 
@@ -230,11 +264,11 @@ def art_resume(missing: list[int], n_refs: int) -> str:
     thiếu. Ảnh đã vẽ được giữ nguyên, không vẽ lại."""
     nums = ", ".join(str(n) for n in missing)
     extra = ("\nArtworks 11 and 12 (if requested):\n" + ART_EXTRA) if any(n > 10 for n in missing) else ""
-    return (art_rules(n_refs) + extra + f"\n\nTHIS TIME: generate ONLY artwork {nums} from the plan above (the others are "
+    return (output_first(len(missing), missing) + art_rules(n_refs) + extra + f"\n\nTHIS TIME: generate ONLY artwork {nums} from the plan above (the others are "
             "already done). Use each one's assigned reference, with a composition and background of your own choice.\n\n"
             + f"OUTPUT FOR THIS TURN\n- Output {len(missing)} SEPARATE image outputs, one artwork per image, "
               f"in this exact order: {nums}.\n"
-            + ART_OUTPUT[ART_OUTPUT.index("- No written reply"):])
+            + ART_OUTPUT[ART_OUTPUT.index("- No written reply"):] + reminder(len(missing), missing[0]))
 
 
 
