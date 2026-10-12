@@ -182,7 +182,7 @@ class CloneErrorFlowsTest(unittest.TestCase):
         complete(self, d)
         art_calls = [p for a, p in world.calls if not p.startswith(("I have attached 10 artwork", "Same rules"))]
         self.assertTrue(any(a == "acc3" for a, _ in world.calls))
-        self.assertTrue(any("THIS TIME" in p or "I have attached reference" in p for p in art_calls))
+        self.assertTrue(any(p.startswith(("OUTPUT FORMAT", "I have attached reference")) for p in art_calls))
 
     def test_logged_out_and_banned_accounts_are_dropped_and_work_continues(self):
         def faults(acc, kind, n):
