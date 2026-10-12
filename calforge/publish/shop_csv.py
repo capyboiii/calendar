@@ -139,17 +139,7 @@ def publish_all(cfg: dict, on_event=print, only: list[Path] | None = None) -> di
         chosen = {Path(b).resolve() for b in only}
         books = [b for b in books if b.resolve() in chosen]
     s3 = r2.client(r2.settings(cfg))
-    pushed, failed, successful = [], [], []
-    for b in books:
-        try:
-            before = r2.read_state(b).get("pushed_at")
-            st = r2.push_book(b, cfg, on_event, s3=s3)
-            successful.append(b)
-            if st.get("pushed_at") != before:
-                pushed.append(b.name)
-        except Exception as e:  # noqa: BLE001 - một cuốn lỗi không chặn các cuốn khác
-            failed.append(f"{b.name}: {e}")
-            on_event(f"  ✘ {b.name}: {e}")
+    pushed, failed, successful = r2.push_books(books, cfg, on_event, s3=s3)    # nhiều cuốn song song
     # chỉ cuốn đẩy R2 TRỌN VẸN lần này mới vào CSV (đẩy dở thì link thiếu / cũ - lần sau đẩy xong mới xuất)
     todo = [b for b in successful if r2.read_state(b).get("files")
             and (only is not None or not r2.read_state(b).get("exported_at"))]

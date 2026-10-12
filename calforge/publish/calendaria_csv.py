@@ -26,6 +26,11 @@ PRICES = {("11", False): (19.95, 29.95), ("11", True): (7.95, 12.95),
           ("14", False): (24.95, 39.95), ("14", True): (9.95, 14.95)}
 
 
+# Giấy bản in (Spiral) trên Crayonahub: khổ 14x11.5 của lịch tự thiết kế grid bán cả Matte lẫn Glossy (người dùng
+# chốt 10/10/2026); còn lại theo cài đặt shop chung. Glossy cùng file design, cùng giá với Matte.
+FINISHES = {"wall_grid": {"11x8.5": ["Matte"], "14x11.5": ["Matte", "Glossy"]}}
+
+
 def body_html(listing: dict) -> str:
     """Mô tả HTML có phần Details đủ 2 khổ (11 x 8.5 và 14 x 11.5): cuốn làm trước khi thêm khổ 14 thì thay phần
     Details cũ bằng bản hiện tại."""
@@ -54,7 +59,7 @@ def _book_rows(cdir: Path, shop: dict) -> list[dict]:
     initials = "".join(word[0] for word in handle.split("-")[:3]).upper()
     # cuốn mới: SKU gốc lưu sẵn (= tên thư mục); cuốn cũ: tính từ tên như trước để SKU đã đăng bán không đổi
     base_sku = layout.book_sku(cdir) or f"{shop['sku_prefix'].get(product, 'CAL')}-{initials}-{code}"
-    finishes = shop["spiral_finishes"].get(product, {})
+    finishes = {**shop["spiral_finishes"].get(product, {}), **FINISHES.get(product, {})}
     rows: list[dict] = []
     first = True
 
@@ -122,17 +127,7 @@ def publish_all(cfg: dict, on_event=print, only: list[Path] | None = None) -> di
         chosen = {Path(book).resolve() for book in only}
         books = [book for book in books if book.resolve() in chosen]
     s3 = r2.client(r2.settings(cfg))
-    pushed, failed, successful = [], [], []
-    for book in books:
-        try:
-            before = r2.read_state(book).get("pushed_at")
-            state = r2.push_book(book, cfg, on_event, s3=s3)
-            successful.append(book)
-            if state.get("pushed_at") != before:
-                pushed.append(book.name)
-        except Exception as exc:  # one broken book must not block the others
-            failed.append(f"{book.name}: {exc}")
-            on_event(f"  ✘ {book.name}: {exc}")
+    pushed, failed, successful = r2.push_books(books, cfg, on_event, s3=s3)    # nhiều cuốn song song
     todo = [book for book in successful if r2.read_state(book).get("files") and
             (only is not None or not r2.read_state(book).get("calendaria_exported_at"))]
     rows_by_book = {}

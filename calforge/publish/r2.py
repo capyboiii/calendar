@@ -44,7 +44,8 @@ def client(r2: dict):
     return boto3.client(
         "s3", endpoint_url=f"https://{r2['account_id'].strip()}.r2.cloudflarestorage.com",
         aws_access_key_id=r2["access_key_id"].strip(), aws_secret_access_key=r2["secret_access_key"].strip(),
-        region_name="auto", config=Config(signature_version="s3v4", retries={"max_attempts": 5, "mode": "standard"}))
+        region_name="auto", config=Config(signature_version="s3v4", retries={"max_attempts": 5, "mode": "standard"},
+                                         max_pool_connections=64))   # nhiều cuốn x nhiều file đẩy cùng lúc
 
 
 def slug(text: str, max_len: int = 80) -> str:
@@ -113,6 +114,34 @@ def _group(cdir: Path) -> str:
     from .. import products
     top = cdir.parent.parent.name
     return f"{slug(top, 40)}/" if top in {v["folder"] for v in products.PRODUCTS.values()} else ""
+
+
+def push_books(books: list[Path], cfg: dict, on_event=print, s3=None) -> tuple[list[str], list[str], list[Path]]:
+    """Đẩy nhiều cuốn SONG SONG (mặc định 3 cuốn cùng lúc x 8 luồng file mỗi cuốn; cấu hình r2.book_workers).
+    Một cuốn lỗi không chặn cuốn khác. Trả (tên cuốn vừa đẩy mới, lỗi, cuốn đẩy trọn vẹn) - giữ thứ tự `books`."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    s3 = s3 or client(settings(cfg))
+    workers = max(1, int(settings(cfg).get("book_workers", 3)))
+
+    def one(b):
+        try:
+            before = read_state(b).get("pushed_at")
+            st = push_book(b, cfg, on_event, s3=s3)        # boto3 client dùng chung giữa các luồng được
+            return b, st.get("pushed_at") != before, None
+        except Exception as e:  # noqa: BLE001 - một cuốn lỗi không chặn các cuốn khác
+            on_event(f"  ✘ {b.name}: {e}")
+            return b, False, f"{b.name}: {e}"
+    pushed, failed, successful = [], [], []
+    with ThreadPoolExecutor(max_workers=min(workers, max(1, len(books)))) as pool:
+        for b, fresh, err in pool.map(one, books):
+            if err:
+                failed.append(err)
+                continue
+            successful.append(b)
+            if fresh:
+                pushed.append(b.name)
+    return pushed, failed, successful
 
 
 def push_book(cdir: Path, cfg: dict, on_event=print, s3=None) -> dict:
