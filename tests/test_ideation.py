@@ -603,7 +603,8 @@ class FourFamiliesTest(unittest.TestCase):
         from calforge.imagegen import prompts
         from calforge.render import grid_select, pages
         ids = [f["id"] for f in catalog.families()]
-        self.assertEqual(ids, ["styled_photography", "papercut_collage", "mid_century_retro", "anime_illustration"])
+        self.assertEqual(ids, ["styled_photography", "papercut_collage", "mid_century_retro", "anime_illustration",
+                               "cinematic_still"])
         desc = catalog.family("anime_illustration")["description"].lower()
         self.assertIn("original", desc)
         self.assertIn("never resembling any existing", desc)            # tả bằng đặc điểm hình ảnh, không nêu tên hãng
@@ -621,10 +622,26 @@ class FourFamiliesTest(unittest.TestCase):
         ids = [f["id"] for f in catalog.families()]
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            self.assertEqual(catalog.family_quota(root, 4), {i: 1 for i in ids})
-            self.assertEqual(catalog.family_quota(root, 8), {i: 2 for i in ids})
+            self.assertEqual(catalog.family_quota(root, 5), {i: 1 for i in ids})
+            self.assertEqual(catalog.family_quota(root, 10), {i: 2 for i in ids})
             self.assertEqual(sum(catalog.family_quota(root, 6).values()), 6)
             self.assertEqual(sum(catalog.family_quota(root, 1).values()), 1)
+
+    def test_cinematic_family_has_no_conflicting_rules(self):
+        """Cinema: 'cinematic' = khung hình / ống kính / câu chuyện, không phải tông tối (quy tắc chung cấm);
+        ánh sáng tự chọn theo cảnh, không ép ấm; không viền đen, phụ đề; không bắt chước phim có thật."""
+        from calforge.imagegen import prompts
+        from calforge.render import grid_select, pages
+        rule = prompts._artwork_lightness_rule({"family": "cinematic_still"})
+        self.assertIn("not a dark look", rule)
+        self.assertIn("best fit each scene's story", rule)
+        self.assertNotIn("golden-hour", rule)
+        for word in ("letterbox", "subtitles", "any existing film"):
+            self.assertIn(word, rule)
+        desc = catalog.family("cinematic_still")["description"]
+        self.assertIn("narrative moment rather than showing a styled arrangement", desc)   # khác styled photography
+        self.assertIn("cinematic_still", grid_select.FAMILY_HINT)
+        self.assertIn("cinematic_still", pages.FAMILY_TO_PRESET)
 
 
 class StyleSplitTest(unittest.TestCase):

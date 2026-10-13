@@ -28,6 +28,7 @@ const STYLE_LABEL = {
   papercut_collage: 'Layered papercut',
   mid_century_retro: 'Mid-century poster',
   anime_illustration: 'Anime illustration',
+  cinematic_still: 'Cinematic film still',
 };
 
 function batchStyle(selection) {
@@ -89,6 +90,15 @@ function bindEvents() {
     runShop(books, SHOP.format);
   });
   $('shopFilter').addEventListener('input', renderShopBooks);
+  $('bookSearch').addEventListener('input', renderResults);
+  $('bookSearch').addEventListener('keydown', (e) => {      // Enter: còn đúng 1 cuốn khớp -> mở thư mục cuốn đó
+    if (e.key === 'Escape') { e.target.value = ''; renderResults(); return; }
+    if (e.key !== 'Enter') return;
+    const hits = searchHits();
+    if (hits.length === 1) openFolder(hits[0].path);
+    else if (!hits.length) toast('Không có cuốn nào khớp', 'info');
+    else toast(`${hits.length} cuốn khớp - gõ thêm cho đúng 1 cuốn`, 'info');
+  });
   document.querySelectorAll('[data-pick]').forEach((b) => b.addEventListener('click', () => {
     const mode = b.dataset.pick;
     const shown = shopVisible();
@@ -546,17 +556,39 @@ function friendlyReason(st) {
   return raw || 'Chưa làm xong. Bấm "Làm tiếp".';
 }
 
+// Ô tìm trên "Lịch đã làm": khớp SKU / tên cuốn / chủ đề (không phân biệt hoa thường, bỏ dấu cách thừa)
+function bookQuery() {
+  return (($('bookSearch') || {}).value || '').trim().toLowerCase();
+}
+
+function bookMatches(c, keyword, q) {
+  return !q || `${c.sku || ''} ${c.title || ''} ${keyword || ''} ${(c.path || '').split(/[\\/]/).pop()}`
+    .toLowerCase().includes(q);
+}
+
+function searchHits() {
+  const q = bookQuery();
+  return S.projects.flatMap((p) => (p.concepts || []).filter((c) => bookMatches(c, p.keyword, q)));
+}
+
 function renderResults() {
   const box = $('results');
   const books = S.projects.reduce((n, p) => n + (p.concepts || []).length, 0);
-  $('bookCount').textContent = books ? `${books} cuốn` : '';
+  const q = bookQuery();
+  const hits = q ? searchHits().length : books;
+  $('bookCount').textContent = books ? (q ? `${hits}/${books} cuốn` : `${books} cuốn`) : '';
   if (!books) {
     box.innerHTML = '<p class="empty">Chưa có cuốn nào.</p>';
+    return;
+  }
+  if (q && !hits) {
+    box.innerHTML = `<p class="empty">Không có cuốn nào khớp "${esc(q)}".</p>`;
     return;
   }
   const running = S.task ? slug(S.task.params.keyword) : '';
   const runProd = S.task ? (S.task.params.product || 'wall_grid') : '';
   const groups = [...S.projects]
+    .map((p) => (q ? { ...p, concepts: (p.concepts || []).filter((c) => bookMatches(c, p.keyword, q)) } : p))
     .filter((p) => (p.concepts || []).length)
     .sort((a, b) => newest(b) - newest(a));
   box.innerHTML = '';

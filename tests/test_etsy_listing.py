@@ -191,7 +191,11 @@ class ListingTxtTest(unittest.TestCase):
             layout.concept_file(c).write_text(json.dumps(concept), encoding="utf-8")
             lst = write_listing(c)                                         # listing thường: tự có listing.txt
             text = (c / "listing.txt").read_text(encoding="utf-8-sig")
-            self.assertTrue(text.startswith("TITLE\n" + lst["title"] + "\n\nTAGS\n"))
+            self.assertTrue(text.startswith("SKU\nWCB-"), text[:200])        # SKU gốc + từng biến thể trước
+            base = text.splitlines()[1]
+            for v in ("11SM", "11PD", "14SM", "14SG", "14PD"):            # đúng 5 biến thể như CSV Crayonahub
+                self.assertIn(f"{base}-{v}  (", text)
+            self.assertIn("\nTITLE\n" + lst["title"] + "\n\nTAGS\n", text)
             self.assertIn(", ".join(lst["tags"]), text)
             self.assertNotIn("<", text)                                    # chữ thường, không còn thẻ HTML
             self.assertIn("Details\n- Sizes:\n  - 11 x 8.5 in (opens to 11 x 17 in)\n  - 14 x 11.5 in", text)

@@ -43,7 +43,7 @@ class UiServerTest(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn(b"CalForge", data)
         self.assertIn(b"STUDIO", data)
-        self.assertEqual(data.count(b'class="style-sample'), 5)
+        self.assertEqual(data.count(b'class="style-sample'), 6)
         self.assertIn(b'data-style-family="random"', data)
 
     def test_api_styles(self):
@@ -53,7 +53,7 @@ class UiServerTest(unittest.TestCase):
         self.assertIn("families", res)
         self.assertEqual(
             [f["id"] for f in res["families"]],
-            ["styled_photography", "papercut_collage", "mid_century_retro", "anime_illustration"],
+            ["styled_photography", "papercut_collage", "mid_century_retro", "anime_illustration", "cinematic_still"],
         )
 
     def test_api_projects(self):

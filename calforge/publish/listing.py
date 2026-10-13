@@ -101,12 +101,48 @@ def html_to_text(desc: str) -> str:
     return re.sub(r"\n\n(?=\s*- )", NL, text).strip()   # mục danh sách liền ngay dưới tiêu đề, không dòng trống
 
 
+def book_skus(concept_dir: Path, listing: dict) -> tuple[str, list[tuple[str, str]]]:
+    """SKU gốc + SKU từng biến thể, ĐÚNG như CSV Crayonahub xuất (khổ x định dạng x giấy). Lỗi thì ("", [])."""
+    try:
+        import hashlib
+
+        from .. import products
+        from . import r2
+        from .calendaria_csv import FINISHES
+        from .. import config
+        from .shop_csv import shop_settings
+        try:
+            product = products.product_id(json.loads(layout.concept_file(concept_dir).read_text(encoding="utf-8")))
+        except (OSError, ValueError):
+            product = products.DEFAULT
+        shop = shop_settings(config.load())                 # cùng cài đặt shop với lúc xuất CSV
+        handle = r2.slug(listing.get("title", ""), 200)
+        base = layout.book_sku(concept_dir) or (
+            f"{shop['sku_prefix'].get(product, 'CAL')}-{''.join(w[0] for w in handle.split('-')[:3]).upper()}-"
+            f"{hashlib.sha1(handle.encode()).hexdigest()[:5].upper()}")
+        finishes = {**shop["spiral_finishes"].get(product, {}), **FINISHES.get(product, {})}
+        out = []
+        for size in shop["sizes"]:
+            label = layout.SIZE_LABEL[size["format_id"]]
+            for v in shop["variants"]:
+                printable = v["format"].lower() == "printable"
+                if not printable and v["finish"] not in finishes.get(label, [v["finish"]]):
+                    continue
+                kind = "Printable" if printable else f"Spiral {v['finish']}"
+                out.append((f"{base}-{size['sku']}{v['sku']}", f"{size['label']} {kind}"))
+        return base, out
+    except Exception:  # noqa: BLE001 - thiếu SKU không được làm hỏng file listing
+        return "", []
+
+
 def write_listing_txt(concept_dir: Path, listing: dict) -> Path:
     """listing.txt ngay trong thư mục cuốn (cạnh 11x8.5 / 14x11.5 / preview): title, tags, mô tả - mở ra chép thẳng
     lên shop, khỏi phải mở tool."""
     desc = listing.get("description_text") or html_to_text(listing.get("description", ""))
-    text = NL.join(["TITLE", listing.get("title", ""), "", "TAGS", ", ".join(listing.get("tags", [])), "",
-                    "DESCRIPTION", desc, ""])
+    base, variants = book_skus(concept_dir, listing)
+    sku = ["SKU", base] + [f"{s}  ({label})" for s, label in variants] + [""] if base else []
+    text = NL.join(sku + ["TITLE", listing.get("title", ""), "", "TAGS", ", ".join(listing.get("tags", [])), "",
+                          "DESCRIPTION", desc, ""])
     f = Path(concept_dir) / LISTING_TXT
     f.write_text(text, encoding="utf-8-sig")              # có BOM: Notepad mở đúng mọi ký tự
     return f

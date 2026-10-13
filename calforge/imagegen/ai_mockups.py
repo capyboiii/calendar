@@ -24,7 +24,7 @@ from pathlib import Path
 from PIL import Image
 
 from .. import layout
-from .mockup_prompts import AI_PREVIEWS, ART_PREVIEWS, COVER_PROMPT, SCENE_PROMPT, SQUARE_COVER, SQUARE_SCENE
+from .mockup_prompts import AI_PREVIEWS, ART_PREVIEWS, COVER_PROMPT, SCENE_PROMPT, SQUARE_SCENE
 
 ROOT = Path(__file__).resolve().parents[2]
 COVER_TEMPLATE = ROOT / "data" / "mockups" / "front_cover_spiral_v2.webp"   # cùng khung với mockup code
@@ -101,7 +101,7 @@ def ai_previews(cdir: Path, cfg: dict, on_event=print) -> dict:
             if cover is None or not COVER_TEMPLATE.is_file():
                 on_event(f"  ⚠ {name}: thiếu tranh bìa gốc hoặc khung bìa - giữ mockup code")
                 continue
-            attach, prompt = [COVER_TEMPLATE, cover], COVER_PROMPT + SQUARE_COVER   # IMAGE 1 = khung, IMAGE 2 = bìa gốc
+            attach, prompt = [COVER_TEMPLATE, cover], COVER_PROMPT   # IMAGE 1 = khung, IMAGE 2 = bìa gốc (đã gồm 1:1)
         elif name in ART_PREVIEWS:
             art_job, prompt = ART_PREVIEWS[name]
             art = job_done(cdir, art_job)

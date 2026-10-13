@@ -1,5 +1,5 @@
 {
-  "_note": "Bốn style artwork được phép cho dự án mới. P1 phải chọn đúng một style trong danh sách này; code ưu tiên style ít dùng hơn khi các phương án có chất lượng tương đương.",
+  "_note": "Năm style artwork được phép cho dự án mới. P1 phải chọn đúng một style trong danh sách này; code ưu tiên style ít dùng hơn khi các phương án có chất lượng tương đương.",
   "families": [
     {"id": "styled_photography", "name": "Styled photography",
      "description": "photorealistic editorial still lifes or environments with believable materials and natural light; no illustrated or painterly treatment"},
@@ -8,6 +8,8 @@
     {"id": "mid_century_retro", "name": "Mid-century poster",
      "description": "bold 1950s-60s poster geometry, simplified silhouettes and restrained screenprint texture"},
     {"id": "anime_illustration", "name": "Anime illustration",
-     "description": "original Japanese-animation-inspired illustration: clean confident line art, flat cel shading with one soft shadow tone, expressive simplified shapes and luminous hand-painted backgrounds with clear skies and soft natural light; original subjects and settings only, never resembling any existing series, film, studio style or character"}
+     "description": "original Japanese-animation-inspired illustration: clean confident line art, flat cel shading with one soft shadow tone, expressive simplified shapes and luminous hand-painted backgrounds with clear skies and soft natural light; original subjects and settings only, never resembling any existing series, film, studio style or character"},
+    {"id": "cinematic_still", "name": "Cinematic film still",
+     "description": "photoreal frame from an original live-action film: a story moment caught mid-scene with motivated, directional key light, shallow depth of field, deliberate lens choice and subtle film grain; lighting and color grade chosen to fit each scene's story, always clear and readable; original characters and settings only, never resembling any existing film, actor or franchise; differs from styled photography by telling a narrative moment rather than showing a styled arrangement"}
   ]
 }

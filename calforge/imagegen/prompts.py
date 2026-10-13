@@ -114,6 +114,15 @@ def _artwork_lightness_rule(style: dict) -> str:
     if family == "mid_century_retro":
         return common + (" For mid-century poster, use crisp sunlit color blocking; deep inks suit outlines and "
                          "graphic accents.")
+    if family == "cinematic_still":
+        # "cinematic" ở đây = khung hình, ống kính, kể chuyện - KHÔNG phải tông tối của phim (quy tắc chung cấm)
+        return common + (
+            " For cinematic film still, 'cinematic' means film-like framing, lens choice, shallow depth of field and a "
+            "story moment, not a dark look. Choose the light source, time of day and color grade that best fit each "
+            "scene's story, within the mood rule above, with only subtle film grain. The image fills the whole frame: no letterbox bars, subtitles, credits, "
+            "title cards or film-frame borders. Characters, places and story are original: do not imitate or resemble "
+            "any existing film, actor, director's signature look or franchise."
+        )
     if family == "anime_illustration":
         return common + (
             " For anime illustration, use clean line art, flat cel shading with one soft shadow tone and a bright, "

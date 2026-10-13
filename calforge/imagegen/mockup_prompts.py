@@ -10,49 +10,49 @@ Preview 5: IMAGE 1 = tranh tháng 7 AI gốc (_he_thong/anh_ai/m07.*), IMAGE 2 =
            tháng 7 + trang lịch tháng 8 + tranh tháng 8) - AI chỉ thay nền theo tranh.
 """
 
-COVER_PROMPT = """## BACKGROUND — FULL CREATIVE FREEDOM
+# Preview 1 (người dùng duyệt 13/10/2026): đặt bìa khớp ô lịch + nền không lấn át lịch; đã gồm khung ảnh vuông 1:1
+COVER_PROMPT = """Create a square product photo of the closed wall calendar from IMAGE 1, with the artwork from IMAGE 2 printed on its front cover, placed in a new environment.
 
-Replace the original background from IMAGE 1 with a completely new environment.
+## 1. FIT THE COVER EXACTLY (MOST IMPORTANT)
 
-Study IMAGE 2 carefully and independently create the most beautiful, visually compelling and contextually appropriate setting for that specific artwork.
+- IMAGE 1 shows the calendar and its front-cover panel: the printable area below the spiral binding, bounded by the paper edges. IMAGE 2 is the artwork printed on that panel.
+- Place IMAGE 2 on the cover panel EDGE TO EDGE: it fills the entire panel and touches all four paper edges. No white margins, frame, border, gap, letterbox or visible blank paper around the artwork.
+- IMAGE 2 is slightly wider than the panel. Scale it proportionally until it covers the whole panel, then trim only the small excess equally from the LEFT and RIGHT sides. Never stretch, squash or distort the artwork.
+- The title and year in IMAGE 2 stay fully visible and readable; trimming must never cut through any letter.
+- Align the artwork perfectly with the panel: same perspective, angle and slight paper curvature as the calendar in IMAGE 1, as if truly printed on that paper.
+- The spiral binding sits on top of the artwork's upper edge exactly as in IMAGE 1. Keep the hanging hole and paper edges as in IMAGE 1.
+- Do not redraw, repaint, recolor, simplify or restyle IMAGE 2. Keep its exact content, colors, lettering and layout.
+- Never make the calendar square, never stretch, squash or crop the calendar itself. It is a closed LANDSCAPE wall calendar, wider than tall (11 x 8.5 inch, about 1.29:1), exactly like IMAGE 1.
 
-The background must feel naturally connected to the artwork’s subject, theme, mood, colors, season, atmosphere and visual story.
+## 2. BACKGROUND — CREATIVE FREEDOM, PRODUCT FIRST
 
-You have FULL CREATIVE FREEDOM over the background.
+Replace the original background of IMAGE 1 with a completely new environment.
 
-Do not follow a predefined interior style, location, color palette, lighting setup, prop list, material, season, or environment type.
+Study IMAGE 2 first, then invent a setting from scratch that feels naturally connected to the artwork's subject, theme, mood, colors, season and visual story. It does not need to literally reproduce the artwork's scene; extend its visual world in a tasteful, believable way.
 
-Do not default to a Scandinavian interior, generic room, white studio, wooden table, or any repeated product-mockup setting.
+The setting may be indoor, outdoor, architectural, natural, seasonal, lifestyle, minimal, editorial or anything else — whichever presents this cover best. Choose environment, props, surfaces, materials, colors, lighting, depth and camera presentation to suit IMAGE 2.
 
-Instead, interpret IMAGE 2 first, then invent the scene from scratch.
+Do not default to a Scandinavian interior, generic room, white studio, wooden table or any repeated product-mockup setting. Every time IMAGE 2 changes, rethink the environment from scratch; do not reuse a previous background concept.
 
-The setting may be indoor, outdoor, architectural, natural, seasonal, lifestyle-based, atmospheric, minimal, elaborate, realistic, editorial, or something entirely different — whichever produces the strongest and most appropriate product preview for IMAGE 2.
+Make it look professionally photographed in an environment art-directed for this exact cover.
 
-Choose everything dynamically based on the artwork:
+## 3. BACKGROUND RESTRAINT — THE CALENDAR MUST STAND OUT
 
-- environment and location
-- surrounding objects and props
-- surfaces and materials
-- colors
-- lighting
-- atmosphere
-- depth
-- styling
-- camera presentation
+The calendar is the hero. The background supports it and never competes with it.
 
-There are no fixed aesthetic restrictions for the environment.
+- Keep the background QUIETER than the cover: lower saturation, lower contrast and less detail than the cover artwork.
+- Use soft, airy tones. Avoid heavy, dark, deeply saturated or busy backgrounds that make the cover look dull, muddy or lost.
+- The cover is the brightest, sharpest and most saturated area of the image, with light falling clearly on it.
+- Use gentle depth of field: the calendar crisp, the environment softly out of focus.
+- Keep clear breathing space around the calendar. No props overlapping, touching, crowding or standing in front of it.
+- Echo the cover's dominant colors in the background only as muted, lighter tints, so the cover never blends into its surroundings.
+- Avoid strong patterns, high-contrast textures, bright light sources, dramatic shadows or vivid objects near the calendar.
+- At thumbnail size, the cover must be the first thing the viewer sees, with its artwork and title clearly readable.
 
-The background does NOT need to literally reproduce the scene shown in the artwork. Instead, extend its visual world in a tasteful and believable way.
+## 4. IMAGE FORMAT
 
-Make the calendar feel as though it was professionally photographed in an environment specifically art-directed for this exact cover.
-
-The scene should enhance the artwork rather than merely sit behind it.
-
-Avoid generic decoration added only to fill empty space. Every major environmental choice should make visual sense for IMAGE 2.
-
-The calendar must remain clearly recognizable as the main product, but otherwise prioritize the strongest, most beautiful and commercially compelling scene possible.
-
-IMPORTANT: Every time IMAGE 2 changes, reconsider the environment from scratch. Do not reuse the same background concept from previous images."""
+- The OUTPUT photo canvas is square, 1:1. This applies ONLY to the photo canvas, not to the calendar. Fill the extra space with the scene around the calendar.
+- One single photo. No extra text, logos or watermarks anywhere in the scene."""
 
 SCENE_PROMPT = """Use the provided calendar image as the exact product reference.
 

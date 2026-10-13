@@ -64,7 +64,7 @@
         <label class="kind style-kind" data-style-family="random">
           <input type="radio" name="family" value="random" checked>
           <span class="style-sample style-sample-random" aria-hidden="true"></span>
-          <span><strong>Ngẫu nhiên</strong><small>Bốc một trong 4 phong cách cho mỗi batch</small></span>
+          <span><strong>Ngẫu nhiên</strong><small>Bốc một trong 5 phong cách cho mỗi batch</small></span>
         </label>
         <label class="kind style-kind" data-style-family="styled_photography">
           <input type="radio" name="family" value="styled_photography">
@@ -85,6 +85,11 @@
           <input type="radio" name="family" value="anime_illustration">
           <span class="style-sample" aria-hidden="true"></span>
           <span><strong>Anime illustration</strong><small>Nét sạch, tô bóng phẳng, nền vẽ sáng trong</small></span>
+        </label>
+        <label class="kind style-kind" data-style-family="cinematic_still">
+          <input type="radio" name="family" value="cinematic_still">
+          <span class="style-sample" aria-hidden="true"></span>
+          <span><strong>Cinematic film still</strong><small>Khung hình như cảnh phim, có câu chuyện, ánh sáng theo từng cảnh</small></span>
         </label>
       </fieldset>
       <fieldset class="kinds" id="gridModePicker">
@@ -247,6 +252,8 @@
       <div class="results-head">
         <h2>Lịch đã làm</h2>
         <span class="count" id="bookCount"></span>
+        <input id="bookSearch" class="book-search" type="search" placeholder="Tìm SKU / tên cuốn…" autocomplete="off"
+               title="Gõ mã SKU (vd WCB-2CW-5CE1D) hoặc tên cuốn; Enter khi còn 1 cuốn = mở thư mục">
         <span class="grow"></span>
         <button class="btn btn-small btn-ghost" id="btnR2Settings">Khoá R2</button>
         <button class="btn btn-small btn-ghost" id="btnShop">Đẩy R2 + CSV Printify</button>

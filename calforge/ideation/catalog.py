@@ -1,4 +1,4 @@
-"""Bốn style sản xuất được duyệt và độ phủ của chúng trong danh mục sản phẩm."""
+"""Năm style sản xuất được duyệt và độ phủ của chúng trong danh mục sản phẩm."""
 from __future__ import annotations
 
 import json

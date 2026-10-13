@@ -16,7 +16,7 @@ class FakeS3:
     def __init__(self):
         self.keys = []
 
-    def upload_file(self, path, bucket, key, ExtraArgs=None):
+    def upload_file(self, path, bucket, key, ExtraArgs=None, Config=None):
         self.keys.append(key)
 
 

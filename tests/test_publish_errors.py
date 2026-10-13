@@ -14,7 +14,7 @@ from calforge.publish import calendaria_csv, r2, shop_csv
 from tests.test_shop_csv import make_book
 
 CFG_R2 = {"account_id": "a", "access_key_id": "k", "secret_access_key": "s", "bucket": "b",
-          "public_url": "https://cdn.x.com/"}
+          "public_url": "https://cdn.x.com/", "upload_retries": 1}   # hỏng hẳn: không chờ thử lại
 
 
 class FlakyS3:
@@ -23,7 +23,7 @@ class FlakyS3:
     def __init__(self, fail_on="", fail_after=None):
         self.keys, self.fail_on, self.fail_after = [], fail_on, fail_after
 
-    def upload_file(self, path, bucket, key, ExtraArgs=None):
+    def upload_file(self, path, bucket, key, ExtraArgs=None, Config=None):
         if (self.fail_on and self.fail_on in key) or (self.fail_after is not None and len(self.keys) >= self.fail_after):
             raise ConnectionError(f"mất mạng khi tải {key}")
         self.keys.append(key)

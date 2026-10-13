@@ -266,7 +266,10 @@ input[type="text"], input[type="number"], select {
 }
 
 /* ---------- kết quả ---------- */
-.results-head { display: flex; align-items: baseline; gap: 12px; margin: 8px 0 4px; }
+.results-head { display: flex; align-items: baseline; gap: 12px; margin: 8px 0 4px; flex-wrap: wrap; }
+.book-search { align-self: center; width: 220px; max-width: 100%; padding: 6px 10px; border: 1px solid var(--line);
+  border-radius: 8px; font: inherit; font-size: 13px; background: var(--surface); color: var(--text); }
+.book-search:focus { outline: 2px solid color-mix(in srgb, var(--primary) 40%, transparent); outline-offset: 1px; }
 .count { color: var(--muted); font-size: .9rem; }
 .group { margin-top: 18px; }
 .group-head { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }

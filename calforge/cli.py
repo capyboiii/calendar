@@ -380,7 +380,7 @@ def main(argv=None):
     p.add_argument("--auto", type=int, help="tự chọn N góc tốt nhất (mặc định theo config)")
     p.add_argument("--more", action="store_true", help="sinh thêm lượt góc mới, không trùng góc cũ")
     p.add_argument("--style", help="ép phong cách, bỏ qua gợi ý của ChatGPT")
-    p.add_argument("--family", help="ép style đã duyệt: styled_photography, papercut_collage, mid_century_retro hoặc anime_illustration")
+    p.add_argument("--family", help="ép style đã duyệt: styled_photography, papercut_collage, mid_century_retro, anime_illustration hoặc cinematic_still")
     p.add_argument("--grid-preset", default="auto",
                    choices=("auto", "bento_planner", "quiet_luxury", "soft_tech", "fresh_monochrome", "organic_capsules", "playful_editorial"),
                    help="tự chọn grid theo concept hoặc ép một preset")
@@ -415,7 +415,7 @@ def main(argv=None):
     p.add_argument("keyword")
     p.add_argument("--pick")
     p.add_argument("--auto", type=int)
-    p.add_argument("--family", choices=("styled_photography", "papercut_collage", "mid_century_retro", "anime_illustration"),
+    p.add_argument("--family", choices=("styled_photography", "papercut_collage", "mid_century_retro", "anime_illustration", "cinematic_still"),
                    help="ép medium sản xuất cho toàn bộ dự án")
     p.add_argument("--grid-preset", default="auto",
                    choices=("auto", "bento_planner", "quiet_luxury", "soft_tech", "fresh_monochrome", "organic_capsules", "playful_editorial"))

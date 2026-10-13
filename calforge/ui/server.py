@@ -128,13 +128,20 @@ class TaskManager:
             task = self.tasks.get(task_id)
             return task.to_dict(since) if task else None
 
-    def running(self, include_login: bool = False, include_clone: bool = False) -> Task | None:
-        """Việc chính đang chạy. Không tính: cửa sổ đăng nhập một tài khoản (không được chặn batch), và lượt
-        "Clone sản phẩm" (chạy SONG SONG với batch theo ý tưởng - hai bên chia tài khoản bằng khoá trong profile)."""
+    def running(self, include_login: bool = False, include_clone: bool = False,
+                include_shop: bool = False) -> Task | None:
+        """Việc chính đang chạy. Không tính: cửa sổ đăng nhập một tài khoản (không được chặn batch), lượt
+        "Clone sản phẩm" (chạy SONG SONG với batch theo ý tưởng - hai bên chia tài khoản bằng khoá trong profile), và
+        lượt đẩy R2 + xuất CSV (chỉ đọc cuốn đã xong + dùng mạng, không đụng tài khoản / Chrome / GPU)."""
         with self.lock:
             return next((t for t in self.tasks.values() if t.status == "running"
                          and (include_login or t.action != "login")
-                         and (include_clone or t.action != "clone")), None)
+                         and (include_clone or t.action != "clone")
+                         and (include_shop or t.action != "shop")), None)
+
+    def shop_running(self) -> Task | None:
+        with self.lock:
+            return next((t for t in self.tasks.values() if t.status == "running" and t.action == "shop"), None)
 
     def clone_running(self) -> Task | None:
         with self.lock:
@@ -673,7 +680,8 @@ class StudioHandler(SimpleHTTPRequestHandler):
             else:
                 return self._send_json({"error": f"Unknown action: {action}"}, status=HTTPStatus.BAD_REQUEST)
 
-            busy = TASK_MANAGER.running()
+            # đẩy R2 chạy song song với batch; chỉ chặn hai lượt đẩy R2 cùng lúc (ghi đè r2.json của nhau)
+            busy = TASK_MANAGER.shop_running() if action == "shop" else TASK_MANAGER.running()
             if busy and action != "login":
                 return self._send_json({"error": f"Đang chạy việc khác: {busy.description}. Chờ xong hoặc bấm Dừng."},
                                        status=HTTPStatus.CONFLICT)

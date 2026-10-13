@@ -21,6 +21,7 @@ FAMILY_HINT = {
     "papercut_collage": "organic_capsules",
     "styled_photography": "quiet_luxury",
     "anime_illustration": "playful_editorial",
+    "cinematic_still": "quiet_luxury",
 }
 
 
