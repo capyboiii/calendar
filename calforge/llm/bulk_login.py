@@ -198,6 +198,8 @@ def _one(idx: int, name: str, creds: dict, total: int, sem: threading.Semaphore,
             size = next(t for t in tile if t.startswith("--window-size="))
             with sync_playwright() as pw:
                 # Chạy ngầm: cửa sổ nằm ngoài màn hình (headless thật bị ChatGPT/Cloudflare chặn đăng nhập).
+                from .browser import _start_keeper
+                _start_keeper()                      # canh trước khi mở: Chrome ngầm không nháy lên thanh tác vụ
                 ctx = pw.chromium.launch_persistent_context(
                     user_data_dir=str(udir), headless=False, channel="chrome", no_viewport=True,
                     ignore_default_args=["--enable-automation", "--no-sandbox"],

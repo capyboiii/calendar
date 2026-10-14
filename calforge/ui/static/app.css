@@ -460,3 +460,7 @@ input[type="text"], input[type="number"], select {
   background: rgba(0, 0, 0, .55); color: #fff; }
 .page-item input { position: absolute; top: 6px; left: 6px; }
 .queue-list .tag.part { background: #d9a441; color: #fff; }
+
+.clone-links { width: 100%; box-sizing: border-box; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px;
+  font: 13px/1.5 ui-monospace, Consolas, monospace; background: var(--surface); color: var(--text); resize: vertical; }
+.clone-links:focus { outline: 2px solid color-mix(in srgb, var(--primary) 40%, transparent); outline-offset: 1px; }

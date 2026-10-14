@@ -130,6 +130,21 @@ def add(projects_dir, images: list[tuple[str, bytes]], *, group: str = "", year:
                  mockup_mode=mockup_mode if mockup_mode in ("ai", "template") else "ai", kind="normal")
 
 
+def add_link(projects_dir, url: str, *, group: str = "", year: int = 2027, mockup_mode: str = "ai") -> dict:
+    """Thêm một cuốn từ LINK sản phẩm: chưa có ảnh mẫu - lúc chạy, ChatGPT tách artwork của sản phẩm thành file zip
+    rồi tool lưu làm ảnh mẫu (clone/fetch.py). Các bước sau giống hệt cuốn dán ảnh tay."""
+    from .fetch import valid_url
+    url = valid_url(url)
+    if not 2024 <= int(year) <= 2100:
+        raise ValueError("năm không hợp lệ")
+    item_id = time.strftime("%y%m%d%H%M%S") + secrets.token_hex(2)
+    d = root(projects_dir) / item_id
+    (d / "refs").mkdir(parents=True)
+    return write(d, id=item_id, created=time.strftime("%Y-%m-%d %H:%M:%S"), group=_group(group), year=int(year),
+                 status="pending", stage="", reason="", book="", title="", names=[], source_url=url,
+                 mockup_mode=mockup_mode if mockup_mode in ("ai", "template") else "ai", kind="normal")
+
+
 def items(projects_dir) -> list[dict]:
     r = root(projects_dir)
     out = []

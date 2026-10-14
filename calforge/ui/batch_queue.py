@@ -19,9 +19,11 @@ PARTIAL = "partial"          # chạy xong nhưng chỉ đạt một phần số
 
 
 class BatchQueue:
-    def __init__(self, tasks, state_file: Path, build_args, report):
-        """tasks: TaskManager; report(params) -> (ok, total[, retryable])."""
+    def __init__(self, tasks, state_file: Path, build_args, report, ideas_done=None):
+        """tasks: TaskManager; report(params) -> (ok, total[, retryable]);
+        ideas_done(params) -> True khi batch đó đã lên đủ ý, chỉ còn vẽ (thì chủ đề kế tiếp được bắt đầu lên ý)."""
         self.tasks, self.file, self.build_args, self.report = tasks, Path(state_file), build_args, report
+        self.ideas_done = ideas_done or (lambda params: False)
         self.lock = threading.RLock()
         self.items: list[dict] = []
         self.paused = False
@@ -118,19 +120,18 @@ class BatchQueue:
     def pause(self) -> None:
         with self.lock:
             self.paused = True
-            cur = self._running()
-            if cur:                                   # đưa batch đang chạy về đầu hàng, làm nốt khi Tiếp tục
-                task_id = cur["task_id"]
+            task_ids = []
+            # đưa MỌI batch đang chạy (có thể 2: batch đang vẽ nốt + chủ đề kế tiếp đang lên ý) về đầu hàng, giữ thứ tự
+            for cur in reversed(self._runnings()):
+                task_ids.append(cur["task_id"])
                 cur.update(status=WAITING, task_id=None, paused_from=True)
                 if not cur["params"].get("action"):     # Tiếp tục = làm nốt đúng batch đang dở
                     cur["params"] = {**cur["params"], "resume": True}
                 self.items.remove(cur)
                 first = next((k for k, i in enumerate(self.items) if i["status"] == WAITING), len(self.items))
                 self.items.insert(first, cur)
-            else:
-                task_id = None
             self._save()
-        if task_id:
+        for task_id in task_ids:
             self.tasks.stop_task(task_id)
 
     def resume(self) -> None:
@@ -154,32 +155,24 @@ class BatchQueue:
 
     # ---- vòng chạy -----------------------------------------------------------------------------------------
     def tick(self) -> None:
-        """Cập nhật batch đang chạy; nếu rảnh (không tạm dừng, không việc chính nào chạy) thì chạy batch kế tiếp."""
+        """Cập nhật các batch đang chạy; rảnh (không tạm dừng, không việc chính nào chạy) thì chạy batch kế tiếp.
+        CHỒNG LƯỢT: batch đang chạy đã lên đủ ý (chỉ còn vẽ nốt - phần lớn tài khoản rảnh) thì chủ đề kế tiếp được
+        bắt đầu luôn để lên ý trước; tối đa 2 batch cùng lúc (hai tiến trình chia tài khoản bằng khoá trong profile)."""
         with self.lock:
-            cur = self._running()
-            if cur:
+            for cur in self._runnings():
                 t = self.tasks.tasks.get(cur["task_id"])
-                if t is not None and t.status == "running":
+                if t is None or t.status != "running":
+                    self._finish(cur, t)
+            running = self._runnings()
+            if self.paused:
+                return
+            if running:
+                if not self._can_overlap(running):
                     return
-                status = t.status if t is not None else "failed"
-                result = self.report(cur["params"])
-                ok, total = result[:2]
-                retryable = bool(result[2]) if len(result) > 2 else (not total or ok < total)
-                if status == "stopped" or cur.get("user_stopped"):
-                    final = STOPPED
-                elif status != "success" or (total and ok == 0):
-                    final = FAILED                       # chạy hết mà không cuốn nào đạt = lỗi, không phải "xong"
-                elif total and ok < total:
-                    final = PARTIAL
-                else:
-                    final = DONE
-                cur.update(finished_at=time.strftime("%Y-%m-%d %H:%M:%S"), ok=ok, total=total,
-                           retryable=retryable, status=final)
-                self._save()
-            if self.paused or self.tasks.running():
+            elif self.tasks.running():                 # việc chính ngoài hàng đợi (người dùng tự bấm) đang chạy
                 return
             nxt = next((i for i in self.items if i["status"] == WAITING), None)
-            if not nxt:
+            if not nxt or (running and not self._overlap_ok(nxt, running[0])):
                 return
             try:
                 # Trạng thái trên đĩa có thể đổi trong lúc chờ (ví dụ cuốn vừa bị loại vì TM).
@@ -190,8 +183,42 @@ class BatchQueue:
                 self._save()
                 return
             nxt.update(status=RUNNING, task_id=self.tasks.start_task(cmd_args, desc, "run", nxt["params"]),
-                       started_at=time.strftime("%Y-%m-%d %H:%M:%S"), user_stopped=False)
+                       started_at=time.strftime("%Y-%m-%d %H:%M:%S"), user_stopped=False, overlapped=bool(running))
             self._save()
+
+    def _finish(self, cur: dict, t) -> None:
+        """Batch vừa dừng chạy: ghi kết quả (xong / một phần / lỗi / đã dừng) theo báo cáo batch."""
+        status = t.status if t is not None else "failed"
+        result = self.report(cur["params"])
+        ok, total = result[:2]
+        retryable = bool(result[2]) if len(result) > 2 else (not total or ok < total)
+        if status == "stopped" or cur.get("user_stopped"):
+            final = STOPPED
+        elif status != "success" or (total and ok == 0):
+            final = FAILED                       # chạy hết mà không cuốn nào đạt = lỗi, không phải "xong"
+        elif total and ok < total:
+            final = PARTIAL
+        else:
+            final = DONE
+        cur.update(finished_at=time.strftime("%Y-%m-%d %H:%M:%S"), ok=ok, total=total,
+                   retryable=retryable, status=final)
+        self._save()
+
+    def _can_overlap(self, running: list[dict]) -> bool:
+        """Đúng 1 batch đang chạy, là batch theo ý tưởng, và nó đã lên đủ ý (chỉ còn vẽ nốt)."""
+        if len(running) != 1 or running[0]["params"].get("action"):
+            return False
+        try:
+            return bool(self.ideas_done(running[0]["params"]))
+        except Exception:  # noqa: BLE001 - đọc trạng thái lỗi: không chồng lượt, chạy tuần tự như cũ
+            return False
+
+    @staticmethod
+    def _overlap_ok(nxt: dict, cur: dict) -> bool:
+        """Chỉ chồng một batch theo ý tưởng KHÁC chủ đề (cùng chủ đề thì khoá batch.lock bắt chờ, vô ích); việc sửa
+        sách lẻ (Làm tiếp / Vẽ lại / Hoàn thiện) vẫn chờ chạy sau như cũ."""
+        p, q = nxt["params"], cur["params"]
+        return not p.get("action") and (p.get("keyword"), p.get("product")) != (q.get("keyword"), q.get("product"))
 
     def start(self, every: float = 2.0) -> None:
         def loop():
@@ -212,3 +239,6 @@ class BatchQueue:
 
     def _running(self) -> dict | None:
         return next((i for i in self.items if i["status"] == RUNNING), None)
+
+    def _runnings(self) -> list[dict]:
+        return [i for i in self.items if i["status"] == RUNNING]

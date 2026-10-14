@@ -44,7 +44,7 @@
         </label>
         <label class="kind">
           <input type="radio" name="make_mode" value="clone">
-          <span><strong>Clone sản phẩm</strong><small>Tải ảnh mẫu lên, ChatGPT vẽ theo</small></span>
+          <span><strong>Clone sản phẩm</strong><small>Dán link sản phẩm, ChatGPT tách artwork rồi vẽ theo</small></span>
         </label>
       </fieldset>
       <div class="mode-panel" id="ideaPanel" data-mode="idea">
@@ -142,18 +142,15 @@
       </div>
       <p class="hint" id="startHint"></p>
       </div>
-      <!-- Clone sản phẩm: tải ảnh mẫu lên, ChatGPT (chỉ tài khoản Plus) vẽ theo -->
+      <!-- Clone sản phẩm: dán link sản phẩm, ChatGPT tách artwork làm ảnh mẫu rồi vẽ theo (chỉ tài khoản Plus/K12) -->
       <div class="mode-panel" id="clonePanel" data-mode="clone" hidden>
         <div class="notice" id="clonePlusNotice" hidden></div>
         <fieldset class="kinds refs-box">
-          <legend>Ảnh mẫu <small class="muted">(1–10 ảnh)</small></legend>
-          <div class="drop" id="cloneDrop" tabindex="0">
-            <input type="file" id="cloneFiles" multiple hidden>
-            <p><strong>Kéo thả, dán (Ctrl+V)</strong> hoặc <button class="btn btn-small" id="clonePick" type="button">Chọn ảnh</button></p>
-            <p class="hint">Khuyến khích <strong>mỗi ảnh chỉ 1 artwork</strong> (tranh không có lịch) để vẽ giống nhất. Ảnh trang lịch, mockup, PDF vẫn được.<br>
-              Ảnh 1 → artwork 1, ảnh 2 → artwork 2… Thiếu thì ChatGPT tự vẽ thêm cùng phong cách.</p>
-          </div>
-          <ol class="ref-list" id="cloneRefList"></ol>
+          <legend>Link sản phẩm <small class="muted">(mỗi dòng một link = một cuốn)</small></legend>
+          <textarea id="cloneLinks" class="clone-links" rows="4" spellcheck="false"
+                    placeholder="https://www.etsy.com/listing/...&#10;https://..."></textarea>
+          <p class="hint">ChatGPT mở trang sản phẩm, tự tách riêng artwork từng tháng (bỏ lưới ngày, lò xo, nền mockup) rồi
+            trả file zip làm ảnh mẫu. Các bước sau giống như trước.</p>
         </fieldset>
         <fieldset class="kinds" id="cloneMockupPicker">
           <legend>Ảnh quảng cáo</legend>

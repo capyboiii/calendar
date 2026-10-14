@@ -110,7 +110,8 @@ class Accounts:
             with self.pool.launch_gate():
                 ctx = pw.chromium.launch_persistent_context(
                     str(self.pdir / name), channel="chrome", viewport={"width": 1400, "height": 950},
-                    **launch_options(headless))
+                    accept_downloads=True, downloads_path=str(self.pdir / name / "_tai_ve"),   # tải zip artwork:
+                    **launch_options(headless))       # không đặt thư mục tải về thì bấm tải làm Chrome đóng ngang
             try:
                 page = ctx.pages[0] if ctx.pages else ctx.new_page()
                 if headless in ("hidden", None):
@@ -727,6 +728,16 @@ def write_concept(book: Path, meta: dict, year: int, item: dict) -> dict:
 
 
 # ------------------------------------------------------------------ cả hàng đợi
+def fetch_refs(b, accts: Accounts, stop: threading.Event | None = None) -> None:
+    """Mục thêm bằng LINK sản phẩm mà chưa có ảnh mẫu: nhờ ChatGPT tách artwork thành file zip rồi lưu làm ảnh mẫu
+    (calforge/clone/fetch.py). Đã có ảnh mẫu (dán tay, hoặc lần trước đã lấy) thì bỏ qua."""
+    from . import fetch
+    if store.refs(b.d) or not b.item.get("source_url"):
+        return
+    run_stage(accts, f"{b.d.name} lấy ảnh mẫu từ link", lambda s, n: fetch.fetch_work(b, s, n), stop=stop)
+    b.item = store.read(b.d) or b.item
+
+
 def run_book(cfg: dict, d: Path, accts: Accounts, plus: list[str], stop: threading.Event | None = None,
              on_event=print, *, step: str = "all", on_grid_ready=None) -> dict:
     """Chạy cả cuốn hoặc một bước; bước thành công trả `next` cho bộ điều phối.
@@ -743,6 +754,7 @@ def run_book(cfg: dict, d: Path, accts: Accounts, plus: list[str], stop: threadi
             b.on_grid_ready = on_grid_ready
             b.status(art_state="running")
             try:
+                fetch_refs(b, accts, stop)              # mục thêm bằng link: ChatGPT tách artwork -> ảnh mẫu
                 art_acc = run_stage(accts, f"{d.name} artwork", b.art_work, stop=stop,
                                     prefer=lambda: (b.item.get("art_chat") or {}).get("account")) \
                     if (b.missing("m") or b.meta() is None or b.done("cover") is None or not b.item.get("book")) \
@@ -970,6 +982,7 @@ def resume_book(book: Path, cfg: dict, on_event=print) -> dict | None:
     b = Book(cfg, d, on_event)
     try:
         if b.missing("m") or b.meta() is None or b.done("cover") is None:
+            fetch_refs(b, accts)
             run_stage(accts, f"{d.name} artwork", b.art_work,
                       prefer=lambda: (b.item.get("art_chat") or {}).get("account"))
         if b.missing("g"):

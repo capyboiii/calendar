@@ -128,6 +128,8 @@ def _check_one(udir: Path) -> dict | None:
 
     from .browser import BASE_ARGS, HIDDEN_ARGS, hide_offscreen_from_taskbar
     with sync_playwright() as pw:
+        from .browser import _start_keeper
+        _start_keeper()                      # canh trước khi mở: Chrome ngầm không nháy lên thanh tác vụ
         ctx = pw.chromium.launch_persistent_context(
             user_data_dir=str(udir), headless=False, channel="chrome", no_viewport=True,
             ignore_default_args=["--enable-automation", "--no-sandbox"], args=BASE_ARGS + HIDDEN_ARGS)

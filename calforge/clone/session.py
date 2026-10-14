@@ -208,6 +208,26 @@ class Session:
         except (cw.SendFailed, TimeoutError) as e:
             raise TempError(str(e)) from e
 
+    def ask_files(self, prompt: str, timeout_s: float = 900) -> tuple[str, list[tuple[str, bytes]]]:
+        """Hỏi và lấy FILE ChatGPT trả về (vd artworks.zip): chờ trả lời xong, bấm từng link tải trong câu trả lời
+        cuối, nhận file qua sự kiện download của trình duyệt. Trả (chữ trả lời, [(tên file, nội dung)])."""
+        reply = self.ask_text(prompt, timeout_s)
+        page, files = self.page, []
+        try:
+            n = int(page.evaluate(FILE_LINKS_JS))
+        except Exception:  # noqa: BLE001 - trang đổi DOM: coi như không có link
+            n = 0
+        for i in range(n):
+            link = page.locator(f'[data-calforge-file="{i}"]').first
+            try:
+                with page.expect_download(timeout=120_000) as dl:
+                    link.click(timeout=15_000)
+                d = dl.value
+                files.append((d.suggested_filename or f"file{i}", Path(d.path()).read_bytes()))
+            except Exception:  # noqa: BLE001 - link này không tải được: thử link khác
+                continue
+        return reply, files
+
     # ---------------------------------------------------------------- chờ nhiều ảnh
     def _collect(self, before: dict, want: int) -> Turn:
         page = self.page
@@ -328,6 +348,37 @@ MODE_JS = """() => {
 }"""
 
 
+# Link tải file trong câu trả lời CUỐI của ChatGPT (file tạo bằng công cụ: "sandbox:/mnt/data/x.zip", nút / link có
+# chữ .zip / Download). Đánh dấu data-calforge-file=i để Playwright bấm từng cái; trả số link.
+FILE_LINKS_JS = r"""() => {
+  const pick = (sel) => Array.from(document.querySelectorAll(sel));
+  let a = pick('[data-message-author-role="assistant"]');
+  if (!a.length) a = pick('article[data-turn="assistant"], [data-turn="assistant"]');
+  if (!a.length) a = pick('[data-chatgpt-search-unit-key$=":assistant"]');
+  // chế độ Work: câu trả lời không mang các dấu trên -> tìm trong cả khung chat (chat mới chỉ có 1 câu trả lời)
+  const last = a.length ? a[a.length - 1] : (document.querySelector('main') || document.body);
+  if (!last) return 0;
+  // có file .zip thì chỉ lấy zip (tên 01.png… trong câu giải thích không phải link tải)
+  const hasZip = Array.from(last.querySelectorAll('span, a, button')).some((e) => /\.zip\b/i.test(e.textContent || ''));
+  const FILE = hasZip ? /[\w()\-]+\.zip\b/i : /[\w()\-]+\.(zip|png|jpe?g|webp)\b/i;
+  let n = 0;
+  // thẻ file: <span>artworks.zip</span> hoặc "Tải artworks.zip — 12 artwork PNG" (không a / button) - bấm là tải
+  for (const el of last.querySelectorAll('span')) {
+    if (el.children.length === 0 && FILE.test(el.textContent || '') && !el.closest('pre, code, [data-message-author-role="user"]'))
+      el.setAttribute('data-calforge-file', String(n++));
+  }
+  for (const el of last.querySelectorAll('a, button')) {
+    if (el.querySelector('[data-calforge-file]') || el.closest('[data-message-author-role="user"]')) continue;
+    const href = (el.getAttribute('href') || '').toLowerCase();
+    const txt = (el.innerText || el.getAttribute('aria-label') || '').toLowerCase();
+    const file = href.startsWith('sandbox:') || /\.(zip|png|jpe?g|webp)(\?|$)/.test(href)
+      || FILE.test(txt) || /download|tải xuống|tải về/.test(txt);
+    if (file && !/copy|sao chép|share|chia sẻ|retry|thử lại/.test(txt)) el.setAttribute('data-calforge-file', String(n++));
+  }
+  return n;
+}"""
+
+
 CHAT_ID = re.compile(r"/c/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:[/?#]|$)", re.I)
 
 
@@ -335,6 +386,26 @@ def real_chat_url(url: str | None) -> str:
     """Mã chat thật trong link (".../c/<uuid>"); "" nếu là link tạm ("local-chatgpt:...") / trang chủ / trang khác."""
     m = CHAT_ID.search(url or "")
     return m.group(1).lower() if m else ""
+
+
+def ensure_work_mode(page) -> str:
+    """Bước lấy ảnh mẫu từ link: chuyển sang "Work / Công việc" (chế độ này tự mở trang, tải ảnh, cắt và trả file
+    ZIP; chế độ Chat không tải được ảnh Etsy - thử thật 13/10/2026). "" = không có công tắc / đã ở Work."""
+    try:
+        st = page.evaluate(MODE_JS)
+        if not st.get("has") or not st.get("chat"):
+            return ""
+        btns = page.locator('[role="group"][aria-label="Composer mode"] button')
+        if btns.count() < 2:
+            return ""
+        btns.nth(1).click(timeout=8000)
+        for _ in range(10):
+            page.wait_for_timeout(500)
+            if not page.evaluate(MODE_JS).get("chat"):
+                return "switched"
+        return "failed"
+    except Exception:  # noqa: BLE001
+        return "failed"
 
 
 def ensure_chat_mode(page) -> str:

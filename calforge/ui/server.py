@@ -434,6 +434,17 @@ def _batch_result(params: dict) -> tuple[int, int, bool]:
     return sum(1 for r in rows if r.get("ok")), target, retryable
 
 
+def _batch_ideas_done(params: dict) -> bool:
+    """Batch theo ý tưởng đã lên đủ ý (chỉ còn vẽ nốt) - hàng đợi cho chủ đề kế tiếp bắt đầu lên ý luôn."""
+    if params.get("action"):
+        return False
+    from ..ideation.pipeline import slugify
+    cfg = config.load()
+    kdir = products.root(cfg["projects_dir"], params.get("product") or products.DEFAULT) / slugify(params["keyword"])
+    b = _read_batch(kdir) or {}
+    return bool(b.get("ideas_done") and not b.get("finished"))
+
+
 _QUEUE = None
 
 
@@ -442,7 +453,8 @@ def batch_queue():
     if _QUEUE is None:
         from .batch_queue import BatchQueue
         cfg = config.load()
-        _QUEUE = BatchQueue(TASK_MANAGER, Path(cfg["projects_dir"]) / ".hang_doi.json", run_args, _batch_result)
+        _QUEUE = BatchQueue(TASK_MANAGER, Path(cfg["projects_dir"]) / ".hang_doi.json", run_args, _batch_result,
+                            ideas_done=_batch_ideas_done)
     return _QUEUE
 
 
@@ -1069,7 +1081,16 @@ class StudioHandler(SimpleHTTPRequestHandler):
         cfg = config.load()
         projects = Path(cfg["projects_dir"])
         try:
-            if op == "add":
+            if op == "add" and body.get("links") is not None:
+                # mỗi link sản phẩm = một cuốn; kiểm tra hết trước rồi mới thêm (một link sai không thêm dở dang)
+                from ..clone.fetch import valid_url
+                links = [valid_url(u) for u in body.get("links") or [] if str(u).strip()]
+                if not links:
+                    raise ValueError("chưa có link sản phẩm nào")
+                for u in dict.fromkeys(links):              # bỏ link trùng, giữ thứ tự
+                    store.add_link(projects, u, group=str(body.get("group", "")), year=int(body.get("year") or 2027),
+                                   mockup_mode=str(body.get("mockup_mode") or "ai"))
+            elif op == "add":
                 images = []
                 for im in body.get("images") or []:
                     data = str(im.get("data", ""))

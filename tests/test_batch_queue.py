@@ -101,10 +101,6 @@ class BatchQueueTest(unittest.TestCase):
         self.assertTrue(q2.remove(ids[1]))
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class QueueResultTest(unittest.TestCase):
     def _run(self, ok, total, status="success", retryable=None):
         with tempfile.TemporaryDirectory() as tmp:
@@ -168,3 +164,70 @@ class StaleWaitingItemTest(unittest.TestCase):
             self.assertEqual(q.snapshot()["items"][0]["status"], "failed")
             q.tick()
             self.assertEqual(tasks.started, ["good"])
+
+
+class OverlapNextTopicTest(unittest.TestCase):
+    """Batch đang chạy đã lên đủ ý (chỉ còn vẽ nốt): chủ đề kế tiếp bắt đầu lên ý luôn - tối đa 2 batch cùng lúc."""
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.tasks = FakeTasks()
+        self.done = set()                                             # chủ đề đã lên đủ ý
+        self.q = BatchQueue(self.tasks, Path(self.tmp.name) / ".hang_doi.json", args, lambda p: (2, 2),
+                            ideas_done=lambda p: p["keyword"] in self.done)
+
+    def status(self):
+        return [(i["params"]["keyword"], i["status"]) for i in self.q.snapshot()["items"]]
+
+    def test_next_topic_starts_when_current_only_drawing(self):
+        for kw in ("a", "b", "c"):
+            self.q.add({"keyword": kw})
+        self.assertEqual(self.tasks.started, ["a"])                  # a còn đang lên ý: chưa chồng
+        self.done.add("a")
+        self.q.tick()
+        self.assertEqual(self.tasks.started, ["a", "b"])             # a chỉ còn vẽ: b lên ý luôn
+        self.q.tick()
+        self.assertEqual(self.tasks.started, ["a", "b"])             # tối đa 2 batch: c chờ
+        self.done.add("b")
+        self.q.tick()
+        self.assertEqual(self.tasks.started, ["a", "b"])             # vẫn 2 đang chạy: c chờ a xong
+        self.tasks.tasks["t1"].status = "success"
+        self.q.tick()
+        self.assertEqual(self.tasks.started, ["a", "b", "c"])        # a xong, b chỉ còn vẽ: c chạy
+        self.assertEqual(self.status()[0], ("a", "done"))
+
+    def test_no_overlap_while_still_ideating_or_for_book_fixes(self):
+        self.q.add({"keyword": "a"})
+        self.q.add({"keyword": "x", "action": "produce", "concept": "/p/x"})   # việc sửa sách lẻ
+        self.done.add("a")
+        self.q.tick()
+        self.assertEqual(self.tasks.started, ["a"])                  # việc sửa sách không chồng lượt
+
+    def test_same_topic_never_overlaps(self):
+        self.q.add({"keyword": "a"})
+        self.q.add({"keyword": "a"})                                 # cùng chủ đề (vd thêm 2 lần)
+        self.done.add("a")
+        self.q.tick()
+        self.assertEqual(self.tasks.started, ["a"])
+
+    def test_pause_stops_both_and_requeues_in_order(self):
+        for kw in ("a", "b", "c"):
+            self.q.add({"keyword": kw})
+        self.done.add("a")
+        self.q.tick()
+        self.q.pause()
+        self.assertEqual(sorted(self.tasks.stopped), ["t1", "t2"])
+        self.assertEqual(self.status(), [("a", "queued"), ("b", "queued"), ("c", "queued")])
+        self.assertTrue(all(i["params"].get("resume") for i in self.q.snapshot()["items"][:2]))
+
+    def test_broken_state_falls_back_to_one_at_a_time(self):
+        q = BatchQueue(self.tasks, Path(self.tmp.name) / "q2.json", args, lambda p: (2, 2),
+                       ideas_done=lambda p: 1 / 0)
+        q.add({"keyword": "a"})
+        q.add({"keyword": "b"})
+        q.tick()
+        self.assertEqual(self.tasks.started, ["a"])
+
+
+if __name__ == "__main__":
+    unittest.main()

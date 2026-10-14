@@ -378,6 +378,8 @@ def verify_session(udir: Path, wait_s: float = 30.0) -> str:
         return ""
     try:
         with sync_playwright() as pw:
+            from .browser import _start_keeper
+            _start_keeper()                      # canh trước khi mở: Chrome ngầm không nháy lên thanh tác vụ
             ctx = pw.chromium.launch_persistent_context(
                 user_data_dir=str(udir), headless=False, channel="chrome", no_viewport=True,
                 ignore_default_args=["--enable-automation", "--no-sandbox"], args=BASE_ARGS + HIDDEN_ARGS)

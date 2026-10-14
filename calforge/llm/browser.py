@@ -19,6 +19,8 @@ HIDDEN_ARGS = ["--window-position=-32000,-32000", "--window-size=1400,950"]
 def launch_options(mode) -> dict:
     """Tham số cho launch_persistent_context theo chế độ ở trên."""
     hidden = mode == "hidden" or mode is None
+    if hidden:
+        _start_keeper()               # canh TRƯỚC khi mở Chrome: cửa sổ mới vừa hiện là ẩn khỏi thanh tác vụ ngay
     return {"headless": mode is True, "args": BASE_ARGS + (HIDDEN_ARGS if hidden else [])}
 
 
@@ -157,9 +159,11 @@ def restore_user_windows() -> list[str]:
 _KEEPER = {"on": False}
 
 
-def _start_keeper(every_s: float = 2.0) -> None:
+def _start_keeper(every_s: float = 0.2) -> None:
     """Chrome có khi tạo cửa sổ chậm hơn lúc tool gọi ẩn, hoặc mở thêm cửa sổ sau: quét lại định kỳ trong suốt tiến
-    trình (rất nhẹ) để cửa sổ ngầm nào cũng mất khỏi thanh tác vụ."""
+    trình (rất nhẹ - mỗi lần chỉ liệt kê cửa sổ, vài mili-giây) để cửa sổ ngầm nào cũng mất khỏi thanh tác vụ.
+    0.2 giây (trước 2 giây): chạy nhiều tài khoản thì Chrome mở liên tục, 2 giây đủ để biểu tượng nháy lên thanh tác
+    vụ rồi mới tắt (người dùng báo 14/10/2026)."""
     import threading
     import time
     if _KEEPER["on"]:

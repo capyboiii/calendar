@@ -665,6 +665,7 @@ def _run_locked(keyword, cfg, kdir, pick, auto_pick, product, resume, backend, c
     else:
         batch = {"target": len(pick) if pick else (auto_pick or cfg["auto_pick"]), "product": product, "concepts": [],
                  "failed_ideas": [], "errors": [], "started": time.strftime("%Y-%m-%d %H:%M:%S"), "finished": ""}
+    batch.pop("ideas_done", None)                      # chạy lại / làm nốt: phần lên ý chưa xong cho lượt này
     _save_batch(kdir, batch)
 
     finisher = _Finisher(cfg, on_event, **kw)          # hậu kỳ cuốn trước chạy nền lúc cuốn sau gen ảnh
@@ -762,6 +763,11 @@ def _run_batch(keyword, cfg, kdir, batch, backend, common, finisher, pick, wait,
                 submit(cdir)
             if pick:
                 break
+        # Hết phần lên ý (đủ số / dừng nghĩ thêm): chỉ còn vẽ nốt. Hàng đợi đọc dấu này để cho chủ đề KẾ TIẾP bắt đầu
+        # lên ý ngay, không đợi batch này vẽ xong (lúc vẽ nốt phần lớn tài khoản rảnh).
+        batch["ideas_done"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        _save_batch(kdir, batch)
+        on_event("▶ Đã lên đủ ý cho batch này - còn vẽ nốt; chủ đề kế tiếp trong hàng đợi được bắt đầu lên ý luôn")
     finally:
         books.shutdown(wait=True)                      # chờ mọi cuốn vẽ xong (mỗi cuốn tự cô lập lỗi)
     for f in futures:
