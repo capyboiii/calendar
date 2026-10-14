@@ -236,5 +236,104 @@ class FortyAccountsTwoProcessesTest(TwoProcessesMixedTest):
     BOOKS, IDEA_JOBS, CLONE_CAP, IDEA_CAP, MIN_CLONE_ACCS = 12, 160, 20, 20, 14
 
 
+
+class CloneLinksPlusTwoIdeaBatchesTest(unittest.TestCase):
+    """Tình huống thật nặng nhất (14/10/2026): 40 tài khoản (20 Free + 10 Plus + 10 K12), CÙNG LÚC 3 tiến trình:
+    - 2 batch theo ý tưởng chạy chồng (hàng đợi mới: chủ đề sau lên ý khi chủ đề trước chỉ còn vẽ), mỗi batch 100 ảnh;
+    - hàng đợi clone: 6 cuốn thêm bằng LINK (bước lấy ảnh mẫu, lần đầu đôi khi ChatGPT không trả file) + 4 cuốn dán
+      ảnh tay.
+    Lỗi ngẫu nhiên ở cả 3 bên. Không tài khoản nào bị 2 việc dùng chung; clone chỉ dùng Plus/K12; mọi cuốn xong."""
+    FREE = [f"free{i:02d}" for i in range(1, 21)]
+    PLUS = [f"plus{i:02d}" for i in range(1, 21)]
+    K12 = {f"plus{i:02d}" for i in range(11, 21)}
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+        self.pdir = self.root / "prof"
+        for n in self.FREE + self.PLUS:
+            (self.pdir / n).mkdir(parents=True)
+            kind = "k12" if n in self.K12 else "plus" if n in self.PLUS else "free"
+            plan.save(self.pdir / n, {"plan": kind, "label": "x", "active": True,
+                                      "expires": "2030-01-01T00:00:00+00:00"})
+        self.cfg = {"projects_dir": str(self.root / "projects"), "profiles_dir": str(self.pdir), "imagegen": {},
+                    "quota_max_wait_h": 0.01}
+        self.log = self.root / "use.log"
+        self.log.write_text("", encoding="utf-8")
+
+    def test_link_clones_and_two_overlapping_idea_batches(self):
+        from tests.test_clone_link import GOOD_ZIP
+        lock = threading.Lock()
+        links = [store.root(self.cfg["projects_dir"]) / store.add_link(
+            self.cfg["projects_dir"], f"https://www.etsy.com/listing/{i}/cal", group="link")["id"] for i in range(6)]
+        manual = [store.root(self.cfg["projects_dir"]) / store.add(
+            self.cfg["projects_dir"], [(f"r{i}.png", png((i * 40, 30, 60))) for i in range(3)], group="tay")["id"]
+            for _ in range(4)]
+        world = World(random_faults(11, dead={"plus05": "open"}))
+        pool = AccountPool(self.pdir, self.FREE + self.PLUS, cap=16, launch_gap_s=0, leases=True)
+        pool.rest_s = 0.3
+        fetch_calls = {}
+
+        def ask_files(sess, prompt):
+            with lock:
+                k = fetch_calls[prompt] = fetch_calls.get(prompt, 0) + 1
+            err = sess._fault("art")                                         # hết lượt / mạng / server như mọi bước
+            if err:
+                raise err
+            if k == 1 and hash(prompt) % 3 == 0:                             # lần đầu không trả file: thử phiên khác
+                return "Tôi chưa tải được ảnh gốc.", []
+            return "Đã cắt 4 artwork.", [("artworks.zip", GOOD_ZIP)]
+
+        @contextmanager
+        def logged_open(name):
+            with lock, self.log.open("a", encoding="utf-8") as f:
+                f.write(f"clone {name} start {time.time():.4f}\n")
+            try:
+                yield name
+            finally:
+                with lock, self.log.open("a", encoding="utf-8") as f:
+                    f.write(f"clone {name} end {time.time():.4f}\n")
+        accts = run.Accounts(self.cfg, self.PLUS, on_event=lambda *_: None, pool=pool, open_page=logged_open)
+        idea = [subprocess.Popen([sys.executable, "-m", "tests._idea_proc", str(self.pdir), self.cfg["projects_dir"],
+                                  str(self.log.with_name(self.log.name + f".idea{k}")), "100", str(20 + k), "12",
+                                  str(k)], cwd=str(Path(__file__).resolve().parents[1]),
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) for k in (1, 2)]
+        for p in idea:
+            self.addCleanup(lambda p=p: p.poll() is None and p.kill())
+        with mock.patch.object(run.session, "Session", lambda page, pdir: MixedSession(world, Path(pdir).name)), \
+                mock.patch.object(MixedSession, "ask_files", ask_files, create=True), \
+                mock.patch.object(MixedSession, "harvest", lambda s: [], create=True), \
+                mock.patch("calforge.imagegen.generate.accept_grid_page", world.accept), \
+                mock.patch.object(run.Book, "finish", lambda self, plus: {"ok": True, "stage": "listing"}), \
+                mock.patch.object(run, "GRID_POLL_S", 0.05), mock.patch.object(run.driver, "NAV_REST_S", 0.2), \
+                mock.patch.object(run, "MAX_SESSIONS", 12):
+            run.run_queue(self.cfg, on_event=lambda *_: None, accts=accts, plus=self.PLUS)
+        for p in idea:
+            out, err = p.communicate(timeout=300)
+            self.assertEqual(p.returncode, 0, err[-800:])
+            self.assertEqual(json.loads(out.strip().splitlines()[-1]), {"ok": 100, "total": 100})
+        for d in links:
+            complete(self, d)
+            self.assertEqual(len(store.refs(d)), 4)                           # ảnh mẫu lấy từ zip của link
+        for d in manual:
+            complete(self, d)
+        self.assertTrue(any(v > 1 for v in fetch_calls.values()))              # có cuốn phải lấy ảnh lại phiên khác
+        from tests.test_two_modes import intervals
+        use = intervals(self.log)
+        for acc, spans in use.items():
+            spans.sort(key=lambda x: x[1])
+            for (s1, a1, b1), (s2, a2, b2) in zip(spans, spans[1:]):
+                self.assertLessEqual(b1, a2 + 1e-3, f"{acc}: {s1} chồng {s2}")    # 1 tài khoản 1 việc 1 lúc
+        sides = {s for spans in use.values() for s, *_ in spans}
+        self.assertEqual(sides, {"clone", "idea1", "idea2"})
+        clone_accs = {a for a, spans in use.items() for s, *_ in spans if s == "clone"}
+        self.assertTrue(clone_accs <= set(self.PLUS))                          # clone chỉ Plus/K12
+        self.assertTrue(clone_accs & self.K12)
+        spans_of = lambda side: [(a, b) for sp in use.values() for s, a, b in sp if s == side]   # noqa: E731
+        self.assertTrue(any(a1 < b2 and a2 < b1 for a1, b1 in spans_of("idea1") for a2, b2 in spans_of("idea2")))
+        self.assertEqual(list(self.pdir.glob("*/.calforge_lease")), [])        # không sót khoá tài khoản
+
+
 if __name__ == "__main__":
     unittest.main()

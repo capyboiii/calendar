@@ -73,10 +73,7 @@
     const n = links().length;
     b.disabled = !n || !(C.data && C.data.plus.length);
     b.textContent = running() ? 'Thêm vào hàng đợi' : 'Bắt đầu';
-    $('cloneStartHint').textContent = !n
-      ? 'Dán link sản phẩm để bắt đầu (mỗi dòng một link = một cuốn).'
-      : `${n} link → ${n} cuốn lịch ${$('cloneYear').value}. ChatGPT tự tách artwork của từng sản phẩm làm ảnh mẫu.`
-        + (running() ? ' Đang chạy: cuốn này được làm ngay khi có tài khoản rảnh.' : '');
+    $('cloneStartHint').textContent = n ? `${n} cuốn` : '';
   }
 
   async function start() {
@@ -153,6 +150,8 @@
       .map((i) => (i.status === 'running' && !live ? { ...i, status: 'failed', stopped: true,
         reason: i.reason || 'đã dừng giữa chừng - bấm Làm tiếp để làm phần còn thiếu' } : i));
     $('cloneQueueCard').hidden = !items.length;
+    $('cloneQueueCount').textContent = items.length;
+    if (window.syncQueueCard) window.syncQueueCard();
     $('btnCloneRun').hidden = running() || !items.some((i) => i.status === 'pending');
     const ol = $('cloneQueue');
     ol.innerHTML = '';
@@ -160,17 +159,35 @@
     const order = { running: 0, pending: 1, failed: 2, rejected: 3 };
     items.slice().reverse().sort((a, b) => order[a.status] - order[b.status]).forEach((i) => {
       const li = document.createElement('li');
-      const tag = i.status === 'running' ? '<span class="tag run">Đang làm</span>'
-        : i.status === 'pending' ? `<span class="tag">Chờ ${++k}</span>`
-          : `<span class="tag bad">${i.status === 'rejected' ? 'Bị loại' : i.stopped ? 'Đã dừng' : 'Bị dở'}</span>`;
-      li.innerHTML = `${tag} ${thumbs(i.ref_paths || [])} <strong>${esc(i.title || 'Chưa có tên')}</strong>
-        <span class="muted">${esc(i.group || '')} · lịch ${esc(i.year)} · ${i.refs ? `${i.refs} ảnh mẫu` : (i.source_url ? 'chờ lấy ảnh mẫu từ link' : '0 ảnh mẫu')}${i.stage ? ` · ${esc(i.stage)}` : ''}</span>
-        ${i.reason ? `<span class="why">${esc(i.reason)}</span>` : ''}<span class="grow"></span>`;
+      const bad = i.status === 'failed' || i.status === 'rejected';
+      li.className = `book-row ${i.status === 'running' ? 'row-running' : bad ? 'row-broken' : 'row-waiting'}`;
+      const label = i.status === 'running' ? 'Đang làm' : i.status === 'pending' ? `Chờ ${++k}`
+        : i.status === 'rejected' ? 'Bị loại' : i.stopped ? 'Đã dừng' : 'Bị dở';
+      const cls = i.status === 'running' ? 'chip-running' : bad ? 'chip-broken' : '';
+      const chip = (t, c2 = '', title = '') => `<span class="chip ${c2}"${title ? ` title="${esc(title)}"` : ''}>${esc(t)}</span>`;
+      const first = (i.ref_paths || [])[0];
+      const topic = window.topicLabel ? window.topicLabel(i.group) : (i.group || '');
+      li.innerHTML = `
+        <div class="row-thumb">${first ? `<img loading="lazy" src="${thumbUrl(first, 160)}" alt="">` : ''}</div>
+        <div class="row-main">
+          <div class="row-title-line">
+            <span class="row-title">${esc(i.title || 'Chưa có tên')}</span>${chip(label, cls)}
+          </div>
+          <div class="row-chips">
+            ${topic ? chip(topic, 'chip-topic', i.group) : ''}
+            ${chip(`Lịch ${i.year}`)}
+            ${chip(i.refs ? `${i.refs} ảnh mẫu` : (i.source_url ? 'Chờ lấy ảnh từ link' : '0 ảnh mẫu'))}
+            ${i.stage ? chip(i.stage, cls) : ''}
+          </div>
+          ${i.reason ? `<div class="row-reason">${esc(i.reason)}</div>` : ''}
+        </div>
+        <div class="row-actions"></div>`;
+      const acts = li.querySelector('.row-actions');
       if (i.status === 'failed' || i.status === 'rejected') {
-        li.appendChild(button('Làm tiếp', 'btn-small btn-accent', () => op('retry', i.id, true)));
+        acts.appendChild(button('Làm tiếp', 'btn-small btn-accent', () => op('retry', i.id, true)));
       }
       if (i.status !== 'running' || !running()) {
-        li.appendChild(button('Bỏ', 'btn-small btn-danger-ghost', () => {
+        acts.appendChild(button('Bỏ', 'btn-small btn-danger-ghost', () => {
           if (confirm('Bỏ cuốn này khỏi hàng đợi clone? (Thư mục cuốn đã làm được vẫn giữ nguyên)')) op('remove', i.id);
         }));
       }

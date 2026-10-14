@@ -474,7 +474,7 @@ class StudioHandler(SimpleHTTPRequestHandler):
         if path == "/huong-dan":               # hướng dẫn sử dụng (HUONG_DAN.html ở gốc repo)
             return self._serve_file(ROOT / "HUONG_DAN.html", "text/html; charset=utf-8")
         if path == "/" or path == "/index.html":
-            return self._serve_file(STATIC_DIR / "index.html", "text/html; charset=utf-8")
+            return self._serve_index()
         if path == "/clone":                   # trang cũ "Làm theo ảnh mẫu": nay là "Clone sản phẩm" ở trang chính
             self.send_response(HTTPStatus.FOUND)
             self.send_header("Location", "/?mode=clone")
@@ -486,6 +486,32 @@ class StudioHandler(SimpleHTTPRequestHandler):
             return super().do_GET()
 
         return self._send_json({"error": "Not found"}, status=HTTPStatus.NOT_FOUND)
+
+    def _serve_index(self):
+        """Trang chính, link app.js / app.css / clone.js / clone.css gắn ?v=<giờ sửa file>: cập nhật tool (cài đè bộ
+        cài mới) là trình duyệt buộc tải giao diện mới - không dùng bản cũ đã lưu tạm."""
+        import re as _re
+        html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+
+        def stamp(m):
+            f = STATIC_DIR / m.group(2)
+            v = int(f.stat().st_mtime) if f.is_file() else 0
+            return f'{m.group(1)}="{m.group(2)}?v={v}"'
+        html = _re.sub(r'(href|src)="((?:app|clone)\.(?:js|css))"', stamp, html)
+        data = html.encode("utf-8")
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-cache, must-revalidate")
+        self.end_headers()
+        self.wfile.write(data)
+
+    def end_headers(self):
+        # file giao diện tĩnh (SimpleHTTPRequestHandler): luôn hỏi lại máy chủ, không dùng bản lưu tạm cũ
+        if not getattr(self, "_headers_buffer", None) or not any(
+                b"cache-control" in h.lower() for h in self._headers_buffer):
+            self.send_header("Cache-Control", "no-cache, must-revalidate")
+        super().end_headers()
 
     def _cross_site(self) -> str:
         """Lý do chặn nếu yêu cầu POST đến từ trang web khác (CSRF): trang lạ mở trong trình duyệt không được tự bấm
@@ -739,6 +765,25 @@ class StudioHandler(SimpleHTTPRequestHandler):
             threading.Timer(0.5, lambda: os._exit(0)).start()
             return None
 
+        if path == "/api/book/delete":
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(length).decode("utf-8")) if length > 0 else {}
+            except Exception as e:
+                return self._send_json({"error": f"Invalid JSON: {e}"}, status=HTTPStatus.BAD_REQUEST)
+            target = (ROOT / str(body.get("path", "")).lstrip("/\\")).resolve()
+            if not _in_projects(target) or not layout.is_book(target):
+                return self._send_json({"error": "Không tìm thấy cuốn này"}, status=HTTPStatus.NOT_FOUND)
+            busy = _book_busy(target)
+            if busy:
+                return self._send_json({"error": f"Cuốn đang được làm ({busy}). Dừng việc đó trước rồi mới xoá."},
+                                       status=HTTPStatus.CONFLICT)
+            try:
+                _to_recycle_bin(target)
+            except OSError as e:
+                return self._send_json({"error": f"Không xoá được: {e}"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            return self._send_json({"ok": True})
+
         if path in ("/api/open", "/api/task/stop"):
             try:
                 length = int(self.headers.get("Content-Length", 0))
@@ -903,6 +948,12 @@ class StudioHandler(SimpleHTTPRequestHandler):
                     "raw_count": raw_count,
                     "final_count": final_count,
                     "art_total": len(required_art),
+                    # trang lịch AI vẽ (g01..g12) - cho thanh tiến độ ở "Lịch đã làm"; lịch máy in grid thì 0/0
+                    "grid_count": len({f.stem for f in layout.raw(c_dir).glob("g[01][0-9].*")}) if (
+                        products.ai_grid(concept_data)
+                        and (concept_data.get("style") or {}).get("grid_mode") == "ai_page") else 0,
+                    "grid_total": 12 if (products.ai_grid(concept_data)
+                                         and (concept_data.get("style") or {}).get("grid_mode") == "ai_page") else 0,
                     "render_count": render_count,
                     "has_digital": has_digital,
                     **_book_outputs(c_dir),
@@ -1166,6 +1217,53 @@ def _book_outputs(c_dir: Path) -> dict:
         pass
     return {"cover": _vrel(cover) if cover.exists() else "", "previews": [_vrel(p) for p in previews],
             "pdfs": pdfs, "listing": listing}
+
+
+def _book_busy(book: Path) -> str:
+    """Việc đang chạy có đụng cuốn này không: sửa sách lẻ đúng cuốn này, batch đang chạy cùng chủ đề, hoặc lượt clone
+    đang làm chính cuốn này. Trả mô tả việc đó ("" = rảnh, xoá được)."""
+    book = Path(book).resolve()
+    with TASK_MANAGER.lock:
+        tasks = [t for t in TASK_MANAGER.tasks.values() if t.status == "running"]
+    for t in tasks:
+        p = t.params or {}
+        if p.get("concept") and (ROOT / str(p["concept"])).resolve() == book:
+            return t.description
+        if t.action == "run" and p.get("keyword"):
+            from ..ideation.pipeline import slugify
+            if book.parent.name == slugify(p["keyword"]):
+                return t.description
+        if t.action == "clone":
+            from ..clone import store
+            for it in store.items(config.load()["projects_dir"]):
+                if it.get("status") == "running" and it.get("book") and Path(it["book"]).resolve() == book:
+                    return t.description
+    return ""
+
+
+def _to_recycle_bin(target: Path) -> None:
+    """Đưa thư mục vào Thùng rác Windows (xoá nhầm còn khôi phục được). Máy không phải Windows: chuyển vào
+    projects/_da_xoa/ thay vì xoá hẳn."""
+    target = Path(target)
+    if os.name == "nt":
+        import ctypes
+        from ctypes import wintypes
+
+        class SHFILEOPSTRUCTW(ctypes.Structure):
+            _fields_ = [("hwnd", wintypes.HWND), ("wFunc", wintypes.UINT), ("pFrom", wintypes.LPCWSTR),
+                        ("pTo", wintypes.LPCWSTR), ("fFlags", ctypes.c_ushort), ("fAnyOperationsAborted", wintypes.BOOL),
+                        ("hNameMappings", ctypes.c_void_p), ("lpszProgressTitle", wintypes.LPCWSTR)]
+        FO_DELETE, FOF_SILENT, FOF_NOCONFIRMATION, FOF_ALLOWUNDO, FOF_NOERRORUI = 3, 0x4, 0x10, 0x40, 0x400
+        op = SHFILEOPSTRUCTW(None, FO_DELETE, str(target) + "\0", None,
+                             FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_SILENT | FOF_NOERRORUI, False, None, None)
+        rc = ctypes.windll.shell32.SHFileOperationW(ctypes.byref(op))
+        if rc or op.fAnyOperationsAborted or target.exists():
+            raise OSError(f"Windows không đưa được vào Thùng rác (mã {rc}) - file đang mở ở chương trình khác?")
+        return
+    import shutil
+    trash = Path(config.load()["projects_dir"]) / "_da_xoa"
+    trash.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(target), str(trash / f"{time.strftime('%Y%m%d_%H%M%S')}_{target.name}"))
 
 
 def _in_projects(target: Path) -> bool:

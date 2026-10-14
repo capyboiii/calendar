@@ -676,6 +676,30 @@ def _run_locked(keyword, cfg, kdir, pick, auto_pick, product, resume, backend, c
     return rows
 
 
+def _batch_family_quota(kdir: Path, batch: dict, n: int) -> dict[str, int]:
+    """Phong cách cho n cuốn của lượt lên ý tới, chia đều TRONG BATCH: đếm phong cách các cuốn batch này đã có, lần
+    lượt cấp cho phong cách ít cuốn nhất trong batch -> 5 cuốn = 5 phong cách khác nhau, 6 cuốn = 5 phong cách + 1
+    lặp. Hoà nhau (vd đầu batch) thì phong cách ít cuốn nhất trong cả kho đi trước, để batch nhỏ không lệch về một
+    nhóm cố định; hoà nữa thì theo thứ tự trong style_families.json."""
+    from collections import Counter
+    from .ideation import catalog
+    ids = [f["id"] for f in catalog.families()]
+    have: Counter = Counter()
+    for rel in batch.get("concepts", []):
+        try:
+            fam = (json.loads(layout.concept_file(kdir / rel).read_text(encoding="utf-8")).get("style") or {}).get("family")
+        except (OSError, ValueError):
+            continue
+        if fam in ids:
+            have[fam] += 1
+    used = catalog.usage(kdir.parent.parent) if kdir.parent.parent.is_dir() else Counter()   # cả kho (projects)
+    quota: dict[str, int] = {}
+    for _ in range(max(0, n)):
+        fid = min(ids, key=lambda k: (have[k] + quota.get(k, 0), used.get(k, 0), ids.index(k)))
+        quota[fid] = quota.get(fid, 0) + 1
+    return quota
+
+
 def _run_batch(keyword, cfg, kdir, batch, backend, common, finisher, pick, wait, on_event):
     from .ideation.pipeline import ROUND_SIZE, run_ideation
     from .llm.chatgpt_web import NoAccountLeft
@@ -734,9 +758,15 @@ def _run_batch(keyword, cfg, kdir, batch, backend, common, finisher, pick, wait,
                     cv.wait(5)
             n = min(ROUND_SIZE, left)
             on_event(f"▶ Lượt lên ý: {n} cuốn (còn thiếu {left}/{batch['target']})")
+            # "Ngẫu nhiên" (không ép phong cách): chia đều phong cách TRONG BATCH NÀY - lượt này lấy các phong cách
+            # mà batch đang có ít cuốn nhất (hoà thì bốc ngẫu nhiên, cố định theo batch)
+            quota = None if (common.get("family") or pick) else _batch_family_quota(kdir, batch, n)
+            if quota:
+                on_event("  phong cách lượt này: " + ", ".join(f"{k} x{v}" for k, v in quota.items()))
             try:
                 res = run_ideation(keyword, backend, Path(cfg["projects_dir"]), pick=pick, auto_pick=n,
-                                   keyword_root=kdir.parent, p2_parallel=par["p2_parallel"], **common)
+                                   keyword_root=kdir.parent, p2_parallel=par["p2_parallel"],
+                                   family_quota=quota, **common)
             except NoAccountLeft:
                 # hết lượt chat ở mọi tài khoản: chờ rồi làm lại đúng lượt này (sổ hỏi/đáp giữ phần đã có)
                 slept = _wait_for_quota(cfg, idea_waited, on_event, "chat")

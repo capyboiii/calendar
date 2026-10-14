@@ -35,7 +35,7 @@ def intervals(log: Path) -> dict:
     <log>.clone) - hai tiến trình cùng ghi một file thì dòng có thể chen nhau."""
     open_at, out = {}, {}
     lines = []
-    for f in (log, log.with_name(log.name + ".idea"), log.with_name(log.name + ".clone")):
+    for f in [log] + sorted(log.parent.glob(log.name + ".*")):     # .idea / .idea2 / .clone ...
         if f.is_file():
             lines += f.read_text(encoding="utf-8").splitlines()
     for line in lines:

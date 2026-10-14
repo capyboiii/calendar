@@ -201,7 +201,8 @@ def run_ideation(keyword: str, backend: Backend, projects_root: Path, *, year: i
                  family: str | None = None, grid_preset: str | None = None,
                  product: str | None = None, keyword_root: Path | None = None,
                  grid_mode: str | None = None, p2_parallel: int = 3,
-                 mockup_mode: str | None = None, listing_style: str | None = None) -> IdeationResult:
+                 mockup_mode: str | None = None, listing_style: str | None = None,
+                 family_quota: dict[str, int] | None = None) -> IdeationResult:
     # keyword_root: thư mục loại lịch (projects/Wall Calendar (Blank)...); danh mục chống trùng, chia đều style/nền/
     # bố cục vẫn tính trên TOÀN BỘ projects_root (mọi loại lịch)
     kdir = (keyword_root or projects_root) / slugify(keyword)
@@ -232,7 +233,8 @@ def run_ideation(keyword: str, backend: Backend, projects_root: Path, *, year: i
                 need_p1 = True
         n_candidates = max(n_angles, 3 * auto_pick)   # dư ý để người thẩm định có chỗ loại
         # Chia đều họ style (code quyết định, không để người dùng chọn): mỗi suất 3 ý cùng họ cho P1b chọn.
-        quota = None if (family or pick) else catalog.family_quota(projects_root, auto_pick)
+        # family_quota: batch đã chia sẵn phong cách cho lượt này (chia đều trong batch khi chọn "Ngẫu nhiên")
+        quota = family_quota or (None if (family or pick) else catalog.family_quota(projects_root, auto_pick))
         cand_quota = {fid: 3 * k for fid, k in quota.items()} if quota else None
         if cand_quota:
             n_candidates = sum(cand_quota.values())

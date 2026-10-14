@@ -98,11 +98,18 @@ class World:
 
 # ------------------------------------------------------------------ ChatGPT giả (chat)
 def p1_answer(world, prompt, n):
+    # như ChatGPT thật: prompt có chia suất phong cách ("…": k angle(s)) thì trả đúng các phong cách đó
+    asked = [(fid, int(k)) for fid, k in re.findall(r'"([a-z_]+)" \([^)]*\): (\d+) angle', prompt)]
+    if asked:
+        world.p1_asked = asked                    # prompt sửa (P1 repair) không nhắc lại suất: dùng suất lần hỏi trước
+    else:
+        asked = getattr(world, "p1_asked", [])
+    fams = [fid for r in range(max([k for _, k in asked] or [0])) for fid, k in asked if r < k] or \
+        [["styled_photography", "papercut_collage", "mid_century_retro"][i % 3] for i in range(1, n + 1)]
     angles = []
-    for i in range(1, n + 1):
+    for i in range(1, len(fams) + 1):
         a = copy.deepcopy(fixtures.ANGLE)
-        a.update(id=f"a{i}", title=f"Idea {next(world.titles)}",
-                 style_family=["styled_photography", "papercut_collage", "mid_century_retro"][i % 3])
+        a.update(id=f"a{i}", title=f"Idea {next(world.titles)}", style_family=fams[i - 1])
         angles.append(a)
     return "```json\n" + json.dumps({"keyword": "x", "angles": angles}) + "\n```"
 
@@ -161,6 +168,7 @@ class FakeSession:
         with w.lock:                                          # câu nhắc sửa không nhắc lại số lượng: nhớ yêu cầu gốc
             if label.startswith("p1_angles") and base == label:
                 w.asked[base] = int(re.search(r"Propose the (\d+)", prompt).group(1))
+                w.p1_asked = [(fid, int(k)) for fid, k in re.findall(r'"([a-z_]+)" \([^)]*\): (\d+) angle', prompt)]
             if label.startswith("p1b_review") and base == label:
                 run = re.search(r"run(\d+)", label).group(1)      # chỉ ứng viên của lượt này (danh mục có id cũ)
                 w.asked[base] = (list(dict.fromkeys(re.findall(rf"\br{run}a\d+\b", prompt))),

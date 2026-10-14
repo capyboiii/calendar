@@ -31,12 +31,10 @@ const STYLE_LABEL = {
   cinematic_still: 'Cinematic film still',
 };
 
+// "Ngẫu nhiên" = KHÔNG ép một phong cách cho cả batch: batch tự chia đều các phong cách cho các cuốn của nó
+// (5 cuốn = 5 phong cách khác nhau). Trước đây bốc 1 phong cách cho cả batch -> 6 cuốn cùng một kiểu.
 function batchStyle(selection) {
-  const families = Object.keys(STYLE_LABEL);
-  return {
-    family: selection === 'random' ? families[Math.floor(Math.random() * families.length)] : selection,
-    family_selection: selection,
-  };
+  return selection === 'random' ? { family_selection: 'random' } : { family: selection, family_selection: selection };
 }
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -317,12 +315,20 @@ async function loadQueue() {
 
 const PRODUCT_LABEL = { wall_grid: 'Wall Calendar (Blank)', wall_premade: 'Wall Calendar' };
 
+// Khung "Hàng đợi" chung: hiện khi phần batch ý tưởng HOẶC phần clone có việc (mỗi phần do script riêng bật / tắt)
+function syncQueueCard() {
+  $('queueCard').hidden = $('ideaQueueBox').hidden && $('cloneQueueCard').hidden;
+}
+window.syncQueueCard = syncQueueCard;
+
 function renderQueue() {
   const items = S.queue.items || [];
   const active = items.filter((i) => i.status === 'queued' || i.status === 'running');
   const queued = items.filter((i) => i.status === 'queued');
   const done = items.filter((i) => !['queued', 'running'].includes(i.status)).reverse();
-  $('queueCard').hidden = !items.length && !S.queue.paused;
+  $('ideaQueueBox').hidden = !items.length && !S.queue.paused;
+  $('ideaQueueCount').textContent = active.length;
+  syncQueueCard();
   $('btnQueuePause').textContent = S.queue.paused ? 'Tiếp tục' : 'Tạm dừng';
   $('btnQueuePause').classList.toggle('btn-primary', !!S.queue.paused);
   $('btnQueuePause').classList.toggle('btn-ghost', !S.queue.paused);
@@ -345,7 +351,8 @@ function renderQueue() {
       : ` · AI vẽ cả trang${p.mockup_mode === 'ai' ? ' · AI mockup' : ''}`) : '';
     const etsy = p.listing_style === 'etsy' ? ' · Listing Etsy' : '';
     const style = STYLE_LABEL[p.family];
-    const styleText = style ? ` · ${p.family_selection === 'random' ? 'Ngẫu nhiên: ' : ''}${style}` : '';
+    const styleText = style ? ` · ${p.family_selection === 'random' ? 'Ngẫu nhiên: ' : ''}${style}`
+      : (p.family_selection === 'random' ? ' · Ngẫu nhiên (chia đều phong cách)' : '');
     return `<strong>${esc(p.keyword)}</strong>
     <span class="muted">${p.batch_size || 1} cuốn · ${PRODUCT_LABEL[p.product] || ''}${mode}${styleText}${etsy}</span>`;
   };
@@ -571,42 +578,237 @@ function searchHits() {
   return S.projects.flatMap((p) => (p.concepts || []).filter((c) => bookMatches(c, p.keyword, q)));
 }
 
+// "Lịch đã làm": thẻ tổng quan + 3 vùng có khung riêng, xếp theo mức cần để ý:
+//   Bị dở   - danh sách dòng có viền, lý do lỗi trong ô đỏ, nút Làm tiếp ngay trên dòng (+ Làm tiếp cả loạt)
+//   Đang làm - danh sách dòng có viền, bước hiện tại + thanh tiến độ ảnh đã vẽ
+//   Đã xong  - lưới bìa nhỏ có viền, nhóm theo chủ đề
+// Thanh lọc (nhớ trong máy) + ô tìm SKU lọc trên cả 3 vùng.
+const ZONES = [
+  { key: 'broken', title: 'Bị dở', icon: '!', hint: 'Cần bạn xử lý: lỗi giữa chừng hoặc bị ChatGPT từ chối', states: ['error', 'rejected'] },
+  { key: 'running', title: 'Đang làm', icon: '…', hint: 'Chưa xong, chưa lỗi: đang chạy hoặc chờ tới lượt', states: ['pending'] },
+  { key: 'done', title: 'Đã xong', icon: '✓', hint: 'Đủ trang in, ảnh quảng cáo và listing - bấm bìa để mở thư mục', states: ['done'] },
+];
+const STAGE_LABEL = {
+  angles: 'Lên ý tưởng', concept: 'Viết concept', images: 'Vẽ ảnh', render: 'Dàn trang in', mockup: 'Ảnh quảng cáo',
+  listing: 'Viết listing', printify: 'Đẩy Printify', crash: 'Lỗi bất ngờ', ip_rejected: 'Bị từ chối',
+};
+
+function zoneOf(c) {
+  const st = bookState(c);
+  return (ZONES.find((z) => z.states.includes(st)) || ZONES[1]).key;
+}
+
+function zonePick() {
+  try { return localStorage.getItem('bookZone') || 'all'; } catch (_) { return 'all'; }
+}
+
+function setZonePick(k) {
+  try { localStorage.setItem('bookZone', k); } catch (_) { /* bỏ qua */ }
+  renderResults();
+}
+
+function bookProgress(c) {
+  const total = (c.art_total || 0) + (c.grid_total || 0);
+  const made = Math.min(c.raw_count || 0, c.art_total || 0) + Math.min(c.grid_count || 0, c.grid_total || 0);
+  return { made, total, pct: total ? Math.round((made / total) * 100) : 0 };
+}
+
+function chip(text, cls = '', title = '') {
+  return `<span class="chip ${cls}"${title ? ` title="${esc(title)}"` : ''}>${esc(text)}</span>`;
+}
+
+// Chủ đề / tên thư mục -> nhãn gọn: bỏ gạch nối, tối đa ~34 ký tự (rê chuột xem đầy đủ)
+function topicLabel(k) {
+  const t = String(k || '').replace(/[-_]+/g, ' ').replace(/\s+/g, ' ').trim();
+  return t.length > 34 ? `${t.slice(0, 33).trim()}…` : t;
+}
+window.topicLabel = topicLabel;
+
+function initials(t) {
+  return String(t || '?').replace(/[^\p{L}\p{N} ]/gu, ' ').trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join('').toUpperCase() || '?';
+}
+
+function rowThumb(c) {
+  return `<div class="row-thumb">${c.cover ? `<img loading="lazy" src="${thumbUrl(c.cover, 200)}" alt="">`
+    : `<span class="ph">${esc(initials(c.title))}</span>`}</div>`;
+}
+
+// Xoá cuốn: đưa thư mục vào Thùng rác Windows (khôi phục được); cuốn đang được làm thì máy chủ từ chối
+async function deleteBook(c) {
+  if (!confirm(`Xoá cuốn "${c.title}"${c.sku ? ` (${c.sku})` : ''}?\nThư mục cuốn sẽ vào Thùng rác của Windows, khôi phục được.`)) return;
+  try {
+    await api('/api/book/delete', { path: c.path });
+    $('bookModal').hidden = true;
+    toast(`Đã xoá "${c.title}" (vào Thùng rác)`, 'info');
+    loadProjects();
+  } catch (err) {
+    toast(err.message, 'error');
+  }
+}
+
+function wireSku(el, c) {
+  const s = el.querySelector('.chip-sku');
+  if (!s) return;
+  s.addEventListener('click', (e) => {
+    e.stopPropagation();
+    navigator.clipboard?.writeText(c.sku).then(() => toast(`Đã chép SKU ${c.sku}`, 'info'), () => {});
+  });
+}
+
+function openDetail(c, keyword) {
+  S.openBook = c.path; renderBook(c, keyword); $('bookModal').hidden = false;
+}
+
+function bookRow(c, keyword, zone) {
+  const st = c.status || {};
+  const state = bookState(c);
+  const el = document.createElement('div');
+  el.className = `book-row row-${zone}`;
+  const stage = STAGE_LABEL[st.stage] || (zone === 'running' ? 'Chờ tới lượt' : (st.stage || ''));
+  const p = bookProgress(c);
+  el.innerHTML = `
+    ${rowThumb(c)}
+    <div class="row-main">
+      <div class="row-title-line">
+        <span class="row-title">${esc(c.title)}</span>
+        ${stage ? chip(stage, `chip-stage ${state === 'rejected' ? 'chip-rejected' : `chip-${zone}`}`) : ''}
+      </div>
+      <div class="row-chips">
+        ${c.sku ? chip(c.sku, 'chip-sku', 'Bấm để chép SKU') : ''}
+        ${chip(topicLabel(keyword), 'chip-topic', keyword)}
+      </div>
+      ${zone === 'broken' ? `<div class="row-reason">${esc(friendlyReason(st))}</div>` : ''}
+      ${zone === 'running' && p.total ? `
+        <div class="row-progress" title="${p.made}/${p.total} ảnh đã vẽ">
+          <div class="bar"><i style="width:${p.pct}%"></i></div><span><b>${p.made}</b>/${p.total} ảnh</span>
+        </div>` : ''}
+    </div>
+    <div class="row-actions"></div>`;
+  const acts = el.querySelector('.row-actions');
+  if (state === 'error') acts.appendChild(button('Làm tiếp', 'btn-small btn-accent', () => continueBook(c)));
+  acts.appendChild(button('Chi tiết', 'btn-small', () => openDetail(c, keyword)));
+  acts.appendChild(button('Mở thư mục', 'btn-small btn-ghost', () => openFolder(c.path)));
+  acts.appendChild(button('Xoá', 'btn-small btn-danger-ghost', () => deleteBook(c)));
+  wireSku(el, c);
+  return el;
+}
+
+function doneTile(c, keyword) {
+  const el = document.createElement('div');
+  el.className = 'done-tile';
+  el.innerHTML = `
+    <div class="tile-thumb">
+      ${c.cover ? `<img loading="lazy" src="${thumbUrl(c.cover, 480)}" alt="">` : `<span class="ph">${esc(initials(c.title))}</span>`}
+      ${c.sku ? chip(c.sku, 'chip-sku tile-sku', 'Bấm để chép SKU') : ''}
+      <button type="button" class="tile-detail-pill" data-a="detail">Chi tiết</button>
+      <div class="tile-tools">
+        <button type="button" data-a="open">Mở thư mục</button>
+        <button type="button" data-a="del" class="del">Xoá</button>
+      </div>
+    </div>
+    <div class="tile-title">${esc(c.title)}</div>`;
+  el.addEventListener('click', () => openDetail(c, keyword));
+  el.querySelectorAll('.tile-tools button, .tile-detail-pill').forEach((b) => b.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (b.dataset.a === 'detail') openDetail(c, keyword);
+    if (b.dataset.a === 'open') openFolder(c.path);
+    if (b.dataset.a === 'del') deleteBook(c);
+  }));
+  wireSku(el, c);
+  return el;
+}
+
 function renderResults() {
   const box = $('results');
   const books = S.projects.reduce((n, p) => n + (p.concepts || []).length, 0);
   const q = bookQuery();
   const hits = q ? searchHits().length : books;
   $('bookCount').textContent = books ? (q ? `${hits}/${books} cuốn` : `${books} cuốn`) : '';
+  const bar = $('zoneBar');
   if (!books) {
+    bar.hidden = true;
     box.innerHTML = '<p class="empty">Chưa có cuốn nào.</p>';
     return;
   }
+  const projects = [...S.projects]
+    .map((p) => (q ? { ...p, concepts: (p.concepts || []).filter((c) => bookMatches(c, p.keyword, q)) } : p))
+    .filter((p) => (p.concepts || []).length)
+    .sort((a, b) => newest(b) - newest(a));
+  const list = Object.fromEntries(ZONES.map((z) => [z.key, []]));
+  projects.forEach((p) => p.concepts.forEach((c) => list[zoneOf(c)].push({ c, keyword: p.keyword, proj: p })));
+  let pick = zonePick();
+  if (pick !== 'all' && !ZONES.some((z) => z.key === pick)) pick = 'all';
+
+  // thẻ tổng quan (bấm = lọc vùng đó; bấm lại = Tất cả)
+  bar.hidden = false;
+  bar.innerHTML = '';
+  ZONES.forEach((z) => {
+    const items = list[z.key];
+    const card = document.createElement('button');
+    card.type = 'button';
+    card.className = `zone-card zone-${z.key}${pick === z.key ? ' on' : ''}`;
+    card.setAttribute('aria-pressed', pick === z.key ? 'true' : 'false');
+    let extra = '';
+    if (z.key === 'running' && items.length) {
+      const sum = items.reduce((a, { c }) => { const p = bookProgress(c); return [a[0] + p.made, a[1] + p.total]; }, [0, 0]);
+      const pct = sum[1] ? Math.round((sum[0] / sum[1]) * 100) : 0;
+      extra = `<div class="bar" title="${pct}% ảnh đã vẽ"><i style="width:${pct}%"></i></div>`;
+    }
+    card.innerHTML = `<span class="zc-label"><b class="zc-icon">${z.icon}</b>${esc(z.title)}</span>
+      <span class="zc-n">${items.length}</span>${extra}`;
+    card.addEventListener('click', () => setZonePick(pick === z.key ? 'all' : z.key));
+    bar.appendChild(card);
+  });
+
   if (q && !hits) {
     box.innerHTML = `<p class="empty">Không có cuốn nào khớp "${esc(q)}".</p>`;
     return;
   }
-  const running = S.task ? slug(S.task.params.keyword) : '';
-  const runProd = S.task ? (S.task.params.product || 'wall_grid') : '';
-  const groups = [...S.projects]
-    .map((p) => (q ? { ...p, concepts: (p.concepts || []).filter((c) => bookMatches(c, p.keyword, q)) } : p))
-    .filter((p) => (p.concepts || []).length)
-    .sort((a, b) => newest(b) - newest(a));
   box.innerHTML = '';
-  groups.forEach((proj) => {
-    const done = proj.concepts.filter((c) => bookState(c) === 'done').length;
-    const sec = document.createElement('div');
-    sec.className = 'group';
-    sec.innerHTML = `
-      <div class="group-head">
-        <h3>${esc(proj.keyword)}${proj.group ? ` <small class="muted">· ${esc(proj.group)}</small>` : ''}</h3>
-        <span class="count">${done}/${proj.concepts.length} xong${proj.keyword === running && (!proj.product || proj.product === runProd) ? ' · đang chạy' : ''}</span>
-        <button class="btn btn-small btn-ghost" data-open="${esc(proj.path)}">Mở thư mục</button>
-      </div>
-      <div class="books"></div>`;
-    sec.querySelector('[data-open]').addEventListener('click', () => openFolder(proj.path));
-    const grid = sec.querySelector('.books');
-    proj.concepts.forEach((c) => grid.appendChild(bookCard(c, proj.keyword)));
-    box.appendChild(sec);
+  if (pick !== 'all') {
+    const back = document.createElement('p');
+    back.className = 'zone-filter-note';
+    back.innerHTML = `Đang lọc: <b>${esc(ZONES.find((z) => z.key === pick).title)}</b> `;
+    back.appendChild(button('Xem tất cả', 'btn-small btn-ghost', () => setZonePick('all')));
+    box.appendChild(back);
+  }
+  ZONES.filter((z) => pick === 'all' || pick === z.key).forEach((z) => {
+    const items = list[z.key];
+    if (!items.length && pick === 'all') return;              // vùng trống: không chiếm chỗ
+    const zone = document.createElement('section');
+    zone.className = `zone zone-${z.key}`;
+    zone.innerHTML = `
+      <header class="zone-head">
+        <h3><b class="zc-icon">${z.icon}</b>${esc(z.title)} <span class="zone-n">${items.length}</span></h3>
+      </header>
+      <div class="zone-body"></div>`;
+    const body = zone.querySelector('.zone-body');
+    if (z.key === 'broken') {
+      const errs = items.filter(({ c }) => bookState(c) === 'error');
+      if (errs.length > 1) {
+        zone.querySelector('.zone-head').appendChild(button(`Làm tiếp cả ${errs.length} cuốn lỗi`, 'btn-small btn-accent',
+          async () => { for (const { c } of errs) await continueBook(c); }));
+      }
+    }
+    if (!items.length) {
+      body.innerHTML = '<p class="zone-empty">Không có cuốn nào.</p>';
+    } else if (z.key === 'done') {
+      projects.forEach((proj) => {
+        const mine = items.filter((x) => x.proj === proj);
+        if (!mine.length) return;
+        const grp = document.createElement('div');
+        grp.className = 'done-group';
+        grp.innerHTML = `<div class="done-group-head"><span class="chip chip-topic">${esc(proj.keyword)}</span>
+          <small>${mine.length} cuốn</small></div><div class="done-grid"></div>`;
+        grp.querySelector('.done-group-head').appendChild(button('Mở thư mục chủ đề', 'btn-small btn-ghost', () => openFolder(proj.path)));
+        const grid = grp.querySelector('.done-grid');
+        mine.forEach(({ c, keyword }) => grid.appendChild(doneTile(c, keyword)));
+        body.appendChild(grp);
+      });
+    } else {
+      items.forEach(({ c, keyword }) => body.appendChild(bookRow(c, keyword, z.key)));
+    }
+    box.appendChild(zone);
   });
 }
 
@@ -688,6 +890,7 @@ function renderBook(c, keyword) {
   if (state !== 'done' && state !== 'rejected') {
     a.appendChild(button('Làm tiếp', 'btn-accent', () => continueBook(c)));
   }
+  a.appendChild(button('Xoá cuốn', 'btn-danger-ghost', () => deleteBook(c)));
   if ((c.pdfs || []).length) {            // đã có trang in: làm lại mockup không cần ChatGPT
     if (state !== 'rejected') a.appendChild(button('Làm lại ảnh quảng cáo', '', () => finishBook(c, true)));
   }

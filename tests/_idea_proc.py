@@ -14,6 +14,9 @@ from pathlib import Path
 from unittest import mock
 
 
+SIDE = ""
+
+
 def main():
     pdir, projects, log, n_jobs, seed = Path(sys.argv[1]), sys.argv[2], Path(sys.argv[3]), int(sys.argv[4]), int(sys.argv[5])
     from calforge.imagegen import driver
@@ -24,6 +27,8 @@ def main():
     names = sorted(p.name for p in pdir.iterdir() if p.is_dir())
     cfg = {"projects_dir": projects, "profiles_dir": str(pdir)}
     cap = int(sys.argv[6]) if len(sys.argv) > 6 else 6
+    global SIDE
+    SIDE = sys.argv[7] if len(sys.argv) > 7 else ""      # tên tiến trình trong log (2 batch ý tưởng chạy chồng)
     pool = AccountPool(pdir, names, cap=cap, launch_gap_s=0, leases=True, later=poolmod._plus_saved_for_clone(cfg))
     pool.rest_s = 0.3
     rnd = random.Random(seed)
@@ -35,11 +40,11 @@ def main():
 
     @contextmanager
     def fake_open(profile):
-        write(f"idea {profile} start {time.time():.4f}")
+        write(f"idea{SIDE} {profile} start {time.time():.4f}")
         try:
             yield object()
         finally:
-            write(f"idea {profile} end {time.time():.4f}")
+            write(f"idea{SIDE} {profile} end {time.time():.4f}")
 
     class W:
         def __init__(self, profile_dir, *a, **k):
@@ -60,7 +65,8 @@ def main():
             out.write_bytes(b"png")
             return out
 
-    jobs = [GenJob(f"j{i:02d}", "p", Path(projects) / "_idea_out" / f"j{i:02d}") for i in range(n_jobs)]
+    tag = sys.argv[7] if len(sys.argv) > 7 else ""        # 2 batch chạy chồng: mỗi batch một thư mục ảnh riêng
+    jobs = [GenJob(f"j{i:02d}", "p", Path(projects) / f"_idea_out{tag}" / f"j{i:02d}") for i in range(n_jobs)]
     todo = jobs
     with mock.patch.object(driver, "_Worker", W), mock.patch.object(driver, "NAV_REST_S", 0.2):
         for _ in range(40):                              # như batch thật: hết tài khoản rảnh thì chờ rồi làm tiếp
