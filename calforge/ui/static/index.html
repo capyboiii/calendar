@@ -36,6 +36,12 @@
     <!-- 1. Làm lịch mới -->
     <section class="card start" id="startCard">
       <h1>Làm lịch mới</h1>
+      <div class="workspace-form">
+        <label for="runProject"><strong>Dự án</strong></label>
+        <select id="runProject"><option value="">Chọn dự án…</option></select>
+        <input id="newProjectName" maxlength="100" placeholder="Tên dự án mới…" aria-label="Tên dự án mới">
+        <button type="button" class="btn btn-small btn-ghost" id="btnCreateProject">Tạo dự án</button>
+      </div>
       <fieldset class="kinds" id="modePicker">
         <legend>Cách làm</legend>
         <label class="kind">
@@ -60,7 +66,7 @@
         </label>
       </fieldset>
       <fieldset class="kinds" id="stylePicker">
-        <legend>Phong cách tranh</legend>
+        <legend>Phong cách</legend>
         <label class="kind style-kind" data-style-family="random">
           <input type="radio" name="family" value="random" checked>
           <span class="style-sample style-sample-random" aria-hidden="true"></span>
@@ -107,15 +113,15 @@
         <legend>Ảnh quảng cáo</legend>
         <label class="kind">
           <input type="radio" name="mockup_mode" value="template" checked>
-          <span><strong>Dùng mockup đã có</strong><small>5 ảnh, không tốn lượt</small></span>
+          <span><strong>Mockup có sẵn</strong><small>5 ảnh · Không tốn lượt</small></span>
         </label>
         <label class="kind">
           <input type="radio" name="mockup_mode" value="ai">
-          <span><strong>AI gen mockup</strong><small>8 ảnh</small></span>
+          <span><strong>Mockup AI</strong><small>8 ảnh</small></span>
         </label>
       </fieldset>
       <fieldset class="kinds" id="listingPicker">
-        <legend>Title &amp; mô tả</legend>
+        <legend>Tên &amp; mô tả</legend>
         <label class="kind">
           <input type="radio" name="listing_style" value="standard" checked>
           <span><strong>Mặc định</strong><small>Không tốn lượt</small></span>
@@ -128,7 +134,7 @@
       <div class="start-row">
         <label class="field grow">
           <span>Chủ đề</span>
-          <input id="inputKeyword" type="text" placeholder="Ví dụ: chickens, coastal beach, bible, cats…" autocomplete="off">
+          <input id="inputKeyword" type="text" placeholder="Ví dụ: cats, bible, coastal…" autocomplete="off">
         </label>
         <label class="field narrow">
           <span>Số cuốn</span>
@@ -138,33 +144,31 @@
             <button type="button" data-step="1" aria-label="Thêm một cuốn">+</button>
           </div>
         </label>
-        <button class="btn btn-primary btn-big" id="btnStart">Bắt đầu</button>
       </div>
-      <p class="hint" id="startHint"></p>
       </div>
       <!-- Clone sản phẩm: dán link sản phẩm, ChatGPT tách artwork làm ảnh mẫu rồi vẽ theo (chỉ tài khoản Plus/K12) -->
       <div class="mode-panel" id="clonePanel" data-mode="clone" hidden>
         <div class="notice" id="clonePlusNotice" hidden></div>
         <fieldset class="kinds refs-box">
-          <legend>Link sản phẩm <small class="muted">(mỗi lần 1 link · 1 cuốn)</small></legend>
+          <legend>Link sản phẩm <small class="muted">1 link · 1 cuốn</small></legend>
           <textarea id="cloneLinks" class="clone-links" rows="2" spellcheck="false"
-                    placeholder="Dán 1 link, ví dụ https://www.etsy.com/listing/..."></textarea>
+                    placeholder="Dán link sản phẩm…"></textarea>
         </fieldset>
         <fieldset class="kinds" id="cloneMockupPicker">
           <legend>Ảnh quảng cáo</legend>
           <label class="kind">
             <input type="radio" name="clone_mockup_mode" value="ai" checked>
-            <span><strong>AI gen mockup</strong><small>8 ảnh</small></span>
+            <span><strong>Mockup AI</strong><small>8 ảnh</small></span>
           </label>
           <label class="kind">
             <input type="radio" name="clone_mockup_mode" value="template">
-            <span><strong>Dùng mockup đã có</strong><small>Không tốn lượt</small></span>
+            <span><strong>Mockup có sẵn</strong><small>Không tốn lượt</small></span>
           </label>
         </fieldset>
         <div class="start-row">
           <label class="field grow">
-            <span>Chủ đề (tên thư mục)</span>
-            <input id="cloneGroup" type="text" placeholder="Ví dụ: cats-clone, bible-verse…" maxlength="80" autocomplete="off">
+            <span>Chủ đề *</span>
+            <input id="cloneGroup" type="text" placeholder="Nhập chủ đề…" maxlength="80" autocomplete="off" required>
           </label>
           <label class="field narrow">
             <span>Năm lịch</span>
@@ -174,13 +178,13 @@
               <button type="button" data-ystep="1" aria-label="Thêm một năm">+</button>
             </div>
           </label>
-          <label class="field narrow show-chrome" title="Bật: các cửa sổ ChatGPT hiện ra để xem tool làm việc. Tắt: chạy ngầm.">
-            <span>Chrome</span>
-            <span class="check"><input type="checkbox" id="cloneShowChrome"> Hiện cửa sổ</span>
-          </label>
-          <button class="btn btn-primary btn-big" id="btnCloneStart" disabled>Bắt đầu</button>
         </div>
-        <p class="hint" id="cloneStartHint"></p>
+      </div>
+      <div class="mode-actions">
+        <p class="hint" id="startHint"></p>
+        <p class="hint" id="cloneStartHint" hidden></p>
+        <button class="btn btn-primary btn-big" id="btnStart">Bắt đầu</button>
+        <button class="btn btn-primary btn-big" id="btnCloneStart" hidden disabled>Bắt đầu</button>
       </div>
     </section>
 
@@ -234,7 +238,7 @@
         <details class="queue-done" id="queueDoneBox" hidden>
           <summary>Đã xong <span id="queueDoneCount"></span></summary>
           <ul class="queue-list" id="queueDone"></ul>
-          <button class="btn btn-small btn-ghost" id="btnQueueClear">Xoá danh sách đã xong</button>
+          <button class="btn btn-small btn-ghost" id="btnQueueClear">Dọn lịch sử</button>
         </details>
       </div>
       <div class="queue-part" id="cloneQueueCard" hidden>
@@ -250,20 +254,24 @@
     <!-- 3. Kết quả -->
     <section class="results">
       <div class="results-head">
-        <h2>Lịch đã làm</h2>
+        <div class="results-meta">
+        <h2 id="resultsTitle">Dự án</h2>
+        <div class="project-back-slot"><button class="btn btn-small btn-ghost" id="btnBackProjects" hidden>← Các dự án</button></div>
         <span class="count" id="bookCount"></span>
+        </div>
+        <div class="results-toolbar">
         <input id="bookSearch" class="book-search" type="search" placeholder="Tìm SKU / tên cuốn…" autocomplete="off"
                title="Gõ mã SKU (vd WCB-2CW-5CE1D) hoặc tên cuốn; Enter khi còn 1 cuốn = mở thư mục">
-        <span class="grow"></span>
         <button class="btn btn-small btn-ghost" id="btnR2Settings">Khoá R2</button>
         <button class="btn btn-small btn-ghost" id="btnShop">Đẩy R2 + CSV Printify</button>
           <button class="btn btn-small btn-primary" id="btnCalendaria">Đẩy R2 + CSV Crayonahub</button>
+        </div>
       </div>
       <div class="zone-bar" id="zoneBar" role="group" aria-label="Lọc theo trạng thái" hidden></div>
       <p class="hint" id="shopResult" hidden></p>
       <div class="notice" id="unfinishedNotice" hidden>
         <span id="unfinishedText"></span>
-        <button class="btn btn-small btn-accent" id="btnFinishAll">Hoàn thiện ngay</button>
+        <button class="btn btn-small btn-accent" id="btnFinishAll">Hoàn thiện</button>
       </div>
       <div id="results"><p class="empty">Đang tải…</p></div>
     </section>
@@ -341,7 +349,7 @@
   <div class="modal" id="shopModal" hidden>
     <div class="modal-card wide">
       <button class="modal-x" data-close aria-label="Đóng">✕</button>
-      <h2 id="shopTitle">Chọn cuốn đưa lên web</h2>
+      <h2 id="shopTitle">Chọn cuốn xuất CSV</h2>
       
       <div class="shop-tools">
         <button class="btn btn-small btn-ghost" data-pick="new">Chọn cuốn chưa xuất</button>

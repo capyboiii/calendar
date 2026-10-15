@@ -44,6 +44,16 @@ def main():
     def fake_open(profile):
         write(f"idea{SIDE} {profile} start {time.time():.4f}")
         try:
+            idea_barrier = os.environ.get('CALFORGE_TEST_IDEA_PAIR_BARRIER')
+            if idea_barrier:
+                marker = Path(idea_barrier)
+                marker.with_suffix(f'.idea{SIDE}').touch()
+                other = '2' if SIDE == '1' else '1'
+                deadline = time.monotonic() + 30
+                while not marker.with_suffix(f'.idea{other}').exists():
+                    if time.monotonic() > deadline:
+                        raise RuntimeError('other idea process did not reach overlap barrier')
+                    time.sleep(.01)
             barrier = os.environ.get('CALFORGE_TEST_OVERLAP_BARRIER')
             if barrier and profile == os.environ.get('CALFORGE_TEST_OVERLAP_PROFILE'):
                 marker = Path(barrier)

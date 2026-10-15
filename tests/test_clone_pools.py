@@ -18,7 +18,7 @@ class ClonePoolsTest(unittest.TestCase):
 
     def go(self, work, names, stop=None):
         with mock.patch.object(run, "run_book", side_effect=work):
-            return run.run_queue(self.cfg, on_event=lambda *_: None, accts=object(), plus=names, stop=stop)
+            return run.run_queue(self.cfg, on_event=lambda *_: None, accts=mock.Mock(), plus=names, stop=stop)
 
     def test_all_six_slots_work_and_each_book_keeps_stage_order(self):
         for _ in range(5):

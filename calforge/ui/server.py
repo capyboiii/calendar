@@ -16,7 +16,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
-from .. import config, layout, products
+from .. import config, layout, products, projects as workspaces
 from ..render.pages import PRESET_NAMES, resolve_grid_preset
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -91,6 +91,9 @@ class TaskManager:
             env["PYTHONIOENCODING"] = "utf-8"
             env["PYTHONUTF8"] = "1"
             env["PYTHONUNBUFFERED"] = "1"
+            env.pop('CALFORGE_PROJECT_ID', None)
+            if task.params.get('project_id'):
+                env['CALFORGE_PROJECT_ID'] = task.params['project_id']
             try:
                 task.append_log(f"🚀 Bắt đầu: python -m calforge {' '.join(args)}\n")
                 p = subprocess.Popen(
@@ -278,7 +281,7 @@ def _unfinished_books() -> list[dict]:
         if p.get("concept"):
             busy_books.add((ROOT / p["concept"]).resolve())
         elif p.get("keyword"):
-            busy_kw.add((products.root(root, p.get("product") or products.DEFAULT) / slugify(p["keyword"])).resolve())
+            busy_kw.add((products.root(workspaces.run_root(root, p), p.get("product") or products.DEFAULT) / slugify(p["keyword"])).resolve())
     out = []
     for b in layout.books(root):
         if b.resolve() in busy_books or b.parent.resolve() in busy_kw or not needs_finishing(b):
@@ -357,6 +360,8 @@ def _book_arg(params: dict) -> Path:
 def run_args(params: dict) -> tuple[list[str], str]:
     """Lệnh cho một việc trong hàng đợi: batch mới (mặc định), "produce" = làm tiếp một cuốn, "redo" = vẽ lại trang."""
     kind = params.get("action") or "run"
+    if params.get('project_id'):
+        workspaces.require(Path(config.load()['projects_dir']), params['project_id'])
     if kind == "produce":
         target = _book_arg(params)
         _reject_terminal_book(target)
@@ -439,7 +444,7 @@ def _batch_result(params: dict) -> tuple[int, int, bool]:
         return (1 if ok else 0), 1, bool(not ok and not st.get("terminal"))
     from ..ideation.pipeline import slugify
     cfg = config.load()
-    kdir = products.root(cfg["projects_dir"], params.get("product") or products.DEFAULT) / slugify(params["keyword"])
+    kdir = products.root(workspaces.run_root(Path(cfg['projects_dir']), params), params.get("product") or products.DEFAULT) / slugify(params["keyword"])
     b = _read_batch(kdir) or {}
     rows = b.get("report") or []
     target = int(b.get("target") or len(rows))
@@ -463,7 +468,7 @@ def _batch_ideas_done(params: dict) -> bool:
         return False
     from ..ideation.pipeline import slugify
     cfg = config.load()
-    kdir = products.root(cfg["projects_dir"], params.get("product") or products.DEFAULT) / slugify(params["keyword"])
+    kdir = products.root(workspaces.run_root(Path(cfg['projects_dir']), params), params.get("product") or products.DEFAULT) / slugify(params["keyword"])
     b = _read_batch(kdir) or {}
     return bool(b.get("ideas_done") and not b.get("finished"))
 
@@ -567,6 +572,9 @@ class StudioHandler(SimpleHTTPRequestHandler):
                     pass
                 return self._send_json({"error": f"Từ chối yêu cầu không đến từ giao diện CalForge ({why})"},
                                        status=HTTPStatus.FORBIDDEN)
+            if path in ('/api/workspaces/delete', '/api/workspaces/create', '/api/queue/add', '/api/clone/add', '/api/clone/retry', '/api/action'):
+                with workspaces._LOCK:
+                    return self._handle_api_post(path)
             return self._handle_api_post(path)
         return self._send_json({"error": "Method not allowed"}, status=HTTPStatus.METHOD_NOT_ALLOWED)
 
@@ -645,6 +653,8 @@ class StudioHandler(SimpleHTTPRequestHandler):
 
             if action == "run":
                 try:
+                    if not params.get('resume'):
+                        workspaces.require(Path(config.load()['projects_dir']), params.get('project_id'))
                     cmd_args, desc = run_args(params)
                 except ValueError as e:
                     return self._send_json({"error": str(e)}, status=HTTPStatus.BAD_REQUEST)
@@ -752,6 +762,28 @@ class StudioHandler(SimpleHTTPRequestHandler):
             task_id = TASK_MANAGER.start_task(cmd_args, desc, action, params)
             return self._send_json({"task_id": task_id, "description": desc, "status": "started"})
 
+        if path == '/api/workspaces/delete':
+            try:
+                body = json.loads(self.rfile.read(int(self.headers.get('Content-Length', 0))).decode('utf-8'))
+                if body.get('confirmed') is not True:
+                    raise ValueError('Cần xác nhận trước khi xóa dự án.')
+                _delete_workspace(body.get('id'))
+                return self._send_json({'ok': True})
+            except (ValueError, AttributeError) as e:
+                return self._send_json({'error': str(e)}, status=HTTPStatus.BAD_REQUEST)
+            except OSError as e:
+                return self._send_json({'error': f'Không xóa được dự án: {e}'}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+
+        if path == '/api/workspaces/create':
+            try:
+                body = json.loads(self.rfile.read(int(self.headers.get('Content-Length', 0))).decode('utf-8'))
+                item = workspaces.create(Path(config.load()['projects_dir']), body.get('name', ''))
+                return self._send_json(item)
+            except (ValueError, AttributeError) as e:
+                return self._send_json({'error': str(e)}, status=HTTPStatus.BAD_REQUEST)
+            except OSError as e:
+                return self._send_json({'error': f'Không lưu được dự án: {e}'}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+
         if path.startswith("/api/queue/"):
             try:
                 length = int(self.headers.get("Content-Length", 0))
@@ -762,7 +794,10 @@ class StudioHandler(SimpleHTTPRequestHandler):
             op = path.rsplit("/", 1)[-1]
             try:
                 if op == "add":
-                    q.add(body.get("params") or {})
+                    params = body.get('params') or {}
+                    if (params.get('action') or 'run') == 'run' and not params.get('resume'):
+                        workspaces.require(Path(config.load()['projects_dir']), params.get('project_id'))
+                    q.add(params)
                 elif op == "remove":
                     q.remove(str(body.get("id", "")))
                 elif op == "move":
@@ -930,15 +965,18 @@ class StudioHandler(SimpleHTTPRequestHandler):
         # projects/<loại lịch>/<chủ đề>/<cuốn>; thư mục chủ đề cũ nằm thẳng dưới projects/ vẫn đọc được
         folders = {v["folder"]: k for k, v in products.PRODUCTS.items()}
         kw_dirs = []
-        for top in sorted(projects_dir.iterdir()):
-            if not top.is_dir() or top.name.startswith((".", "_")):
-                continue
-            if top.name in folders:
-                kw_dirs += [(d, top.name, folders[top.name]) for d in sorted(top.iterdir())
-                            if d.is_dir() and not d.name.startswith((".", "_"))]
-            else:
-                kw_dirs.append((top, "", None))
-        for kw_dir, group, group_product in kw_dirs:
+        catalog = workspaces.entries(projects_dir)
+        roots = [(projects_dir, '')] + [(workspaces.require(projects_dir, p['id']), p['id']) for p in catalog]
+        for base, project_id in roots:
+            for top in sorted(base.iterdir()):
+                if not top.is_dir() or top.name.startswith((".", "_")):
+                    continue
+                if top.name in folders:
+                    kw_dirs += [(d, top.name, folders[top.name], project_id) for d in sorted(top.iterdir())
+                                if d.is_dir() and not d.name.startswith((".", "_"))]
+                else:
+                    kw_dirs.append((top, "", None, project_id))
+        for kw_dir, group, group_product, project_id in kw_dirs:
 
             angles_file = layout.angles_file(kw_dir)
             angles = []
@@ -1010,6 +1048,7 @@ class StudioHandler(SimpleHTTPRequestHandler):
                 })
 
             results.append({
+                'project_id': project_id,
                 "keyword": kw_dir.name,
                 "group": group,
                 "product": group_product,
@@ -1019,7 +1058,7 @@ class StudioHandler(SimpleHTTPRequestHandler):
                 "batch": _read_batch(kw_dir),
             })
 
-        return self._send_json({"projects": results, "year": cfg.get("year", 2027), "market": cfg.get("market", "US")})
+        return self._send_json({"projects": results, 'workspaces': catalog, "year": cfg.get("year", 2027), "market": cfg.get("market", "US")})
 
     def _api_get_concept(self, rel_path: str):
         if not rel_path:
@@ -1182,11 +1221,16 @@ class StudioHandler(SimpleHTTPRequestHandler):
         cfg = config.load()
         projects = Path(cfg["projects_dir"])
         try:
+            project_id = body.get('project_id') or ''
+            if op == 'add':
+                workspaces.require(projects, project_id)
+                if not str(body.get('group') or '').strip():
+                    raise ValueError('Nhập chủ đề trước khi bắt đầu clone.')
             if op == "add" and body.get("links") is not None:
                 from ..clone.fetch import single_link
                 url = single_link(body.get("links"))
                 store.add_link(projects, url, group=str(body.get("group", "")), year=int(body.get("year") or 2027),
-                               mockup_mode=str(body.get("mockup_mode") or "ai"))
+                               mockup_mode=str(body.get("mockup_mode") or "ai"), project_id=project_id)
             elif op == "add":
                 images = []
                 for im in body.get("images") or []:
@@ -1194,7 +1238,7 @@ class StudioHandler(SimpleHTTPRequestHandler):
                     images.append((str(im.get("name", "anh.png"))[:80],
                                    base64.b64decode(data.split(",", 1)[-1], validate=False)))
                 store.add(projects, images, group=str(body.get("group", "")), year=int(body.get("year") or 2027),
-                          mockup_mode=str(body.get("mockup_mode") or "ai"), kind=str(body.get("kind") or "normal"))
+                          mockup_mode=str(body.get("mockup_mode") or "ai"), kind=str(body.get("kind") or "normal"), project_id=project_id)
             elif op == "remove":
                 store.remove(projects, str(body.get("id", "")), running_now=bool(TASK_MANAGER.clone_running()))
             elif op == "retry":
@@ -1277,7 +1321,8 @@ def _book_busy(book: Path) -> str:
             return t.description
         if t.action == "run" and p.get("keyword"):
             from ..ideation.pipeline import slugify
-            if book.parent.name == slugify(p["keyword"]):
+            kdir = products.root(workspaces.run_root(Path(config.load()['projects_dir']), p), p.get('product') or products.DEFAULT) / slugify(p['keyword'])
+            if book.parent == kdir.resolve():
                 return t.description
         if t.action == "clone":
             from ..clone import store
@@ -1285,6 +1330,50 @@ def _book_busy(book: Path) -> str:
                 if it.get("status") == "running" and it.get("book") and Path(it["book"]).resolve() == book:
                     return t.description
     return ""
+
+
+def _delete_workspace(project_id: str) -> None:
+    """Delete only a known, idle project; retain recoverable files in the recycle bin."""
+    import shutil
+    from ..clone import store
+    root = Path(config.load()['projects_dir'])
+    target = workspaces.require(root, project_id).resolve()
+    q = batch_queue()
+    def belongs(params):
+        if params.get('project_id') == project_id:
+            return True
+        paths = ([params['concept']] if params.get('concept') else []) + (params.get('books') or [])
+        return any((ROOT / p).resolve().is_relative_to(target) for p in paths if isinstance(p, str))
+    with q.lock, TASK_MANAGER.lock:
+        if any(belongs(i['params']) and i['status'] in ('queued', 'running') for i in q.items):
+            raise ValueError('Dự án còn việc đang chạy hoặc đang chờ. Dừng và bỏ việc khỏi hàng đợi trước khi xóa.')
+        if any(t.status == 'running' and belongs(t.params or {}) for t in TASK_MANAGER.tasks.values()):
+            raise ValueError('Dự án đang được xử lý. Dừng hoặc chờ hoàn tất trước khi xóa.')
+        clones = [i for i in store.items(root) if i.get('project_id') == project_id]
+        clone_live = any(t.status == 'running' and t.action == 'clone' for t in TASK_MANAGER.tasks.values())
+        if any(i.get('status') in ('pending', 'running') or (clone_live and i.get('status') == 'failed') for i in clones):
+            raise ValueError('Dự án còn cuốn clone đang chạy hoặc đang chờ. Dừng và bỏ cuốn khỏi hàng đợi trước khi xóa.')
+        moved = []
+        try:
+            for item in clones:
+                source = store.item_dir(root, item['id']).resolve()
+                if not source.is_relative_to(store.root(root).resolve()):
+                    raise ValueError('Đường dẫn hàng đợi không hợp lệ.')
+                destination = target / '_clone_queue' / source.name
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(source), str(destination))
+                moved.append((source, destination))
+            _to_recycle_bin(target)
+        except Exception:
+            for source, destination in reversed(moved):
+                if destination.exists():
+                    shutil.move(str(destination), str(source))
+            raise
+        for item in q.items:
+            if belongs(item['params']):
+                item['retryable'] = False
+                item['error'] = 'Dự án đã xóa'
+        q._save()
 
 
 def _to_recycle_bin(target: Path) -> None:

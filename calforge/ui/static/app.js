@@ -13,6 +13,8 @@ const STEPS = [                    // các bước người dùng nhìn thấy (
 
 const S = {
   projects: [],
+  workspaces: [],
+  openWorkspace: null,
   accounts: [],
   task: null,          // tác vụ đang chạy {id, params, start_time, logs}
   logs: [],
@@ -51,6 +53,9 @@ document.addEventListener('DOMContentLoaded', () => {
 // Sự kiện
 // --------------------------------------------------------------------------
 function bindEvents() {
+  $('btnCreateProject').addEventListener('click', createProject);
+  $('newProjectName').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); createProject(); } });
+  $('btnBackProjects').addEventListener('click', () => { S.openWorkspace = null; $('bookSearch').value = ''; renderResults(); });
   $('btnStart').addEventListener('click', startBatch);
   $('btnQuit').addEventListener('click', quitTool);
   $('inputKeyword').addEventListener('keydown', (e) => { if (e.key === 'Enter') startBatch(); });
@@ -153,9 +158,10 @@ async function loadProjects() {
   try {
     const data = await api('/api/projects');
     S.projects = data.projects || [];
+    S.workspaces = data.workspaces || [];
+    renderProjectPicker();
     renderStyleSamples();
     renderResults();
-    loadUnfinished();
     if (S.openBook) {
       const b = findBook(S.openBook);
       if (b && !$('bookModal').hidden) renderBook(b.book, b.keyword);
@@ -264,7 +270,7 @@ async function loadAccounts() {
 async function startBatch() {
   const keyword = $('inputKeyword').value.trim();
   if (!keyword) {
-    toast('Nhập chủ đề trước đã (ví dụ: chickens).', 'error');
+    toast('Nhập chủ đề để bắt đầu.', 'error');
     $('inputKeyword').focus();
     return;
   }
@@ -273,9 +279,11 @@ async function startBatch() {
     openAccounts();
     return;
   }
+  const project_id = selectedProject();
+  if (!project_id) return;
   const product = (document.querySelector('input[name="product"]:checked') || {}).value || 'wall_grid';
   const selection = (document.querySelector('input[name="family"]:checked') || {}).value || 'random';
-  const params = { keyword, batch_size: countValue(), product, ...batchStyle(selection) };
+  const params = { keyword, project_id, batch_size: countValue(), product, ...batchStyle(selection) };
   params.listing_style = (document.querySelector('input[name="listing_style"]:checked') || {}).value || 'standard';
   if (product === 'wall_grid') {
     params.grid_mode = (document.querySelector('input[name="grid_mode"]:checked') || {}).value || 'ai_page';
@@ -353,7 +361,7 @@ function renderQueue() {
     const style = STYLE_LABEL[p.family];
     const styleText = style ? ` · ${p.family_selection === 'random' ? 'Ngẫu nhiên: ' : ''}${style}`
       : (p.family_selection === 'random' ? ' · Ngẫu nhiên (chia đều phong cách)' : '');
-    return `<strong>${esc(p.keyword)}</strong>
+    return `<strong>${esc(p.keyword)}</strong> <span class="chip">${esc(projectName(p.project_id))}</span>
     <span class="muted">${p.batch_size || 1} cuốn · ${PRODUCT_LABEL[p.product] || ''}${mode}${styleText}${etsy}</span>`;
   };
   const wl = $('queueWaiting');
@@ -458,13 +466,14 @@ function finishTask(status) {
   clearInterval(S.pollTimer);
   clearInterval(S.refreshTimer);
   const kw = S.task.params.keyword;
+  const projectId = S.task.params.project_id || '';
   const single = S.task.params.action ? S.task.params : null;     // việc một cuốn: làm tiếp / vẽ lại trang
   S.task = null;
   $('runCard').hidden = true;
   $('startCard').classList.remove('dim');
   $('btnStart').disabled = false;
   loadProjects().then(() => {
-    const proj = S.projects.find((p) => p.keyword === slug(kw));
+    const proj = S.projects.find((p) => p.keyword === slug(kw) && (p.project_id || '') === projectId);
     const batch = (proj && proj.batch) || {};
     const rows = batch.report || [];
     const ok = rows.filter((r) => r.ok).length;
@@ -588,7 +597,78 @@ function bookMatches(c, keyword, q) {
 
 function searchHits() {
   const q = bookQuery();
-  return S.projects.flatMap((p) => (p.concepts || []).filter((c) => bookMatches(c, p.keyword, q)));
+  return scopedProjects().flatMap((p) => (p.concepts || []).filter((c) => bookMatches(c, p.keyword, q)));
+}
+
+function renderProjectPicker() {
+  const select = $('runProject'), value = select.value;
+  select.innerHTML = '<option value="">Chọn dự án…</option>' +
+    S.workspaces.map((p) => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('');
+  select.value = value;
+}
+
+function selectedProject() {
+  const id = $('runProject').value;
+  if (!id) { toast('Chọn hoặc tạo dự án.', 'error'); $('runProject').focus(); }
+  return id;
+}
+window.selectedProject = selectedProject;
+function projectName(id) { return S.workspaces.find((p) => p.id === id)?.name || 'Chưa phân dự án'; }
+window.projectName = projectName;
+
+async function createProject() {
+  const input = $('newProjectName'), name = input.value.trim();
+  if (!name) { toast('Nhập tên dự án mới.', 'error'); input.focus(); return; }
+  const btn = $('btnCreateProject'); btn.disabled = true;
+  try {
+    const p = await api('/api/workspaces/create', { name });
+    await loadProjects();
+    $('runProject').value = p.id;
+    input.value = '';
+    S.openWorkspace = p.id;
+    renderResults();
+    toast(`Đã tạo dự án "${p.name}".`, 'success');
+  } catch (e) { toast(e.message, 'error'); }
+  finally { btn.disabled = false; }
+}
+
+function scopedProjects() {
+  return S.openWorkspace === null ? [] : S.projects.filter((p) => (p.project_id || '') === S.openWorkspace);
+}
+
+async function deleteProject(p) {
+  const count = S.projects.filter((x) => x.project_id === p.id).reduce((n, x) => n + (x.concepts || []).length, 0);
+  if (!confirm(`Xóa dự án "${p.name}" và toàn bộ ${count} cuốn bên trong?\nẢnh, file in và dữ liệu clone của dự án sẽ được đưa vào Thùng rác.\nThao tác này không xóa sản phẩm đã đăng trên R2.`)) return;
+  try {
+    await api('/api/workspaces/delete', { id: p.id, confirmed: true });
+    if (S.openWorkspace === p.id) S.openWorkspace = null;
+    if ($('runProject').value === p.id) $('runProject').value = '';
+    await loadProjects();
+    await loadQueue();
+    toast(`Đã xóa dự án "${p.name}".`, 'success');
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+function renderWorkspaceCards() {
+  const box = $('results'); box.innerHTML = '';
+  const groups = [...S.workspaces];
+  if (S.projects.some((p) => !p.project_id && (p.concepts || []).length)) groups.push({ id: '', name: 'Chưa phân dự án' });
+  const q = bookQuery();
+  groups.filter((p) => !q || p.name.toLowerCase().includes(q)).forEach((p) => {
+    const books = S.projects.filter((x) => (x.project_id || '') === p.id).flatMap((x) => x.concepts || []);
+    const card = button('', 'workspace-card', () => {
+      S.openWorkspace = p.id; $('bookSearch').value = '';
+      if (p.id) $('runProject').value = p.id;
+      renderResults();
+    });
+    card.innerHTML = `<strong>📁 ${esc(p.name)}</strong><span>${books.length} cuốn · Mở dự án →</span>`;
+    const container = document.createElement('div');
+    container.className = 'workspace-item';
+    container.appendChild(card);
+    if (p.id) container.appendChild(button('Xóa dự án', 'btn-small btn-danger-ghost', () => deleteProject(p)));
+    box.appendChild(container);
+  });
+  if (!box.children.length) box.innerHTML = '<p class="empty">Chưa có dự án. Tạo dự án ở phía trên.</p>';
 }
 
 // "Lịch đã làm": thẻ tổng quan + 3 vùng có khung riêng, xếp theo mức cần để ý:
@@ -776,7 +856,17 @@ function doneTile(c, keyword) {
 
 function renderResults() {
   const box = $('results');
-  const books = S.projects.reduce((n, p) => n + (p.concepts || []).length, 0);
+  loadUnfinished();
+  const overview = S.openWorkspace === null;
+  $('btnBackProjects').hidden = overview;
+  $('resultsTitle').textContent = overview ? 'Dự án' : (S.workspaces.find((p) => p.id === S.openWorkspace)?.name || 'Chưa phân dự án');
+  $('bookSearch').placeholder = overview ? 'Tìm tên dự án…' : 'Tìm SKU / tên cuốn…';
+  if (overview) {
+    $('zoneBar').hidden = true;
+    $('bookCount').textContent = `${S.workspaces.length} dự án`;
+    renderWorkspaceCards(); return;
+  }
+  const books = scopedProjects().reduce((n, p) => n + (p.concepts || []).length, 0);
   const q = bookQuery();
   const hits = q ? searchHits().length : books;
   $('bookCount').textContent = books ? (q ? `${hits}/${books} cuốn` : `${books} cuốn`) : '';
@@ -786,7 +876,7 @@ function renderResults() {
     box.innerHTML = '<p class="empty">Chưa có cuốn nào.</p>';
     return;
   }
-  const projects = [...S.projects]
+  const projects = [...scopedProjects()]
     .map((p) => (q ? { ...p, concepts: (p.concepts || []).filter((c) => bookMatches(c, p.keyword, q)) } : p))
     .filter((p) => (p.concepts || []).length)
     .sort((a, b) => newest(b) - newest(a));
@@ -1020,8 +1110,11 @@ async function finishBook(c, redoPreviews) {
 }
 
 async function loadUnfinished() {
+  const workspace = S.openWorkspace;
   const d = await api('/api/unfinished').catch(() => null);
-  const books = (d && d.books) || [];
+  if (workspace !== S.openWorkspace) return;
+  const paths = new Set(scopedProjects().flatMap((p) => (p.concepts || []).map((c) => c.path)));
+  const books = ((d && d.books) || []).filter((b) => paths.has(b.path));
   S.unfinished = books;
   $('unfinishedNotice').hidden = !books.length;
   $('unfinishedText').textContent = books.length
@@ -1281,6 +1374,7 @@ function shopExported(book) {
 }
 
 async function openShopPicker(format = 'printify') {
+  if (S.openWorkspace === null) { toast('Mở dự án để chọn các cuốn cần xuất CSV.', 'info'); return; }
   SHOP.format = format;
   const label = format === 'calendaria' ? 'Crayonahub' : 'Printify';
   $('shopTitle').textContent = `Chọn cuốn xuất CSV ${label}`;
@@ -1288,7 +1382,9 @@ async function openShopPicker(format = 'printify') {
   $('shopFilter').value = '';
   $('shopBooks').innerHTML = '<p class="empty">Đang tải…</p>';
   try {
-    SHOP.books = (await api('/api/shop/books')).books || [];
+    const all = (await api('/api/shop/books')).books || [];
+    const paths = new Set(scopedProjects().flatMap((p) => (p.concepts || []).map((c) => c.path)));
+    SHOP.books = all.filter((b) => paths.has(b.path));
   } catch (err) {
     $('shopBooks').innerHTML = `<p class="empty">${esc(err.message)}</p>`;
     return;

@@ -325,6 +325,7 @@ class _RotatingChat:
         exclude = exclude or set()
         self.close()
         pool = get_pool()
+        self._waiting_pool = pool
         while True:
             for name in list(self.order):
                 if name in self.failed or name in exclude or pool.acquire(CHAT, only=name) is None:
@@ -438,6 +439,11 @@ class _RotatingChat:
                      "bị đăng xuất, giao diện là màn hình đăng nhập - cần đăng nhập lại") + ". Đã bỏ khỏi batch")
 
     def close(self) -> None:
+        from .pool import CHAT, get_pool
+        pending = getattr(self, '_waiting_pool', None)
+        if pending is not None:
+            pending.cancel_wait(CHAT)
+            self._waiting_pool = None
         if self.ctx is not None:
             try:
                 self.ctx.close()

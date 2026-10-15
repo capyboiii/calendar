@@ -52,6 +52,10 @@
     const m = mode();
     $('ideaPanel').hidden = m !== 'idea';
     $('clonePanel').hidden = m !== 'clone';
+    $('btnStart').hidden = m !== 'idea';
+    $('startHint').hidden = m !== 'idea';
+    $('btnCloneStart').hidden = m !== 'clone';
+    $('cloneStartHint').hidden = m !== 'clone';
     try { localStorage.setItem('makeMode', m); } catch (_) { /* không có bộ nhớ trình duyệt */ }
   }
 
@@ -77,26 +81,30 @@
   function renderStartButton() {
     const b = $('btnCloneStart');
     const n = links().length;
-    b.disabled = !n || !(C.data && C.data.plus.length);
+    const hasTopic = !!$('cloneGroup').value.trim();
+    b.disabled = !n || !hasTopic || !(C.data && C.data.plus.length);
     b.textContent = running() ? 'Thêm vào hàng đợi' : 'Bắt đầu';
-    $('cloneStartHint').textContent = linkError() || '1 link · 1 cuốn';
+    $('cloneStartHint').textContent = !hasTopic ? 'Nhập chủ đề để bắt đầu clone.' : linkError() || '1 link · 1 cuốn';
   }
 
   async function start() {
+    if (!$('cloneGroup').value.trim()) { toast('Nhập chủ đề trước khi bắt đầu clone.', 'error'); $('cloneGroup').focus(); return; }
     const error = linkError();
     if (error) { toast(error, 'error'); return; }
+    const project_id = window.selectedProject();
+    if (!project_id) return;
     const btn = $('btnCloneStart');
     btn.disabled = true;
     btn.textContent = 'Đang thêm…';
     try {
       const mockup = (document.querySelector('input[name="clone_mockup_mode"]:checked') || {}).value || 'ai';
       let data = await api('/api/clone/add', {
-        links: links(), group: $('cloneGroup').value.trim(), year: +$('cloneYear').value || 2027, mockup_mode: mockup,
+        links: links(), project_id, group: $('cloneGroup').value.trim(), year: +$('cloneYear').value || 2027, mockup_mode: mockup,
       });
       $('cloneLinks').value = '';
       const wasRunning = running();
-      if (!wasRunning) data = await api('/api/clone/start', { show: $('cloneShowChrome').checked });
-      toast(wasRunning ? 'Đã thêm vào hàng đợi clone - làm ngay khi có tài khoản rảnh.' : 'Đã bắt đầu clone sản phẩm.', 'success');
+      if (!wasRunning) data = await api('/api/clone/start', { show: false });
+      toast(wasRunning ? 'Đã thêm vào hàng đợi clone.' : 'Đã bắt đầu clone.', 'success');
       render(data);
     } catch (e) {
       toast(e.message, 'error');
@@ -182,6 +190,7 @@
             <span class="row-title">${esc(i.title || 'Chưa có tên')}</span>${chip(label, cls)}
           </div>
           <div class="row-chips">
+            ${chip(window.projectName ? window.projectName(i.project_id) : 'Chưa phân dự án')}
             ${topic ? chip(topic, 'chip-topic', i.group) : ''}
             ${chip(`Lịch ${i.year}`)}
             ${chip(i.refs ? `${i.refs} ảnh mẫu` : (i.source_url ? 'Chờ lấy ảnh từ link' : '0 ảnh mẫu'))}
@@ -215,7 +224,7 @@
     const d = C.data;
     const note = $('clonePlusNotice');
     note.hidden = d.plus.length > 0;
-    note.innerHTML = '<strong>Không có tài khoản ChatGPT Plus / K12 nào còn hạn.</strong> Clone sản phẩm chỉ dùng tài khoản Plus / K12.'
+    note.innerHTML = '<strong>Clone cần tài khoản Plus / K12 còn hạn.</strong>'
       + (d.unknown.length ? ` Chưa rõ gói: ${esc(d.unknown.join(', '))} - bấm "Kiểm tra gói Plus" trong Tài khoản ChatGPT.` : '');
   }
 
@@ -241,7 +250,7 @@
   async function op(name, id, autostart = false) {
     try {
       let data = await api(`/api/clone/${name}`, { id });
-      if (autostart && !running()) data = await api('/api/clone/start', { show: $('cloneShowChrome').checked });
+      if (autostart && !running()) data = await api('/api/clone/start', { show: false });
       render(data);
     } catch (e) {
       toast(e.message, 'error');
@@ -277,6 +286,7 @@
   applyMode();
 
   $('cloneLinks').addEventListener('input', renderStartButton);
+  $('cloneGroup').addEventListener('input', renderStartButton);
   document.querySelectorAll('.stepper-y button').forEach((b) => b.addEventListener('click', () => {
     const y = $('cloneYear');
     y.value = Math.max(2025, Math.min(2100, (+y.value || 2027) + Number(b.dataset.ystep)));
@@ -285,12 +295,8 @@
   $('cloneYear').addEventListener('input', renderStartButton);
   $('btnCloneStart').addEventListener('click', start);
   $('btnCloneStop').addEventListener('click', stop);
-  $('btnCloneRun').addEventListener('click', () => api('/api/clone/start', { show: $('cloneShowChrome').checked })
+  $('btnCloneRun').addEventListener('click', () => api('/api/clone/start', { show: false })
     .then(render).catch((e) => toast(e.message, 'error')));
-  try { $('cloneShowChrome').checked = localStorage.getItem('cloneShowChrome') === '1'; } catch (_) { /* bỏ qua */ }
-  $('cloneShowChrome').addEventListener('change', () => {
-    try { localStorage.setItem('cloneShowChrome', $('cloneShowChrome').checked ? '1' : '0'); } catch (_) { /* bỏ qua */ }
-  });
   refresh();
   setInterval(refresh, 3000);
 })();

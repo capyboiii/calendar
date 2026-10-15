@@ -21,6 +21,7 @@ import os
 import random
 import threading
 import time
+import uuid
 from collections import deque
 from contextlib import contextmanager
 from pathlib import Path
@@ -149,6 +150,7 @@ class AccountPool:
         self._lease_handles = {}
         self._gate_busy = False
         self._leases = leases
+        self._wait_owner = uuid.uuid4().hex
         self._later = later or (lambda: set())            # tài khoản nên để dành cho tiến trình khác (lấy sau cùng)
         self._clock, self._sleep = clock, sleep
         self._cv = threading.Condition()
@@ -462,35 +464,83 @@ class AccountPool:
             return [n for n in self.names if n not in self.dead]
 
     # ---------- mượn / trả ----------
-    def acquire(self, role: str, *, prefer: list[str] | None = None, only: str | None = None) -> str | None:
+    def acquire(self, role: str, *, prefer: list[str] | None = None, only: str | None = None,
+                eligible: list[str] | None = None, request_id: str | None = None, priority: bool = False) -> str | None:
         """Mượn một tài khoản cho vai `role`; không có thì None (không chờ)."""
         with self._cv:
             self._gate_busy = False
-            if len(self.use) >= self._limit():
-                return None
-            if role == IMAGE and self._count(IMAGE) >= self._image_slots():
-                return None
             order = [only] if only else (prefer or []) + [n for n in self.names if n not in (prefer or [])]
+            order = list(dict.fromkeys(n for n in order if n in self.names and (eligible is None or n in eligible)))
             if not only:                                  # tài khoản để dành cho tiến trình khác: lấy sau cùng
                 later = self._later()
                 if later:
                     order = [n for n in order if n not in later] + [n for n in order if n in later]
-            for name in order:
-                if name in self.names and self._free_for(name, role):
-                    with self._process_gate(wait=False) as acquired:
-                        if not acquired:
+            with self._process_gate(wait=False) as acquired:
+                if not acquired:
+                    self._gate_busy = True
+                    return None
+                state = selected = None
+                budget = self.global_cap or self._limit()
+                if self._leases:
+                    from . import pool_waiters as waits
+                    token = f'{self._wait_owner}:{request_id or threading.get_ident()}:{role}'
+                    try:
+                        state = waits.load(self.profiles_dir, _pid_alive)
+                        room = len(self.use) < self._limit() and (role != IMAGE or self._count(IMAGE) < self._image_slots())
+                        waits.register(state, token, [n for n in order if room and n not in self.dead and not self._resting(n, role)], role, priority)
+                        slots = max(0, budget - self._global_used(limit=budget))
+                        reserved = waits.allocations(state, self._free_for, slots)
+                        selected = next((r for r in state['requests'] if r['token'] == token), None)
+                        waits.save(self.profiles_dir, state)
+                    except OSError:
+                        self._gate_busy = True
+                        return None
+                    if token not in reserved:
+                        return None
+                    order = [reserved[token]]
+                if len(self.use) >= self._limit() or (role == IMAGE and self._count(IMAGE) >= self._image_slots()):
+                    return None
+                if self._leases and self._global_used(limit=budget) >= budget:
+                    return None
+                for name in order:
+                    if not self._free_for(name, role) or not self._take_lease(name):
+                        continue
+                    self.use[name] = role
+                    if state is not None:
+                        try:
+                            waits.granted(state, selected)
+                            waits.save(self.profiles_dir, state)
+                        except OSError:
+                            self.use.pop(name, None)
+                            self._drop_lease(name)
                             self._gate_busy = True
                             return None
-                        # Optional machine budget is separate from this pool's own concurrency.
-                        budget = self.global_cap or self._limit()
-                        if self._leases and self._global_used(limit=budget) >= budget:
-                            return None
-                        if not self._take_lease(name):
-                            continue
-                        self.use[name] = role
                     self._save()
                     return name
             return None
+
+    def cancel_wait(self, role: str, request_id: str | None = None) -> None:
+        if not self._leases:
+            return
+        from . import pool_waiters as waits
+        token = f'{self._wait_owner}:{request_id or threading.get_ident()}:{role}'
+        try:
+            with self._cv, self._process_gate() as acquired:
+                state = waits.load(self.profiles_dir, _pid_alive)
+                state['requests'] = [r for r in state['requests'] if r['token'] != token]
+                waits.save(self.profiles_dir, state)
+        except OSError:
+            pass  # abandoned requests expire; a cleanup failure must not fail a completed book
+
+    def managed_busy(self, names: list[str], role: str) -> bool:
+        """Known CalForge owners / normal capacity contention, distinct from external Chrome locks."""
+        with self._cv:
+            if self.use or any(self._leased_elsewhere(n) for n in names):
+                return True
+            if self._leases and self._global_used(limit=1):
+                return True
+            return not self._gate_busy and any(n not in self.dead and not self._resting(n, role)
+                                               and not self._locked(n) for n in names)
 
     def release(self, name: str) -> None:
         with self._cv:
@@ -511,6 +561,16 @@ class AccountPool:
         with self._cv:
             if self.use.get(name) != IMAGE:
                 return False
+            if self._leases:
+                from . import pool_waiters as waits
+                with self._process_gate(wait=False) as acquired:
+                    if acquired:
+                        try:
+                            state = waits.load(self.profiles_dir, _pid_alive)
+                        except OSError:
+                            state = {'requests': []}
+                        if any(name in r['names'] for r in state['requests']):
+                            return True
             return self._count(IMAGE) > self._image_slots() or len(self.use) > self._limit()   # chat thiếu chỗ / co trần
 
     @contextmanager

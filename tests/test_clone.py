@@ -382,12 +382,18 @@ class FakePool:
         self.rest_s = 1800
         self._lock = threading.Lock()
 
-    def acquire(self, role, only=None, prefer=None):
+    def acquire(self, role, only=None, prefer=None, eligible=None, request_id=None, priority=False):
         with self._lock:
-            if only in self.use or only in self.dead or any(n == only for n, _ in self.rested):
-                return None
-            self.use[only] = role
-            return only
+            for name in ([only] if only else prefer or self.names):
+                if eligible is not None and name not in eligible:
+                    continue
+                if name in self.use or name in self.dead or self._resting(name, role):
+                    continue
+                self.use[name] = role
+                return name
+
+    def cancel_wait(self, *args):
+        pass
 
     def release(self, name):
         with self._lock:
@@ -687,7 +693,7 @@ class ServerErrorRotationTest(unittest.TestCase):
                 raise TempError("ChatGPT báo lỗi: 'Internal server error'")
         fake = lambda page, d: types.SimpleNamespace(open=lambda: None)
         pool._resting = lambda n, role: False                               # nghỉ 120s xong là dùng lại
-        pool.acquire = lambda role, only=None, prefer=None: only if only not in pool.use else None
+        pool.acquire = lambda role, only=None, prefer=None, **kw: next((n for n in ([only] if only else prefer) if n not in pool.use), None)
         self.assertIn(run.run_stage(a, "x", work, session_factory=fake), ("acc3", "acc4"))
         self.assertEqual(len(used), 4)
         self.assertEqual(len(pool.rested), 3)                                # mỗi lần lỗi server: tài khoản nghỉ ngắn

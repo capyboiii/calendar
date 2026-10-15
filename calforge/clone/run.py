@@ -44,6 +44,10 @@ class StageFailed(RuntimeError):
     """Bước chưa xong sau nhiều phiên / hết tài khoản Plus: cuốn để lại, chạy lại sau làm tiếp."""
 
 
+class PoolWaiting(Exception):
+    """Resource contention is a queued stage, not a generation failure."""
+
+
 # ------------------------------------------------------------------ tài khoản Plus
 def plus_accounts(cfg: dict, check_unknown: bool = True, on_event=print) -> list[str]:
     """Tài khoản Plus/Pro còn hạn. Chưa rõ gói thì đọc gói trước (mở ngầm); Free / hết hạn / chết thì bỏ."""
@@ -78,6 +82,7 @@ class Accounts:
         self.open_page = open_page or self._default_open
         self.max_wait_s = float(cfg.get("quota_max_wait_h", 6)) * 3600
         self.max_busy_wait_s = float(cfg.get("account_busy_max_wait_s", 600))
+        self._request = threading.local()
 
     def acquire(self, avoid: set[str] | None = None, stop: threading.Event | None = None,
                 prefer: str | None = None) -> str:
@@ -92,11 +97,18 @@ class Accounts:
             if prefer in order:                          # tài khoản có chat dở của cuốn này: dùng lại trước
                 order.remove(prefer)
                 order.insert(0, prefer)
-            for n in order:
-                if self.pool.acquire(IMAGE, only=n):
-                    return n
+            request_id = getattr(self._request, 'ident', None)
+            name = self.pool.acquire(IMAGE, prefer=order, eligible=alive, request_id=request_id,
+                                     priority=getattr(self._request, 'priority', False))
+            if name:
+                return name
             all_resting = all(self.pool._resting(n, IMAGE) for n in alive)
             now = time.monotonic()
+            managed = not all_resting and getattr(self.pool, 'managed_busy', lambda *_: False)(alive, IMAGE)
+            if managed:
+                if getattr(self._request, 'defer', False):
+                    raise PoolWaiting('chờ tài khoản — idea/clone đang dùng hoặc pool chưa có slot')
+                waited_from = now  # ordinary contention never consumes the external-lock timeout
             if now >= next_report:
                 next_report = now + 15
                 resting = [n for n in alive if self.pool._resting(n, IMAGE)]
@@ -123,10 +135,16 @@ class Accounts:
                     detail.append('các acc còn lại đang chờ slot Chrome/RAM của pool chung')
                 self.on_event(f"[clone] Chờ tài khoản {now - waited_from:.0f}s — " + '; '.join(detail))
             limit = self.max_wait_s if all_resting else self.max_busy_wait_s
-            if time.monotonic() - waited_from > limit:
+            if not managed and time.monotonic() - waited_from > limit:
+                cancel = getattr(self.pool, 'cancel_wait', None)
+                if cancel:
+                    cancel(IMAGE, request_id)
                 reason = "đều hết lượt" if all_resting else "đang bận / bị khóa hoặc hết chỗ Chrome"
                 raise StageFailed(f"tài khoản Plus / K12 {reason} quá lâu - chạy tiếp sau")
             self.pool.wait_change(3.0)
+        cancel = getattr(self.pool, 'cancel_wait', None)
+        if cancel:
+            cancel(IMAGE, getattr(self._request, 'ident', None))
         raise StageFailed("người dùng dừng")
 
     def release(self, name: str) -> None:
@@ -556,7 +574,8 @@ class Book:
             return
         meta = self.meta()
         product = "wall_grid"
-        kdir = products.root(Path(self.cfg["projects_dir"]), product) / self.item.get("group", "lam-theo-mau")
+        from ..projects import run_root
+        kdir = products.root(run_root(Path(self.cfg["projects_dir"]), self.item), product) / self.item.get("group", "lam-theo-mau")
         book = layout.new_book_dir(kdir, meta["title"], f"clone-{self.item['id']}", product)
         work = self.d / "work"
         for sub in (layout.RAW, f"{layout.SYSTEM}/ky_thuat"):
@@ -839,6 +858,9 @@ def run_book(cfg: dict, d: Path, accts: Accounts, plus: list[str], stop: threadi
     next="grid_wait" để chạy lại sau. step "finish": dựng sách."""
     b = Book(cfg, d, on_event)
     b.stop = stop
+    accts._request.ident = f'{d.resolve()}:{step}'
+    accts._request.defer = step in ('art', 'grid')
+    accts._request.priority = step == 'grid' or bool(b.item.get('book'))
     b.status(status="running", reason="")
     try:
         if stop and stop.is_set():
@@ -877,12 +899,20 @@ def run_book(cfg: dict, d: Path, accts: Accounts, plus: list[str], stop: threadi
         b.status(status="done" if ok else "failed", stage=res.get("stage", ""),
                  reason="" if ok else str(res.get("reason", ""))[:300])
         return res
+    except PoolWaiting as e:
+        waiting = 'chờ pool trang lịch' if step == 'grid' else 'chờ pool artwork'
+        b.status(status='running', stage=f'{waiting} — tài khoản đang bận', reason='', **({'art_state': 'queued'} if step == 'art' else {}))
+        return {'next': 'pool_wait'}
     except BookRejected as e:
         b.status(status="rejected", reason=f"ChatGPT từ chối 3 lần (TM/bản quyền/nội dung nhạy cảm): {e}"[:300])
     except StageFailed as e:
         b.status(status="failed", reason=str(e)[:300])
     except Exception as e:  # noqa: BLE001 - lỗi lạ của một cuốn không làm dừng cả hàng đợi
         b.status(status="failed", reason=f"{type(e).__name__}: {str(e)[:250]}")
+    finally:
+        accts._request.ident = None
+        accts._request.defer = False
+        accts._request.priority = False
     on_event(f"✘ {d.name}: {b.item.get('reason', '')}")
     return {"ok": False, "status": b.item.get("status"), "reason": b.item.get("reason", "")}
 
@@ -920,12 +950,17 @@ def run_queue(cfg: dict, on_event=print, stop: threading.Event | None = None, ac
     wake = threading.Event()
     early: "queue.Queue[Path]" = queue.Queue()      # cuốn vừa đủ artwork 1-10 (báo từ luồng artwork)
     stage: dict[str, dict] = {}                     # mục -> {"art": ..., "grid": ..., "fail": (status, reason)}
+    not_before = {}
+    wait_reports = {}
 
     def notify_early(d):
         early.put(d)
         wake.set()
 
     def record(d, res):
+        from ..llm.pool import IMAGE
+        for step in ('art', 'grid'):
+            accts.pool.cancel_wait(IMAGE, f'{d.resolve()}:{step}')
         active.discard(d.name)
         st = stage.pop(d.name, {})
         if not res.get("ok") and st.get("fail"):    # lỗi của bước kia: ghi lại đúng trạng thái + lý do cuối
@@ -935,6 +970,9 @@ def run_queue(cfg: dict, on_event=print, stop: threading.Event | None = None, ac
         on_event(f"◆ CUỐN {'XONG' if res.get('ok') else 'LỖI'}: {store.read(d).get('sku') or d.name}")
 
     def cancelled(d):
+        from ..llm.pool import IMAGE
+        for step in ('art', 'grid'):
+            accts.pool.cancel_wait(IMAGE, f'{d.resolve()}:{step}')
         store.write(d, status="failed", reason="người dùng dừng; chạy tiếp để làm phần còn thiếu")
         stage.pop(d.name, None)
         active.discard(d.name)
@@ -995,6 +1033,9 @@ def run_queue(cfg: dict, on_event=print, stop: threading.Event | None = None, ac
                     free = capacity - sum(k == kind for _, _, k in jobs.values())
                     for _ in range(min(free, len(q))):
                         d, step = q.popleft()
+                        if time.monotonic() < not_before.get((d.name, step), 0):
+                            q.append((d, step))
+                            continue
                         st = stage.setdefault(d.name, {})
                         if step in ("art", "grid"):
                             st[step] = "running"
@@ -1006,7 +1047,8 @@ def run_queue(cfg: dict, on_event=print, stop: threading.Event | None = None, ac
             if not jobs:
                 if not ready and not finishing and early.empty():
                     break
-                time.sleep(0.05)
+                wake.wait(0.25)
+                wake.clear()
                 continue
             wake.wait(0.25)
             wake.clear()
@@ -1020,6 +1062,15 @@ def run_queue(cfg: dict, on_event=print, stop: threading.Event | None = None, ac
                     res = {"ok": False, "status": "failed", "reason": f"{type(e).__name__}: {str(e)[:250]}"}
                 st = stage.setdefault(d.name, {})
                 next_step = res.get("next")
+                if next_step == 'pool_wait' and not (stop and stop.is_set()):
+                    st[step] = 'queued'
+                    not_before[(d.name, step)] = time.monotonic() + 3
+                    ready.appendleft((d, step)) if step == 'grid' else ready.append((d, step))
+                    now = time.monotonic()
+                    if now >= wait_reports.get(d.name, 0):
+                        on_event(f'⏳ {store.read(d).get("title") or d.name}: chờ tài khoản của pool chung; giữ nguyên tiến độ')
+                        wait_reports[d.name] = now + 30
+                    continue
                 if step == "finish":
                     record(d, res)
                     continue

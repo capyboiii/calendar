@@ -70,7 +70,8 @@ class RecoveryTest(unittest.TestCase):
     def test_busy_account_wait_times_out_even_without_quota(self):
         a,p=accts(['acc3']);a.max_busy_wait_s=1
         p.acquire=lambda *args,**kw:None;p.wait_change=lambda *_:None
-        with mock.patch.object(run.time,'monotonic',side_effect=[0,2]),self.assertRaisesRegex(run.StageFailed,'đang bận'):
+        import itertools
+        with mock.patch.object(run.time,'monotonic',side_effect=itertools.count(0,2)),self.assertRaisesRegex(run.StageFailed,'đang bận'):
             a.acquire()
 
     def test_corrupt_raw_quarantined_and_valid_raw_unchanged(self):

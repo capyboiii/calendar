@@ -107,7 +107,7 @@ def to_images(name: str, data: bytes) -> list[tuple[str, bytes]]:
 
 
 def add(projects_dir, images: list[tuple[str, bytes]], *, group: str = "", year: int = 2027,
-        mockup_mode: str = "ai", kind: str = "normal") -> dict:
+        mockup_mode: str = "ai", kind: str = "normal", project_id: str = "") -> dict:
     """Thêm một cuốn: 1-10 ảnh tham chiếu (giữ đúng thứ tự tải lên = artwork 1, 2, ...). Nhận mọi loại file ảnh
     (đổi sang PNG khi cần) và PDF (mỗi trang một ảnh)."""
     if not 2024 <= int(year) <= 2100:
@@ -129,11 +129,11 @@ def add(projects_dir, images: list[tuple[str, bytes]], *, group: str = "", year:
         ext = ext if ext in IMG_EXT else ".png"
         (d / "refs" / f"ref{i:02d}{ext}").write_bytes(data)
     return write(d, id=item_id, created=time.strftime("%Y-%m-%d %H:%M:%S"), group=_group(group), year=int(year),
-                 status="pending", stage="", reason="", book="", title="", names=[n for n, _ in images],
+                 project_id=project_id, status="pending", stage="", reason="", book="", title="", names=[n for n, _ in images],
                  mockup_mode=mockup_mode if mockup_mode in ("ai", "template") else "ai", kind="normal")
 
 
-def add_link(projects_dir, url: str, *, group: str = "", year: int = 2027, mockup_mode: str = "ai") -> dict:
+def add_link(projects_dir, url: str, *, group: str = "", year: int = 2027, mockup_mode: str = "ai", project_id: str = "") -> dict:
     """Thêm một cuốn từ LINK sản phẩm: chưa có ảnh mẫu - lúc chạy, ChatGPT tách artwork của sản phẩm thành file zip
     rồi tool lưu làm ảnh mẫu (clone/fetch.py). Các bước sau giống hệt cuốn dán ảnh tay."""
     from .fetch import valid_url
@@ -144,7 +144,7 @@ def add_link(projects_dir, url: str, *, group: str = "", year: int = 2027, mocku
     d = root(projects_dir) / item_id
     (d / "refs").mkdir(parents=True)
     return write(d, id=item_id, created=time.strftime("%Y-%m-%d %H:%M:%S"), group=_group(group), year=int(year),
-                 status="pending", stage="", reason="", book="", title="", names=[], source_url=url,
+                 project_id=project_id, status="pending", stage="", reason="", book="", title="", names=[], source_url=url,
                  mockup_mode=mockup_mode if mockup_mode in ("ai", "template") else "ai", kind="normal")
 
 

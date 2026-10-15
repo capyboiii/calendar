@@ -266,7 +266,24 @@ input[type="text"], input[type="number"], select {
 }
 
 /* ---------- kết quả ---------- */
-.results-head { display: flex; align-items: baseline; gap: 12px; margin: 8px 0 4px; flex-wrap: wrap; }
+.results-head { display:grid; grid-template-columns:minmax(0,1fr); gap:10px; margin:8px 0 12px; }
+.results-meta { display:flex; min-width:0; align-items:center; gap:12px; min-height:40px; }
+.results-meta h2 { overflow:hidden; white-space:nowrap; text-overflow:ellipsis; margin:0; }
+.project-back-slot { flex:0 0 112px; height:40px; display:flex; align-items:center; }
+.project-back-slot .btn { width:100%; white-space:nowrap; padding-left:8px; padding-right:8px; }
+.results-meta h2 { flex:0 1 auto; min-width:0; max-width:60%; }
+.results-meta .count { flex:none; white-space:nowrap; text-align:left; }
+.results-toolbar { display:grid; grid-template-columns:minmax(140px,1fr) 78px 164px 204px; align-items:center; gap:10px; min-height:40px; }
+.results-toolbar .book-search { width:100%; min-width:0; }
+.results-toolbar .btn { width:100%; min-height:36px; white-space:nowrap; }
+html { scrollbar-gutter:stable; }
+@media (max-width:620px) {
+  .results-toolbar { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .results-toolbar .book-search { grid-column:1 / -1; }
+  .results-toolbar #btnR2Settings { grid-column:1 / -1; width:78px; justify-self:end; }
+  .results-toolbar .btn { white-space:normal; min-height:44px; }
+  .results-meta { gap:8px; }
+}
 .book-search { align-self: center; width: 220px; max-width: 100%; padding: 6px 10px; border: 1px solid var(--line);
   border-radius: 8px; font: inherit; font-size: 13px; background: var(--surface); color: var(--text); }
 .book-search:focus { outline: 2px solid color-mix(in srgb, var(--primary) 40%, transparent); outline-offset: 1px; }
@@ -646,3 +663,16 @@ input[type="text"], input[type="number"], select {
 .clone-book-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 8px; }
 .clone-reviewed { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; font-size: .8rem; }
 .clone-reviewed input { accent-color: var(--primary); width: 16px; height: 16px; }
+/* Dự án: chọn nơi lưu trước khi chạy, mở thư mục để xem các cuốn. */
+.workspace-form { display:flex; flex-wrap:wrap; align-items:center; gap:10px; margin:18px 0; }
+.workspace-form label { flex-basis:100%; }
+.workspace-form select, .workspace-form input { min-width:220px; padding:10px 12px; border:1px solid #d9d3c8; border-radius:9px; background:#fff; color:#263c35; font:inherit; }
+.workspace-card.btn { display:inline-flex; flex-direction:column; align-items:flex-start; gap:12px; width:280px; max-width:100%; min-height:110px; margin:0 14px 14px 0; padding:22px; white-space:normal; text-align:left; border:1px solid #d9d3c8; background:#fff; color:#263c35; }
+.workspace-card span { font-size:13px; color:#6c756e; }
+.workspace-item { display:inline-flex; box-sizing:border-box; vertical-align:top; flex-direction:column; align-items:flex-start; width:280px; height:170px; max-width:100%; margin:0 14px 14px 0; padding:0 0 16px; border:1px solid var(--line); border-radius:var(--radius); background:var(--surface); overflow:hidden; }
+.workspace-item .workspace-card.btn { box-sizing:border-box; flex:none; width:100%; height:110px; min-height:110px; margin:0; border:0; border-radius:0; }
+.workspace-item .workspace-card strong { max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.workspace-item > .btn-danger-ghost { margin:0 22px; align-self:flex-end; }
+.mode-actions { display:flex; align-items:center; justify-content:flex-end; gap:16px; min-height:64px; margin:12px 0 20px; }
+.mode-actions .hint { flex:1; margin:0; }
+.mode-actions .btn-big { flex:none; width:245px; min-height:52px; }

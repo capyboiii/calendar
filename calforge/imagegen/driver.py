@@ -593,15 +593,19 @@ def run_jobs(jobs: list[GenJob], profiles_dir: Path, profiles: list[str], *, hea
 
     def worker(profile: str) -> None:
         w = _Worker(profiles_dir / profile, headless, timeout_s)
+        completed = False
         try:
             with opener(profile) as page:
-                while not pool.should_yield(profile) and not fatal_ip.is_set():
+                while not fatal_ip.is_set():
+                    if completed and pool.should_yield(profile):
+                        return
                     try:
                         job = q.get_nowait()
                     except queue.Empty:
                         return                        # hết việc: trả tài khoản cho cuốn khác / chat
                     if not handle(profile, w, page, job):
                         return
+                    completed = True
         except Exception as e:  # noqa: BLE001 - không mở được Chrome/profile: đổi tài khoản khác
             on_event(f"[{profile}] không mở được Chrome: {str(e)[:160]}")
             with lock:
@@ -648,6 +652,7 @@ def run_jobs(jobs: list[GenJob], profiles_dir: Path, profiles: list[str], *, hea
                 if not usable or all(pool._resting(n, IMAGE) for n in usable):
                     break                             # mọi tài khoản nghỉ vẽ / hỏng: để batch chờ rồi thử lại
             pool.wait_change(1.0)
+    pool.cancel_wait(IMAGE)
     for t in threads:
         t.join(timeout=5)
     while not q.empty():

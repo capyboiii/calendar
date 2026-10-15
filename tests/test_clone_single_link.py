@@ -22,9 +22,9 @@ class SingleCloneLinkTest(unittest.TestCase):
                 self.assertEqual(h._send_json.call_args.kwargs['status'],400)
 
     def test_api_accepts_exactly_one_book_per_request(self):
-        h=mock.Mock();data=json.dumps({'links':[URL]}).encode()
+        h=mock.Mock();data=json.dumps({'links':[URL], 'group': 'Test clone'}).encode()
         h.headers={'Content-Length':str(len(data))};h.rfile=io.BytesIO(data)
-        with mock.patch.object(server.config,'load',return_value={'projects_dir':'unused'}),mock.patch('calforge.clone.store.add_link', autospec=True) as add,mock.patch.object(server,'_clone_items',return_value={}):
+        with mock.patch.object(server.config,'load',return_value={'projects_dir':'unused'}),mock.patch.object(server.workspaces,'require'),mock.patch('calforge.clone.store.add_link', autospec=True) as add,mock.patch.object(server,'_clone_items',return_value={}):
             server.StudioHandler._api_clone(h,'add')
             self.assertEqual(add.call_count,1)
             self.assertEqual(add.call_args.args[1],URL)

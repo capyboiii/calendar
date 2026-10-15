@@ -129,10 +129,8 @@ def setup(tc, n_books=1, faults=None, plus=PLUS, finish_ok=True):
     pool.resting = resting_until
     real_acquire = pool.acquire
 
-    def acquire(role, only=None, prefer=None):
-        if pool._resting(only, role):
-            return None
-        got = real_acquire(role, only=only)
+    def acquire(role, only=None, prefer=None, **kwargs):
+        got = real_acquire(role, only=only, prefer=prefer, **kwargs)
         if got:
             with world.lock:
                 world.in_use[got] = world.in_use.get(got, 0) + 1

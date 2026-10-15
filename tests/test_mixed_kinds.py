@@ -299,10 +299,11 @@ class CloneLinksPlusTwoIdeaBatchesTest(unittest.TestCase):
                 with lock, self.log.open("a", encoding="utf-8") as f:
                     f.write(f"clone {name} end {time.time():.4f}\n")
         accts = run.Accounts(self.cfg, self.PLUS, on_event=lambda *_: None, pool=pool, open_page=logged_open)
+        pair_env = {**os.environ, 'CALFORGE_TEST_IDEA_PAIR_BARRIER': str(self.log.with_suffix('.pair'))}
         idea = [subprocess.Popen([sys.executable, "-m", "tests._idea_proc", str(self.pdir), self.cfg["projects_dir"],
                                   str(self.log.with_name(self.log.name + f".idea{k}")), "100", str(20 + k), "12",
                                   str(k)], cwd=str(Path(__file__).resolve().parents[1]),
-                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) for k in (1, 2)]
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=pair_env) for k in (1, 2)]
         for p in idea:
             self.addCleanup(lambda p=p: p.poll() is None and p.kill())
             drain_process(p)

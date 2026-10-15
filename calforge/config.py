@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 from .core.dates import DEFAULT_YEAR
@@ -63,6 +64,9 @@ def load() -> dict:
         cfg.update(user)
         cfg.update(merged)
     cfg["projects_dir"] = str((ROOT / cfg["projects_dir"]).resolve())
+    if os.environ.get('CALFORGE_PROJECT_ID'):
+        from .projects import require
+        cfg['projects_dir'] = str(require(Path(cfg['projects_dir']), os.environ['CALFORGE_PROJECT_ID']))
     return cfg
 
 

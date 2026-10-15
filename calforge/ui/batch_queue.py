@@ -227,7 +227,7 @@ class BatchQueue:
         """Chỉ chồng một batch theo ý tưởng KHÁC chủ đề (cùng chủ đề thì khoá batch.lock bắt chờ, vô ích); việc sửa
         sách lẻ (Làm tiếp / Vẽ lại / Hoàn thiện) vẫn chờ chạy sau như cũ."""
         p, q = nxt["params"], cur["params"]
-        return not p.get("action") and (p.get("keyword"), p.get("product")) != (q.get("keyword"), q.get("product"))
+        return not p.get("action") and (p.get("keyword"), p.get("product"), p.get('project_id')) != (q.get("keyword"), q.get("product"), q.get('project_id'))
 
     def start(self, every: float = 2.0) -> None:
         def loop():
