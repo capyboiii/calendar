@@ -436,18 +436,49 @@ class _Finisher:
         self.pool.shutdown()
 
 
-def _safe_call(fn, cdir: Path, cfg: dict, on_event=print, **kw) -> dict:
+# Lỗi bất ngờ nhưng TẠM THỜI (thiếu RAM, Chrome sập / bị đóng, mạng chập, file đang bị chương trình khác khoá): làm
+# lại ngay vài lần thay vì bỏ cuốn tới vòng vét cuối batch. Lỗi khác (lỗi code) lặp lại y hệt -> không làm lại vô ích.
+TRANSIENT = ("memoryerror", "out of memory", "targetclosed", "target page, context or browser has been closed",
+             "browser has been closed", "connection closed", "connection reset", "connectionerror", "net::err",
+             "timeout", "timed out", "permissionerror", "being used by another process", "winerror 32",
+             "winerror 5", "winerror 1455", "broken pipe")
+
+
+def _transient(e: BaseException) -> bool:
+    text = f"{type(e).__name__}: {e}".lower()
+    return isinstance(e, (MemoryError, ConnectionError, TimeoutError)) or any(k in text for k in TRANSIENT)
+
+
+def _safe_call(fn, cdir: Path, cfg: dict, on_event=print, *, stop_event=None, **kw) -> dict:
     import traceback
-    try:
-        return fn(cdir, cfg, on_event=on_event, **kw)
-    except Exception as e:  # noqa: BLE001 - một cuốn hỏng không được giết cả batch
-        on_event(f"  ✘ {cdir.name}: lỗi bất ngờ - {type(e).__name__}: {e}")
-        st = {"stage": "crash", "ok": False, "reason": f"{type(e).__name__}: {e}"[:500]}
+    waits = list(cfg.get("crash_retry_waits_s", (30, 90)))
+    for attempt in range(len(waits) + 1):
+        if stop_event is not None and stop_event.is_set():
+            return {"ok": False, "stage": "stopped", "reason": "người dùng dừng"}
         try:
-            return _status(cdir, traceback=traceback.format_exc()[-4000:], **st)
-        except Exception as e2:  # noqa: BLE001 - không ghi được status (hết đĩa...): vẫn không được giết batch
-            on_event(f"  ✘ {cdir.name}: không ghi được trạng thái - {type(e2).__name__}: {e2}")
-            return st
+            return fn(cdir, cfg, on_event=on_event, **kw)
+        except Exception as e:  # noqa: BLE001
+            if attempt < len(waits) and _transient(e):
+                on_event(f"  ⟳ {cdir.name}: lỗi tạm thời ({type(e).__name__}: {str(e)[:120]}) - "
+                         f"nghỉ {waits[attempt]}s rồi làm lại ({attempt + 1}/{len(waits)})")
+                if stop_event is None:
+                    time.sleep(waits[attempt])
+                else:
+                    stop_event.wait(waits[attempt])
+                continue
+            return _crash(cdir, e, traceback.format_exc(), on_event)
+    return {}
+
+
+def _crash(cdir: Path, e: Exception, tb: str, on_event=print) -> dict:
+    """Ghi lỗi bất ngờ của một cuốn (lý do + traceback) - một cuốn hỏng không được giết cả batch."""
+    on_event(f"  ✘ {cdir.name}: lỗi bất ngờ - {type(e).__name__}: {e}")
+    st = {"stage": "crash", "ok": False, "reason": f"{type(e).__name__}: {e}"[:500]}
+    try:
+        return _status(cdir, traceback=tb[-4000:], **st)
+    except Exception as e2:  # noqa: BLE001 - không ghi được status (hết đĩa...): vẫn không được giết batch
+        on_event(f"  ✘ {cdir.name}: không ghi được trạng thái - {type(e2).__name__}: {e2}")
+        return st
 
 
 def _safe_pipelined(cdir: Path, cfg: dict, finisher: "_Finisher", on_event=print) -> None:
@@ -463,13 +494,8 @@ def _safe_pipelined(cdir: Path, cfg: dict, finisher: "_Finisher", on_event=print
 def _safe_produce(cdir: Path, cfg: dict, on_event=print, **kw) -> dict:
     """produce() nhưng lỗi gì cũng chỉ hỏng cuốn đó: ghi lý do + traceback vào status.json rồi đi tiếp.
     Trình duyệt được đóng bởi các khối with bên trong khi exception đi ra."""
-    import traceback
-    try:
-        return produce(cdir, cfg, on_event=on_event, **kw)
-    except Exception as e:  # noqa: BLE001 - cố ý: một cuốn hỏng không được giết cả batch
-        on_event(f"  ✘ {cdir.name}: lỗi bất ngờ - {type(e).__name__}: {e}")
-        return _status(cdir, stage="crash", ok=False, reason=f"{type(e).__name__}: {e}"[:500],
-                       traceback=traceback.format_exc()[-4000:])
+    # lỗi tạm thời (thiếu RAM, Chrome sập, mạng, file bị khoá) tự làm lại vài lần như trong batch
+    return _safe_call(lambda c, g, on_event: produce(c, g, on_event=on_event, **kw), cdir, cfg, on_event)
 
 
 def _batch_file(kdir: Path) -> Path:

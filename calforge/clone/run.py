@@ -13,13 +13,14 @@ Mỗi cuốn chỉ chạy một bước tại một thời điểm. Số Chrome 
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import queue
 import shutil
 import threading
 import time
 from collections import deque
-from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -76,11 +77,13 @@ class Accounts:
         self.pdir = config.get_profiles_dir(cfg)
         self.open_page = open_page or self._default_open
         self.max_wait_s = float(cfg.get("quota_max_wait_h", 6)) * 3600
+        self.max_busy_wait_s = float(cfg.get("account_busy_max_wait_s", 600))
 
     def acquire(self, avoid: set[str] | None = None, stop: threading.Event | None = None,
                 prefer: str | None = None) -> str:
         from ..llm.pool import IMAGE
         waited_from = time.monotonic()
+        next_report = waited_from + 3
         while not (stop and stop.is_set()):
             alive = [n for n in self.names if n not in self.pool.dead]
             if not alive:
@@ -92,9 +95,37 @@ class Accounts:
             for n in order:
                 if self.pool.acquire(IMAGE, only=n):
                     return n
-            if all(self.pool._resting(n, IMAGE) for n in alive):
-                if time.monotonic() - waited_from > self.max_wait_s:
-                    raise StageFailed("mọi tài khoản Plus / K12 đều hết lượt quá lâu - chạy lại sau")
+            all_resting = all(self.pool._resting(n, IMAGE) for n in alive)
+            now = time.monotonic()
+            if now >= next_report:
+                next_report = now + 15
+                resting = [n for n in alive if self.pool._resting(n, IMAGE)]
+                busy = []
+                for n in alive:
+                    if n in resting:
+                        continue
+                    try:
+                        if (n in getattr(self.pool, 'use', {}) or
+                                getattr(self.pool, '_locked', lambda _: False)(n) or
+                                getattr(self.pool, '_leased_elsewhere', lambda _: False)(n) or
+                                getattr(self.pool, '_lease_locked', lambda _: False)(n)):
+                            busy.append(n)
+                    except OSError:
+                        busy.append(n)
+                detail = []
+                if getattr(self.pool, '_gate_busy', False):
+                    detail.append('chưa lấy được khóa điều phối giữa các tiến trình')
+                if resting:
+                    detail.append('đang nghỉ/hết lượt: ' + ', '.join(resting))
+                if busy:
+                    detail.append('đang dùng hoặc profile bị khóa: ' + ', '.join(busy))
+                if len(resting) + len(busy) < len(alive):
+                    detail.append('các acc còn lại đang chờ slot Chrome/RAM của pool chung')
+                self.on_event(f"[clone] Chờ tài khoản {now - waited_from:.0f}s — " + '; '.join(detail))
+            limit = self.max_wait_s if all_resting else self.max_busy_wait_s
+            if time.monotonic() - waited_from > limit:
+                reason = "đều hết lượt" if all_resting else "đang bận / bị khóa hoặc hết chỗ Chrome"
+                raise StageFailed(f"tài khoản Plus / K12 {reason} quá lâu - chạy tiếp sau")
             self.pool.wait_change(3.0)
         raise StageFailed("người dùng dừng")
 
@@ -104,7 +135,7 @@ class Accounts:
     @contextmanager
     def _default_open(self, name: str):
         from playwright.sync_api import sync_playwright
-        from ..llm.browser import hide_offscreen_from_taskbar, launch_options
+        from ..llm.browser import hide_offscreen_from_taskbar, launch_options, register_hidden_context
         headless = (self.cfg.get("imagegen") or {}).get("headless", "hidden")
         with sync_playwright() as pw:
             with self.pool.launch_gate():
@@ -113,6 +144,7 @@ class Accounts:
                     accept_downloads=True, downloads_path=str(self.pdir / name / "_tai_ve"),   # tải zip artwork:
                     **launch_options(headless))       # không đặt thư mục tải về thì bấm tải làm Chrome đóng ngang
             try:
+                register_hidden_context(ctx, headless)
                 page = ctx.pages[0] if ctx.pages else ctx.new_page()
                 if headless in ("hidden", None):
                     hide_offscreen_from_taskbar()
@@ -138,7 +170,9 @@ def run_stage(accts: Accounts, label: str, work, *, avoid: set[str] | None = Non
         want = prefer() if callable(prefer) else prefer
         name = accts.acquire(avoid, stop, prefer=want)
         try:
+            accts.on_event(f"[{name}] {label}: đã mượn tài khoản, đang mở Chrome...")
             with accts.open_page(name) as page:
+                accts.on_event(f"[{name}] {label}: Chrome đã mở, đang khởi tạo chat ChatGPT...")
                 s = session_factory(page, accts.pdir / name)
                 s.open()
                 think = getattr(s, "thinking", None)
@@ -280,6 +314,7 @@ class Book:
         self.year = int(self.item.get("year") or 2027)
         self.lock = _item_lock(d.name)
         self.on_grid_ready = None                      # gọi (thư mục mục) khi đủ artwork 1-10: trang lịch chạy sớm
+        self._validated_images = {}
         self._grid_signalled = False
 
     @property
@@ -300,7 +335,29 @@ class Book:
         return layout.raw(self.dir) / job
 
     def done(self, job: str) -> Path | None:
-        return job_done(self.dir, job)
+        from PIL import Image
+        with self.lock:
+            path = job_done(self.dir, job)
+            if path is None:
+                return None
+            st = path.stat()
+            stamp = (str(path), st.st_size, st.st_mtime_ns)
+            if stamp in self._validated_images:
+                return path
+            try:
+                with Image.open(path) as im:
+                    im.verify()
+                with Image.open(path) as im:
+                    im.load()
+            except PermissionError:
+                raise  # a locked file is not a corrupt image
+            except (OSError, ValueError, SyntaxError):
+                bad = path.with_name(path.name + f".{time.time_ns()}.bad")
+                path.replace(bad)
+                self.on_event(f"⚠ {job}: ảnh lưu bị hỏng - giữ bản lỗi và vẽ lại phần thiếu")
+                return None
+            self._validated_images[stamp] = True
+            return path
 
     def missing(self, prefix: str) -> list[int]:
         return [m for m in range(1, 13) if self.done(f"{prefix}{m:02d}") is None]
@@ -417,22 +474,37 @@ class Book:
 
     def _take_art(self, turn, name: str) -> None:
         chat = self.item.get("art_chat") or {}
-        if chat.get("account") == name:                 # đếm ảnh đã lấy từ chat này (mở lại chat không lấy trùng)
-            self.status(art_chat={**chat, "saved": int(chat.get("saved", 0)) + len(turn.images)})
+        saved = int(chat.get("saved", 0))
+        def commit():
+            nonlocal saved
+            saved += 1
+            if chat.get("account") == name:
+                self.status(art_chat={**chat, "saved": saved})
         missing = self.missing("m")
+        known = {hashlib.sha256(p.read_bytes()).digest() for i in range(1, 13)
+                 if (p := self.done(f"m{i:02d}")) is not None}
         got = 0
         for data in turn.images:
             if not missing:
-                break
+                commit()
+                continue
+            digest = hashlib.sha256(data).digest()
+            if digest in known:  # saved before a crash, but cursor commit had not completed
+                commit()
+                continue
             why = session.landscape_ok(data)
             if why:
                 self._reject(data, f"art-{missing[0]:02d}")
                 self.on_event(f"[{name}] bỏ 1 ảnh artwork: {why}")
+                commit()
                 continue
-            m = missing.pop(0)
+            m = missing[0]
             with self.lock:
                 session.save(data, self.raw(f"m{m:02d}"))
+            missing.pop(0)
+            known.add(digest)
             got += 1
+            commit()  # never skip a chat image that failed to reach disk
         self.on_event(f"[{name}] artwork: +{got} ảnh, còn thiếu {len(self.missing('m'))}")
         if turn.problem and (not got or isinstance(turn.problem, (QuotaExceeded, ThirdPartyIPRefused))):
             raise turn.problem
@@ -612,6 +684,12 @@ class Book:
     # -------------------------------------------------------------- dựng sách
     def finish(self, plus: list[str]) -> dict:
         from .. import pipeline
+        return pipeline._safe_call(lambda book, cfg, on_event: self._finish_attempt(plus),
+                                   self.dir, self.cfg, self.on_event,
+                                   stop_event=getattr(self, "stop", None))
+
+    def _finish_attempt(self, plus: list[str]) -> dict:
+        from .. import pipeline
         book = self.dir
         repair_month_captions(book)
         anchor = layout.raw(book) / "anchor"
@@ -703,7 +781,7 @@ def write_concept(book: Path, meta: dict, year: int, item: dict) -> dict:
     from ..publish.etsy_listing import DETAILS_HTML, DETAILS_TEXT, to_html
     from ..publish.listing import write_listing_txt
     concept = {
-        "title": meta["title"].strip(), "angle_id": f"clone-{item['id']}", "source": "clone",
+        "title": meta["title"].strip(), "angle_id": f"clone-{item['id']}", "source": "clone", "source_url": item.get("source_url", ""),
         "keyword": meta.get("keyword", ""), "buyer": meta.get("buyer", ""), "year": year, "market": "US",
         "product": "wall_grid", "listing_style": "etsy", "content_type": "none", "grid_function": "standard",
         "frame_type": "clone",
@@ -732,8 +810,23 @@ def fetch_refs(b, accts: Accounts, stop: threading.Event | None = None) -> None:
     """Mục thêm bằng LINK sản phẩm mà chưa có ảnh mẫu: nhờ ChatGPT tách artwork thành file zip rồi lưu làm ảnh mẫu
     (calforge/clone/fetch.py). Đã có ảnh mẫu (dán tay, hoặc lần trước đã lấy) thì bỏ qua."""
     from . import fetch
-    if store.refs(b.d) or not b.item.get("source_url"):
+    refs = store.refs(b.d)
+    if not b.item.get("source_url"):
         return
+    complete = b.item.get("refs_complete") and len(refs) == b.item.get("refs_count")
+    legacy = not b.item.get("refs_dir") and refs and len(refs) == len(b.item.get("names") or [])
+    if complete or legacy:
+        from PIL import Image
+        try:
+            for ref in refs:
+                with Image.open(ref) as im:
+                    im.verify()
+        except PermissionError:
+            raise
+        except (OSError, ValueError, SyntaxError):
+            pass
+        else:
+            return
     run_stage(accts, f"{b.d.name} lấy ảnh mẫu từ link", lambda s, n: fetch.fetch_work(b, s, n), stop=stop)
     b.item = store.read(b.d) or b.item
 
@@ -745,6 +838,7 @@ def run_book(cfg: dict, d: Path, accts: Accounts, plus: list[str], stop: threadi
     trên tài khoản khác). step "grid": trang lịch các tháng đã có artwork - còn tháng chưa có artwork thì trả
     next="grid_wait" để chạy lại sau. step "finish": dựng sách."""
     b = Book(cfg, d, on_event)
+    b.stop = stop
     b.status(status="running", reason="")
     try:
         if stop and stop.is_set():
@@ -823,8 +917,13 @@ def run_queue(cfg: dict, on_event=print, stop: threading.Event | None = None, ac
     ready = deque()
     finishing = deque()
     results: list[dict] = []
+    wake = threading.Event()
     early: "queue.Queue[Path]" = queue.Queue()      # cuốn vừa đủ artwork 1-10 (báo từ luồng artwork)
     stage: dict[str, dict] = {}                     # mục -> {"art": ..., "grid": ..., "fail": (status, reason)}
+
+    def notify_early(d):
+        early.put(d)
+        wake.set()
 
     def record(d, res):
         active.discard(d.name)
@@ -899,16 +998,19 @@ def run_queue(cfg: dict, on_event=print, stop: threading.Event | None = None, ac
                         st = stage.setdefault(d.name, {})
                         if step in ("art", "grid"):
                             st[step] = "running"
-                        cb = early.put if step == "art" else None
+                        cb = notify_early if step == "art" else None
                         future = executor.submit(run_book, cfg, d, accts, plus, stop, on_event, step=step,
                                                  on_grid_ready=cb)
                         jobs[future] = (d, step, kind)
+                        future.add_done_callback(lambda _: wake.set())
             if not jobs:
                 if not ready and not finishing and early.empty():
                     break
                 time.sleep(0.05)
                 continue
-            completed, _ = wait(jobs, timeout=0.25, return_when=FIRST_COMPLETED)
+            wake.wait(0.25)
+            wake.clear()
+            completed = {future for future in jobs if future.done()}
             for future in completed:
                 d, step, kind = jobs.pop(future)
                 try:

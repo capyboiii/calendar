@@ -19,11 +19,14 @@ PARTIAL = "partial"          # chạy xong nhưng chỉ đạt một phần số
 
 
 class BatchQueue:
-    def __init__(self, tasks, state_file: Path, build_args, report, ideas_done=None):
+    def __init__(self, tasks, state_file: Path, build_args, report, ideas_done=None, free_ram=None,
+                 overlap_min_gb: float = 6.0):
         """tasks: TaskManager; report(params) -> (ok, total[, retryable]);
         ideas_done(params) -> True khi batch đó đã lên đủ ý, chỉ còn vẽ (thì chủ đề kế tiếp được bắt đầu lên ý)."""
         self.tasks, self.file, self.build_args, self.report = tasks, Path(state_file), build_args, report
         self.ideas_done = ideas_done or (lambda params: False)
+        # chồng 2 batch chỉ khi máy còn đủ RAM trống (2 tiến trình cùng mở Chrome: thiếu RAM -> Chrome sập, lỗi cuốn)
+        self.free_ram, self.overlap_min_gb = free_ram, float(overlap_min_gb)
         self.lock = threading.RLock()
         self.items: list[dict] = []
         self.paused = False
@@ -208,6 +211,12 @@ class BatchQueue:
         """Đúng 1 batch đang chạy, là batch theo ý tưởng, và nó đã lên đủ ý (chỉ còn vẽ nốt)."""
         if len(running) != 1 or running[0]["params"].get("action"):
             return False
+        if self.free_ram is not None:
+            try:
+                if float(self.free_ram()) < self.overlap_min_gb:
+                    return False                       # máy đang thiếu RAM: chờ batch trước xong như cũ
+            except Exception:  # noqa: BLE001 - không đo được RAM: an toàn là không chồng
+                return False
         try:
             return bool(self.ideas_done(running[0]["params"]))
         except Exception:  # noqa: BLE001 - đọc trạng thái lỗi: không chồng lượt, chạy tuần tự như cũ

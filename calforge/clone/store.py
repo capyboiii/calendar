@@ -31,7 +31,10 @@ def item_dir(projects_dir, item_id: str) -> Path:
 
 
 def refs(d: Path) -> list[Path]:
-    return sorted(p for p in (d / "refs").glob("*") if p.suffix.lower() in IMG_EXT)
+    name = read(d).get("refs_dir", "refs")
+    if not isinstance(name, str) or not re.fullmatch(r"refs(?:_[a-f0-9]{32})?", name):
+        name = "refs"
+    return sorted(p for p in (d / name).glob("*") if p.suffix.lower() in IMG_EXT)
 
 
 def read(d: Path) -> dict:

@@ -176,6 +176,27 @@ TASK_MANAGER = TaskManager()
 CLONE_MAX_BODY = 120 * 1024 * 1024
 
 
+def _clone_book_info(book: Path, concept: dict) -> dict:
+    if concept.get("source") != "clone":
+        return {}
+    from ..clone import store
+    item = {}
+    ident = str(concept.get("angle_id", ""))
+    if ident.startswith("clone-"):
+        try:
+            item = store.read(store.item_dir(config.load()["projects_dir"], ident[6:]))
+        except ValueError:
+            pass
+    try:
+        review = json.loads((layout.tech(book) / "review.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        review = {}
+    if not isinstance(review, dict):
+        review = {}
+    return {"source": "clone", "source_url": concept.get("source_url") or item.get("source_url", ""),
+            "reviewed": review.get("reviewed") is True}
+
+
 def _clone_cover(book: str | None) -> str:
     """Ảnh đại diện của cuốn: ảnh quảng cáo bìa nếu đã có, chưa thì tranh bìa AI."""
     if not book or not Path(book).is_dir():
@@ -212,6 +233,8 @@ def _clone_items() -> dict:
         d = store.root(cfg["projects_dir"]) / it.get("id", "")
         it["ref_paths"] = [str(p) for p in store.refs(d)]
         it["cover"] = _clone_cover(it.get("book"))
+        if it.get("book"):
+            it["reviewed"] = _clone_book_info(Path(it["book"]), {"source": "clone"}).get("reviewed", False)
     task = next(({k: v for k, v in t.items() if k != "logs"} for t in TASK_MANAGER.list_tasks()
                  if t.get("action") == "clone"), None)
     return {"items": items, "plus": plus, "unknown": unknown, "task": task}
@@ -453,8 +476,10 @@ def batch_queue():
     if _QUEUE is None:
         from .batch_queue import BatchQueue
         cfg = config.load()
+        from ..llm.pool import free_ram_gb
         _QUEUE = BatchQueue(TASK_MANAGER, Path(cfg["projects_dir"]) / ".hang_doi.json", run_args, _batch_result,
-                            ideas_done=_batch_ideas_done)
+                            ideas_done=_batch_ideas_done, free_ram=free_ram_gb,
+                            overlap_min_gb=float(cfg.get("overlap_min_free_ram_gb", 6)))
     return _QUEUE
 
 
@@ -488,21 +513,22 @@ class StudioHandler(SimpleHTTPRequestHandler):
         return self._send_json({"error": "Not found"}, status=HTTPStatus.NOT_FOUND)
 
     def _serve_index(self):
-        """Trang chính, link app.js / app.css / clone.js / clone.css gắn ?v=<giờ sửa file>: cập nhật tool (cài đè bộ
-        cài mới) là trình duyệt buộc tải giao diện mới - không dùng bản cũ đã lưu tạm."""
+        """Gắn mã lần cài và hash nội dung để trình duyệt tải đúng giao diện mới."""
         import re as _re
+        from .cache import install_id
         html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+        revision = install_id(ROOT)
 
         def stamp(m):
             f = STATIC_DIR / m.group(2)
-            v = int(f.stat().st_mtime) if f.is_file() else 0
+            v = revision + '-' + (hashlib.sha256(f.read_bytes()).hexdigest()[:16] if f.is_file() else 'missing')
             return f'{m.group(1)}="{m.group(2)}?v={v}"'
         html = _re.sub(r'(href|src)="((?:app|clone)\.(?:js|css))"', stamp, html)
         data = html.encode("utf-8")
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(data)))
-        self.send_header("Cache-Control", "no-cache, must-revalidate")
+        self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(data)
 
@@ -765,6 +791,29 @@ class StudioHandler(SimpleHTTPRequestHandler):
             threading.Timer(0.5, lambda: os._exit(0)).start()
             return None
 
+        if path == "/api/book/review":
+            try:
+                body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))).decode("utf-8"))
+                if not isinstance(body, dict) or type(body.get("reviewed")) is not bool:
+                    raise ValueError("Trạng thái Đã kiểm tra phải là true hoặc false")
+                target = (ROOT / str(body.get("path", "")).lstrip("/\\")).resolve()
+                if not _in_projects(target) or not layout.is_book(target):
+                    raise ValueError("Cuốn không hợp lệ")
+                concept = json.loads(layout.concept_file(target).read_text(encoding="utf-8"))
+                if concept.get("source") != "clone":
+                    raise ValueError("Chỉ đánh dấu kiểm tra cho cuốn clone")
+                path = layout.tech(target) / "review.json"
+                path.parent.mkdir(parents=True, exist_ok=True)
+                import uuid
+                tmp = path.with_name("review." + uuid.uuid4().hex + ".tmp")
+                tmp.write_text(json.dumps({"reviewed": body["reviewed"]}, ensure_ascii=False), encoding="utf-8")
+                tmp.replace(path)
+                return self._send_json({"ok": True, "reviewed": body["reviewed"]})
+            except (ValueError, TypeError) as e:
+                return self._send_json({"error": str(e)}, status=HTTPStatus.BAD_REQUEST)
+            except OSError as e:
+                return self._send_json({"error": f"Không lưu được dấu kiểm tra: {e}"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+
         if path == "/api/book/delete":
             try:
                 length = int(self.headers.get("Content-Length", 0))
@@ -931,6 +980,7 @@ class StudioHandler(SimpleHTTPRequestHandler):
 
                 concepts.append({
                     "id": c_dir.name,
+                    **_clone_book_info(c_dir, concept_data),
                     "sku": _sku_of(c_dir),
                     "path": str(c_dir.relative_to(ROOT)).replace("\\", "/"),
                     "title": (concept_data.get("cover") or {}).get("title") or c_dir.name,
@@ -1133,14 +1183,10 @@ class StudioHandler(SimpleHTTPRequestHandler):
         projects = Path(cfg["projects_dir"])
         try:
             if op == "add" and body.get("links") is not None:
-                # mỗi link sản phẩm = một cuốn; kiểm tra hết trước rồi mới thêm (một link sai không thêm dở dang)
-                from ..clone.fetch import valid_url
-                links = [valid_url(u) for u in body.get("links") or [] if str(u).strip()]
-                if not links:
-                    raise ValueError("chưa có link sản phẩm nào")
-                for u in dict.fromkeys(links):              # bỏ link trùng, giữ thứ tự
-                    store.add_link(projects, u, group=str(body.get("group", "")), year=int(body.get("year") or 2027),
-                                   mockup_mode=str(body.get("mockup_mode") or "ai"))
+                from ..clone.fetch import single_link
+                url = single_link(body.get("links"))
+                store.add_link(projects, url, group=str(body.get("group", "")), year=int(body.get("year") or 2027),
+                               mockup_mode=str(body.get("mockup_mode") or "ai"))
             elif op == "add":
                 images = []
                 for im in body.get("images") or []:

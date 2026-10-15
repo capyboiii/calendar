@@ -10,6 +10,7 @@ from __future__ import annotations
 import io
 import re
 import zipfile
+import uuid
 from pathlib import Path
 
 from ..imagegen.driver import TempError
@@ -29,10 +30,21 @@ Tải TRỰC TIẾP từng ảnh gốc theo URL il_fullxfull: lấy link ảnh g
 
 def valid_url(url: str) -> str:
     """Link sản phẩm hợp lệ (http/https, có tên miền) -> link đã gọt; sai -> ValueError."""
-    u = (url or "").strip()
+    if not isinstance(url, str):
+        raise ValueError("link sản phẩm phải là chuỗi")
+    u = url.strip()
+    if len(re.findall(r"https?://", u, re.I)) > 1:
+        raise ValueError("Mỗi lần chỉ được dán 1 link sản phẩm.")
     if not re.fullmatch(r"https?://[^\s/]+\.[^\s/]+(/\S*)?", u, re.I):
         raise ValueError(f"link không hợp lệ: {u[:80] or '(trống)'}")
     return u
+
+
+def single_link(links) -> str:
+    """Validate the entire request before creating any queue item."""
+    if not isinstance(links, list) or len(links) != 1:
+        raise ValueError("Mỗi lần chỉ được dán 1 link sản phẩm.")
+    return valid_url(links[0])
 
 
 def fetch_prompt(url: str) -> str:
@@ -72,14 +84,19 @@ def images_from_zip(data: bytes) -> list[tuple[str, bytes]]:
 def save_refs(d: Path, images: list[tuple[str, bytes]]) -> int:
     """Ghi ảnh mẫu vào refs/ của mục (thay bộ cũ nếu có). Trả số ảnh đã lưu."""
     images = images[:MAX_LINK_REFS]
-    ref_dir = d / "refs"
-    ref_dir.mkdir(parents=True, exist_ok=True)
-    for old in ref_dir.glob("*"):
-        old.unlink()
+    if not images:
+        raise TempError("không có ảnh mẫu để lưu")
+    # Each generation is private until item.json atomically publishes its pointer.
+    ref_dir = d / ("refs_" + uuid.uuid4().hex)
+    ref_dir.mkdir()
+    from PIL import Image
     for i, (name, data) in enumerate(images, 1):
+        with Image.open(io.BytesIO(data)) as im:
+            im.verify()
         ext = Path(name).suffix.lower()
         (ref_dir / f"ref{i:02d}{ext if ext in store.IMG_EXT else '.png'}").write_bytes(data)
-    store.write(d, names=[n for n, _ in images])
+    store.write(d, refs_dir=ref_dir.name, refs_complete=True,
+                refs_count=len(images), names=[n for n, _ in images])
     return len(images)
 
 
@@ -91,21 +108,35 @@ def fetch_work(b, s, name: str) -> None:
     mode = session.ensure_work_mode(s.page)
     b.on_event(f"[{name}] gửi link sản phẩm cho ChatGPT (chế độ Work{'' if mode != 'failed' else ' - KHÔNG chuyển được'})"
                f" tách artwork: {url}")
-    reply, files = s.ask_files(fetch_prompt(url))
     images: list[tuple[str, bytes]] = []
-    seen: set[bytes] = set()
-    files = [f for f in files if f[1] and not (f[1] in seen or seen.add(f[1]))]   # cùng một file bấm tải 2 lần: 1
-    for fname, data in files:
-        if fname.lower().endswith(".zip") or data[:2] == b"PK":
-            try:
-                images += images_from_zip(data)
-            except zipfile.BadZipFile:
-                b.on_event(f"[{name}] file zip hỏng: {fname}")
-        else:
-            try:
-                images += store.to_images(fname, data)
-            except ValueError:
-                pass
+    prompt = fetch_prompt(url)
+    for attempt in range(2):
+        reply, files = s.ask_files(prompt)
+        seen: set[bytes] = set()
+        invalid_zip = False
+        files = [f for f in files if f[1] and not (f[1] in seen or seen.add(f[1]))]
+        for fname, data in files:
+            if fname.lower().endswith(".zip") or data[:2] == b"PK":
+                try:
+                    extracted = images_from_zip(data)
+                    images += extracted
+                    invalid_zip |= not extracted
+                except zipfile.BadZipFile:
+                    invalid_zip = True
+                    b.on_event(f"[{name}] file zip hỏng: {fname}")
+            else:
+                try:
+                    images += store.to_images(fname, data)
+                except ValueError:
+                    pass
+        if images or not invalid_zip or attempt:
+            break
+        b.on_event(f"[{name}] ZIP không dùng được - yêu cầu gửi lại file hợp lệ trong cùng chat")
+        prompt = ("File ZIP bạn vừa gửi không giải nén được hoặc không chứa artwork đọc được. "
+                  "Hãy dùng lại các artwork đã cắt từ link này, không vẽ lại và không đổi nội dung: " + url +
+                  "\nGửi từng artwork bằng file PNG/JPG tải được; nếu đóng ZIP thì đóng file hoàn chỉnh, "
+                  "mở lại ZIP và kiểm tra tất cả ảnh bên trong trước khi gửi link tải. "
+                  "Chỉ gửi khi file đã ghi xong; đừng gửi link tới file vẫn đang được tạo.")
     if not images:                                       # không gửi file: lấy ảnh ChatGPT hiện thẳng trong chat
         images = [(f"{i:02d}.png", data) for i, data in enumerate(s.harvest(), 1)]
     if not images:

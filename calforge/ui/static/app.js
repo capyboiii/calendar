@@ -551,6 +551,19 @@ function bookState(b) {
 
 const STATE_LABEL = { done: 'Xong', rejected: 'Bỏ · bị từ chối', error: 'Bị dở', pending: 'Chưa xong' };
 
+// Lỗi bất ngờ: nói đúng loại lỗi thay vì câu chung "mất mạng"; lỗi tạm thời đã được tự làm lại vài lần rồi
+function crashReason(raw) {
+  const r = String(raw || '').toLowerCase();
+  const tail = raw ? ` (${String(raw).slice(0, 90)})` : '';
+  if (/memoryerror|out of memory|winerror 1455/.test(r)) return 'Máy thiếu RAM. Đóng bớt chương trình hoặc chạy ít tài khoản hơn rồi bấm "Làm tiếp".';
+  if (/permissionerror|being used by another process|winerror 32|winerror 5/.test(r)) return 'File của cuốn đang bị chương trình khác mở (ảnh, PDF, diệt virus, đồng bộ Drive). Đóng chương trình đó rồi bấm "Làm tiếp".';
+  if (/targetclosed|browser has been closed|connection closed/.test(r)) return 'Chrome bị tắt ngang. Bấm "Làm tiếp".';
+  if (/net::err|connectionerror|connection reset|getaddrinfo|dns/.test(r)) return 'Mất mạng. Kiểm tra mạng rồi bấm "Làm tiếp".';
+  if (/timeout|timed out/.test(r)) return 'Thao tác quá lâu (máy hoặc mạng chậm). Bấm "Làm tiếp".';
+  if (/no space|errno 28|disk full/.test(r)) return 'Ổ đĩa đầy. Giải phóng dung lượng rồi bấm "Làm tiếp".';
+  return `Lỗi trong tool${tail}. Bấm "Làm tiếp"; nếu lặp lại, gửi chi tiết cho kỹ thuật.`;
+}
+
 function friendlyReason(st) {
   const stage = (st || {}).stage;
   const raw = (st || {}).reason || '';
@@ -559,7 +572,7 @@ function friendlyReason(st) {
   if (stage === 'render') return 'Lỗi khi dàn trang in. Bấm "Làm tiếp"; nếu vẫn lỗi, gửi phần chi tiết cho người kỹ thuật.';
   if (stage === 'printify') return 'Chưa đưa lên được Printify. Kiểm tra mạng rồi bấm "Làm tiếp".';
   if (stage === 'mockup') return 'Thiếu ảnh quảng cáo (mockup). Bấm "Làm lại ảnh quảng cáo" - không tốn lượt ChatGPT.';
-  if (stage === 'crash') return 'Gặp lỗi bất ngờ (mất mạng, Chrome bị tắt…). Bấm "Làm tiếp" để thử lại.';
+  if (stage === 'crash') return crashReason(raw);
   return raw || 'Chưa làm xong. Bấm "Làm tiếp".';
 }
 
@@ -659,6 +672,45 @@ function openDetail(c, keyword) {
   S.openBook = c.path; renderBook(c, keyword); $('bookModal').hidden = false;
 }
 
+function cloneBookControls(c) {
+  if (c.source !== 'clone') return null;
+  const box = document.createElement('div');
+  box.className = 'clone-book-controls';
+  box.addEventListener('click', (e) => e.stopPropagation());
+  if (c.source_url) {
+    const btn = button('Copy URL', 'btn-small btn-ghost', async () => {
+      try { await navigator.clipboard.writeText(c.source_url); toast('Đã chép URL sản phẩm gốc', 'success'); }
+      catch (_) { toast('Không chép được URL. Hãy cho phép trình duyệt truy cập clipboard.', 'error'); }
+    });
+    btn.title = c.source_url;
+    box.appendChild(btn);
+  }
+  const label = document.createElement('label');
+  label.className = 'clone-reviewed';
+  const check = document.createElement('input');
+  check.type = 'checkbox';
+  check.checked = !!c.reviewed;
+  check.dataset.reviewPath = c.path;
+  label.append(check, document.createTextNode('Đã kiểm tra'));
+  check.addEventListener('change', async () => {
+    const old = !!c.reviewed;
+    const desired = check.checked;
+    check.disabled = true;
+    try {
+      const result = await api('/api/book/review', {path: c.path, reviewed: desired});
+      c.reviewed = result.reviewed;
+      S.projects.forEach((p) => (p.concepts || []).forEach((book) => { if (book.path === c.path) book.reviewed = result.reviewed; }));
+      document.querySelectorAll('input[data-review-path]').forEach((input) => {
+        if (input.dataset.reviewPath === c.path) input.checked = result.reviewed;
+      });
+    } catch (e) { check.checked = old; toast(e.message, 'error'); }
+    finally { check.disabled = false; }
+  });
+  box.appendChild(label);
+  return box;
+}
+window.cloneBookControls = cloneBookControls;
+
 function bookRow(c, keyword, zone) {
   const st = c.status || {};
   const state = bookState(c);
@@ -685,6 +737,8 @@ function bookRow(c, keyword, zone) {
     </div>
     <div class="row-actions"></div>`;
   const acts = el.querySelector('.row-actions');
+  const cloneTools = cloneBookControls(c);
+  if (cloneTools) acts.appendChild(cloneTools);
   if (state === 'error') acts.appendChild(button('Làm tiếp', 'btn-small btn-accent', () => continueBook(c)));
   acts.appendChild(button('Chi tiết', 'btn-small', () => openDetail(c, keyword)));
   acts.appendChild(button('Mở thư mục', 'btn-small btn-ghost', () => openFolder(c.path)));
@@ -707,6 +761,8 @@ function doneTile(c, keyword) {
       </div>
     </div>
     <div class="tile-title">${esc(c.title)}</div>`;
+  const cloneTools = cloneBookControls(c);
+  if (cloneTools) el.appendChild(cloneTools);
   el.addEventListener('click', () => openDetail(c, keyword));
   el.querySelectorAll('.tile-tools button, .tile-detail-pill').forEach((b) => b.addEventListener('click', (e) => {
     e.stopPropagation();
@@ -878,6 +934,8 @@ function renderBook(c, keyword) {
 
   const a = $('bookActions');
   a.innerHTML = '';
+  const cloneTools = cloneBookControls(c);
+  if (cloneTools) a.appendChild(cloneTools);
   a.appendChild(button('Mở thư mục cuốn này', 'btn-primary', () => openFolder(c.path)));
   (c.pdfs || []).forEach((pdf) => {
     const link = document.createElement('a');

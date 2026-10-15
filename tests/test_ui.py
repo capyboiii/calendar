@@ -1,4 +1,6 @@
 import json
+import tempfile
+from unittest import mock
 import unittest
 import urllib.error
 import urllib.request
@@ -13,6 +15,19 @@ from calforge.ui.server import StudioHandler, ROOT
 class UiServerTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        from calforge import config, layout
+        from tests import fixtures
+        cls.tmp = tempfile.TemporaryDirectory(dir=ROOT / ".cache")
+        root = Path(cls.tmp.name)
+        book = root / "projects" / "Wall Calendar (Blank)" / "ui-test" / "WCB-TEST-UI"
+        layout.ensure_system(book)
+        concept = fixtures.concept()
+        concept["year"] = 2027
+        layout.concept_file(book).write_text(json.dumps(concept), encoding="utf-8")
+        cfg = config.load()
+        cfg.update(projects_dir=str(root / "projects"), profiles_dir=str(root / "profiles"))
+        cls.config_patch = mock.patch.object(config, "load", return_value=cfg)
+        cls.config_patch.start()
         cls.server = ThreadingHTTPServer(("127.0.0.1", 0), StudioHandler)
         cls.port = cls.server.server_port
         cls.base_url = f"http://127.0.0.1:{cls.port}"
@@ -23,6 +38,8 @@ class UiServerTest(unittest.TestCase):
     def tearDownClass(cls):
         cls.server.shutdown()
         cls.server.server_close()
+        cls.config_patch.stop()
+        cls.tmp.cleanup()
 
     def _get(self, path: str):
         req = urllib.request.Request(f"{self.base_url}{path}")

@@ -14,6 +14,7 @@ Quy tắc:
 from __future__ import annotations
 
 import ctypes
+import errno
 import json
 import math
 import os
@@ -113,7 +114,10 @@ def _pid_alive(pid: int) -> bool:
         return False
     if os.name == "nt":
         import ctypes
-        k = ctypes.windll.kernel32
+        from .browser import _kernel32
+        k = _kernel32()
+        k.GetExitCodeProcess.restype = ctypes.c_int
+        k.GetExitCodeProcess.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong)]
         h = k.OpenProcess(0x1000, False, pid)          # PROCESS_QUERY_LIMITED_INFORMATION
         if not h:
             return False
@@ -132,15 +136,18 @@ def _pid_alive(pid: int) -> bool:
 class AccountPool:
     def __init__(self, profiles_dir: Path, names: list[str], *, cap: int, launch_gap_s: float = 5.0,
                  locked=None, state_file: Path | None = None, clock=time.monotonic, sleep=time.sleep,
-                 free_ram=None, notify=None, leases: bool = False, later=None):
+                 free_ram=None, notify=None, leases: bool = False, later=None, global_cap: int | None = None):
         self.profiles_dir = Path(profiles_dir)
         self.names = list(names)
         self.cap = max(1, int(cap))
+        self.global_cap = max(1, int(global_cap)) if global_cap is not None else None
         self.launch_gap_s = float(launch_gap_s)
         self.state_file = state_file
         self._locked = locked or (lambda name: False)
         # Khoá giữa các TIẾN TRÌNH (batch theo ý tưởng và clone sản phẩm chạy song song, mỗi bên một bộ điều phối):
         # mượn tài khoản = tạo file khoá trong profile; tiến trình khác thấy khoá thì bỏ qua tài khoản đó.
+        self._lease_handles = {}
+        self._gate_busy = False
         self._leases = leases
         self._later = later or (lambda: set())            # tài khoản nên để dành cho tiến trình khác (lấy sau cùng)
         self._clock, self._sleep = clock, sleep
@@ -182,55 +189,157 @@ class AccountPool:
     def _lease_file(self, name: str) -> Path:
         return self.profiles_dir / name / LEASE
 
-    def _lease_owner(self, name: str) -> int:
+    def _lease_record(self, name: str) -> tuple[int, bool]:
         try:
-            return int((self._lease_file(name).read_text(encoding="utf-8") or "0").split()[0])
+            parts = self._lease_file(name).read_text(encoding="utf-8").split()
+            return int(parts[0]), len(parts) > 1 and parts[1] == "oslock-v1"
         except (OSError, ValueError, IndexError):
-            return 0
+            return 0, False
+
+    def _lease_owner(self, name: str) -> int:
+        return self._lease_record(name)[0]
 
     def _leased_elsewhere(self, name: str) -> bool:
         if not self._leases:
             return False
-        import os
-        owner = self._lease_owner(name)
-        return bool(owner and owner != os.getpid() and _pid_alive(owner))
+        owner, os_locked = self._lease_record(name)
+        # For v1 leases the OS lock, not advisory PID metadata, decides ownership.
+        if os_locked and name not in self._lease_handles:
+            return self._lease_locked(name)
+        return bool(not os_locked and owner and owner != os.getpid() and _pid_alive(owner))
+
+    def _lease_locked(self, name: str) -> bool:
+        try:
+            with open(str(self._lease_file(name)) + ".lock", "r+b") as handle:
+                if os.name == "nt":
+                    import msvcrt
+                    handle.seek(0)
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return False
+        except FileNotFoundError:
+            return False
+        except OSError:
+            return True
+
+    @contextmanager
+    def _process_gate(self, *, wait: bool = True, timeout_s: float = 30):
+        """Serialize cross-process allocation and Chrome launch bookkeeping."""
+        if not self._leases:
+            yield True
+            return
+        handle = open(self.profiles_dir / ".calforge_pool.lock", "a+b")
+        try:
+            deadline = time.monotonic() + timeout_s
+            while True:
+                try:
+                    if os.name == "nt":
+                        import msvcrt
+                        handle.seek(0)
+                        msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                    else:
+                        import fcntl
+                        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except OSError as e:
+                    if e.errno not in (errno.EACCES, errno.EAGAIN, errno.EDEADLK):
+                        raise
+                    if not wait:
+                        yield False
+                        return
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError(f"Chờ khóa điều phối tài khoản quá {timeout_s:g}s: "
+                                           f"{self.profiles_dir / '.calforge_pool.lock'}") from e
+                    time.sleep(.01)
+            yield True
+        finally:
+            handle.close()
+
+    def _global_used(self, limit: int | None = None) -> int:
+        alive = {}
+        # Own handles are already authoritative; do not reopen/probe them on every allocation.
+        count = len(self._lease_handles)
+        if limit is not None and count >= limit:
+            return count
+        with os.scandir(self.profiles_dir) as entries:
+            names = [d.name for d in entries if d.is_dir()]
+        for name in names:
+            if name in self._lease_handles:
+                continue
+            d = self.profiles_dir / name
+            if not d.is_dir():
+                continue
+            owner, os_locked = self._lease_record(d.name)
+            if os_locked or Path(str(self._lease_file(d.name)) + ".lock").exists():
+                if self._lease_locked(d.name):
+                    count += 1
+                    if limit is not None and count >= limit:
+                        return count
+                    continue
+                if os_locked:
+                    continue
+            if owner:
+                if owner not in alive:
+                    alive[owner] = _pid_alive(owner)
+                count += bool(alive[owner])
+                if limit is not None and count >= limit:
+                    return count
+        return count
 
     def _take_lease(self, name: str) -> bool:
-        """Tạo file khoá (O_EXCL: hai tiến trình cùng tạo thì chỉ một bên được). Khoá của tiến trình đã chết thì dọn."""
-        if not self._leases or not (self.profiles_dir / name).is_dir():
+        """Hold an OS lock throughout use; incomplete PID files cannot be stolen."""
+        if not self._leases:
             return True
-        import os
+        if name in self._lease_handles or not (self.profiles_dir / name).is_dir():
+            return False
         f = self._lease_file(name)
-        for _ in range(2):
-            try:
-                fd = os.open(str(f), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            except FileExistsError:
-                owner = self._lease_owner(name)
-                if owner == os.getpid():
-                    return True
-                if owner and _pid_alive(owner):
-                    return False
-                try:                                     # khoá mồ côi (tiến trình đã tắt): dọn rồi thử lại
-                    f.unlink()
-                except OSError:
-                    return False
-                continue
-            except OSError:
-                return True                              # không ghi được file khoá: không chặn việc chính
-            with os.fdopen(fd, "w", encoding="utf-8") as h:
-                h.write(str(os.getpid()))
+        handle = None
+        try:
+            handle = open(str(f) + ".lock", "a+b")
+            if os.name == "nt":
+                import msvcrt
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            owner, os_locked = self._lease_record(name)
+            if not os_locked and owner and owner != os.getpid() and _pid_alive(owner):
+                return False
+            f.write_text(f"{os.getpid()} oslock-v1", encoding="utf-8")
+            self._lease_handles[name] = handle
+            handle = None
             return True
-        return False
+        except OSError:
+            return False  # never launch unprotected when lock creation fails
+        finally:
+            if handle is not None:
+                handle.close()
 
     def _drop_lease(self, name: str) -> None:
         if not self._leases:
             return
-        import os
-        if self._lease_owner(name) == os.getpid():
-            try:
-                self._lease_file(name).unlink()
-            except OSError:
-                pass
+        handle = self._lease_handles.pop(name, None)
+        if handle is None:
+            return
+        try:
+            # We still hold the OS lock, so no other v1 owner can replace this record.
+            for attempt in range(5):
+                try:
+                    self._lease_file(name).unlink(missing_ok=True)
+                    break
+                except PermissionError:
+                    # A different pool may briefly be reading this advisory PID record on Windows.
+                    # Keep the OS lease until deletion is retried; never delete a successor's record.
+                    if attempt == 4:
+                        raise
+                    time.sleep(.005)
+        except OSError:
+            pass
+        finally:
+            handle.close()  # OS releases lock, including after process termination
 
     def _count(self, role: str) -> int:
         return sum(1 for r in self.use.values() if r == role)
@@ -356,6 +465,7 @@ class AccountPool:
     def acquire(self, role: str, *, prefer: list[str] | None = None, only: str | None = None) -> str | None:
         """Mượn một tài khoản cho vai `role`; không có thì None (không chờ)."""
         with self._cv:
+            self._gate_busy = False
             if len(self.use) >= self._limit():
                 return None
             if role == IMAGE and self._count(IMAGE) >= self._image_slots():
@@ -366,8 +476,18 @@ class AccountPool:
                 if later:
                     order = [n for n in order if n not in later] + [n for n in order if n in later]
             for name in order:
-                if name in self.names and self._free_for(name, role) and self._take_lease(name):
-                    self.use[name] = role
+                if name in self.names and self._free_for(name, role):
+                    with self._process_gate(wait=False) as acquired:
+                        if not acquired:
+                            self._gate_busy = True
+                            return None
+                        # Optional machine budget is separate from this pool's own concurrency.
+                        budget = self.global_cap or self._limit()
+                        if self._leases and self._global_used(limit=budget) >= budget:
+                            return None
+                        if not self._take_lease(name):
+                            continue
+                        self.use[name] = role
                     self._save()
                     return name
             return None
@@ -430,11 +550,27 @@ class AccountPool:
     @contextmanager
     def launch_gate(self):
         """Mở Chrome cách nhau ít nhất launch_gap_s giây trên toàn batch."""
-        with self._launch_lock:
-            wait = self._last_launch + self.launch_gap_s - self._clock()
+        with self._launch_lock, self._process_gate():
+            last = self._last_launch
+            now = self._clock()
+            if not math.isfinite(last) or last > now:
+                last = -1e9
+            stamp = self.profiles_dir / ".calforge_launch_at"
+            if self._leases:
+                try:
+                    saved = float(stamp.read_text(encoding="utf-8"))
+                    # monotonic timestamps persist only within a boot; copied profiles/reboots can
+                    # leave a timestamp days ahead and previously made every worker sleep behind it.
+                    if math.isfinite(saved) and saved <= now:
+                        last = max(last, saved)
+                except (OSError, ValueError):
+                    pass
+            wait = min(self.launch_gap_s, last + self.launch_gap_s - self._clock())
             if wait > 0:
                 self._sleep(wait)
             self._last_launch = self._clock()
+            if self._leases:
+                stamp.write_text(str(self._last_launch), encoding="utf-8")
         yield
 
     # ---------- ghi trạng thái cho UI ----------
@@ -454,7 +590,7 @@ class AccountPool:
         if not self.state_file:
             return
         try:
-            tmp = self.state_file.with_suffix(".tmp")
+            tmp = self.state_file.with_suffix(f".{os.getpid()}.tmp")
             tmp.write_text(json.dumps(self.snapshot(), ensure_ascii=False, indent=1), encoding="utf-8")
             tmp.replace(self.state_file)
         except OSError:

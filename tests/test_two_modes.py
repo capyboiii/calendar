@@ -7,6 +7,7 @@ Kiểm tra: không bao giờ hai bên dùng cùng một tài khoản cùng lúc;
 lấy tài khoản Free trước khi clone còn việc; cả hai bên đều làm xong hết việc dù gặp lỗi.
 """
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -24,6 +25,7 @@ from calforge.llm.pool import AccountPool
 
 from tests.test_clone import png
 from tests.test_clone_errors import FakeSession, World, complete
+from tests._process_output import drain_process, finish_process
 
 ROOT = Path(__file__).resolve().parents[1]
 PLUS = ["acc3", "acc4", "acc5", "acc6"]
@@ -75,6 +77,13 @@ class TwoModesTest(unittest.TestCase):
         def logged_open(name):
             with self.lock, self.log.open("a", encoding="utf-8") as f:
                 f.write(f"clone {name} start {time.time():.4f}\n")
+            barrier = self.root / 'overlap'
+            barrier.with_suffix('.clone-ready').touch()
+            deadline = time.monotonic() + 15
+            while not barrier.with_suffix('.idea-ready').exists():
+                if time.monotonic() > deadline:
+                    raise RuntimeError('idea process did not reach overlap barrier')
+                time.sleep(.01)
             try:
                 yield name
             finally:
@@ -91,15 +100,18 @@ class TwoModesTest(unittest.TestCase):
         world, accts = self.clone_accounts(faults)
         idea = subprocess.Popen([sys.executable, "-m", "tests._idea_proc", str(self.pdir), self.cfg["projects_dir"],
                                  str(self.log.with_name(self.log.name + ".idea")), str(idea_jobs), str(seed)], cwd=str(ROOT),
-                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                env={**os.environ, 'CALFORGE_TEST_OVERLAP_BARRIER': str(self.root / 'overlap'),
+                                     'CALFORGE_TEST_OVERLAP_PROFILE': FREE[0]})
         self.addCleanup(lambda: idea.poll() is None and idea.kill())
+        drain_process(idea)
         with mock.patch.object(run.session, "Session", lambda page, pdir: FakeSession(world, Path(pdir).name)), \
                 mock.patch("calforge.imagegen.generate.accept_grid_page", world.accept), \
                 mock.patch.object(run.Book, "finish", lambda self, plus: {"ok": True, "stage": "listing"}), \
                 mock.patch.object(run, "GRID_POLL_S", 0.05), mock.patch.object(run.driver, "NAV_REST_S", 0.2), \
                 mock.patch.object(run, "MAX_SESSIONS", 12):
             run.run_queue(self.cfg, on_event=lambda *_: None, accts=accts, plus=PLUS)
-        out, err = idea.communicate(timeout=240)
+        out, err = finish_process(idea, timeout=240)
         self.assertEqual(idea.returncode, 0, err[-800:])
         summary = json.loads(out.strip().splitlines()[-1])
         return ds, world, accts, summary

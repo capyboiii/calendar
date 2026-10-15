@@ -56,11 +56,17 @@
   }
 
   // ---------------------------------------------------------------- link sản phẩm
-  // Link sản phẩm: mỗi dòng một link = một cuốn (ChatGPT tự tách artwork của sản phẩm thành ảnh mẫu)
+  // One complete product URL per submission; never silently discard extra links.
+  function linkError() {
+    const value = ($('cloneLinks').value || '').trim();
+    if (!value) return 'Dán 1 link sản phẩm để bắt đầu.';
+    if ((value.match(/https?:\/\//gi) || []).length > 1) return 'Mỗi lần chỉ được dán 1 link sản phẩm.';
+    if (!/^https?:\/\/[^\s/]+\.[^\s/]+(\/\S*)?$/i.test(value)) return 'Link chưa hợp lệ. Mỗi lần chỉ dán 1 link sản phẩm.';
+    return '';
+  }
+
   function links() {
-    const seen = new Set();
-    return ($('cloneLinks').value || '').split(/[\s,]+/).map((s) => s.trim())
-      .filter((s) => /^https?:\/\/\S+\.\S+/i.test(s) && !seen.has(s) && seen.add(s));
+    return linkError() ? [] : [$('cloneLinks').value.trim()];
   }
 
   function running() {
@@ -73,10 +79,12 @@
     const n = links().length;
     b.disabled = !n || !(C.data && C.data.plus.length);
     b.textContent = running() ? 'Thêm vào hàng đợi' : 'Bắt đầu';
-    $('cloneStartHint').textContent = n ? `${n} cuốn` : '';
+    $('cloneStartHint').textContent = linkError() || '1 link · 1 cuốn';
   }
 
   async function start() {
+    const error = linkError();
+    if (error) { toast(error, 'error'); return; }
     const btn = $('btnCloneStart');
     btn.disabled = true;
     btn.textContent = 'Đang thêm…';
@@ -183,6 +191,14 @@
         </div>
         <div class="row-actions"></div>`;
       const acts = li.querySelector('.row-actions');
+      if (i.book && window.cloneBookControls) {
+        acts.appendChild(window.cloneBookControls({source: 'clone', source_url: i.source_url, reviewed: i.reviewed, path: i.book}));
+      } else if (i.source_url) {
+        acts.appendChild(button('Copy URL', 'btn-small btn-ghost', async () => {
+          try { await navigator.clipboard.writeText(i.source_url); toast('Đã chép URL sản phẩm gốc', 'success'); }
+          catch (_) { toast('Không chép được URL từ clipboard.', 'error'); }
+        }));
+      }
       if (i.status === 'failed' || i.status === 'rejected') {
         acts.appendChild(button('Làm tiếp', 'btn-small btn-accent', () => op('retry', i.id, true)));
       }

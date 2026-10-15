@@ -22,7 +22,7 @@ from ..core import kjv
 from ..imagegen.plan import IMG_EXT, job_done
 from . import fonts
 from .covers import back_cover, front_cover
-from .draw import pdf_to_pngs, write_pdf
+from .draw import pdf_to_pngs, text_scale, write_pdf
 from .grid_select import apply_grid_selection
 from .pages import PRESET_NAMES, grid_page, month_page, prepare_fullbleed, resolve_grid_preset
 from .palette import palette_from_image
@@ -127,6 +127,27 @@ def render_concept(concept_dir: Path, months: list[int] | None = None, placehold
     full = months == list(range(1, 13))
     pages, pngs, issues, warnings, art_notes = [], [], [], [], []
 
+    def fit(make, label: str):
+        """Tự sửa lỗi dàn trang: trang không qua kiểm tra trước in (chữ tràn ô, ra ngoài lề, chồng nhau, đè lỗ treo)
+        thì dựng lại với chữ nhỏ dần (92% -> 72%) tới khi qua; vẫn lỗi thì lấy bản ít lỗi nhất (preflight báo tiếp).
+        Lỗi lặp lại y hệt mỗi lần chạy nên "Làm tiếp" không tự hết - phải co chữ."""
+        page = make()
+        found = check_page(page, fmt)
+        if not found:
+            return page
+        best, best_n = page, len(found)
+        for k in (0.92, 0.85, 0.78, 0.72):
+            with text_scale(k):
+                again = make()
+            left = check_page(again, fmt)
+            if not left:
+                warnings.append(f"[{label}] tự thu nhỏ chữ còn {int(k * 100)}% cho vừa trang in "
+                                f"(trước đó: {found[0][:80]})")
+                return again
+            if len(left) < best_n:
+                best, best_n = again, len(left)
+        return best
+
     # Màu trang = ý đồ của concept + sắc độ thật của ảnh neo (xem render/palette.py)
     pal_note = "bảng màu của concept (chưa có ảnh neo)"
     anchor_src, _ = art_source(concept_dir, "anchor")
@@ -168,11 +189,11 @@ def render_concept(concept_dir: Path, months: list[int] | None = None, placehold
         cover_src, _ = art_source(concept_dir, "cover")
         if cover_src is not None:
             cover_art = fitted_art("cover")
-            pages.append(front_cover(fmt, concept, cover_art, work / "art", ai_typeset=True))
+            pages.append(fit(lambda: front_cover(fmt, concept, cover_art, work / "art", ai_typeset=True), "front_cover"))
         else:
             # Tương thích project cũ/manual render: chưa có job cover thì giữ cách ghép chữ cũ.
             cover_art = fitted_art("anchor")
-            pages.append(front_cover(fmt, concept, cover_art, work / "art"))
+            pages.append(fit(lambda: front_cover(fmt, concept, cover_art, work / "art"), "front_cover"))
             warnings.append("chưa có ảnh cover AI - đang dùng bìa legacy với title do code đặt")
         pngs.append((out / "front_cover.png", "front_cover"))
 
@@ -216,7 +237,7 @@ def render_concept(concept_dir: Path, months: list[int] | None = None, placehold
                 copies.append((g, out / f"{tag}_grid.png"))
                 pngs.append((out / f"{tag}_grid.png", "premade_grid"))
         elif ai_grid:
-            pages.append(grid_page(fmt, concept, mo, f"{tag} grid", verse, shared_grid))
+            pages.append(fit(lambda: grid_page(fmt, concept, mo, f"{tag} grid", verse, shared_grid), f"{tag} grid"))
             pngs.append((out / f"{tag}_grid.png", "grid"))
         elif mo in premade:
             copies.append((premade[mo], out / f"{tag}_grid.png"))
@@ -225,7 +246,7 @@ def render_concept(concept_dir: Path, months: list[int] | None = None, placehold
             (out / f"{tag}_grid.png").unlink(missing_ok=True)   # không để sót trang grid cũ
 
     if covers and full:
-        pages.append(back_cover(fmt, concept, month_arts, work / "art"))
+        pages.append(fit(lambda: back_cover(fmt, concept, month_arts, work / "art"), "back_cover"))
         pngs.append((out / "back_cover.png", "back_cover"))
 
     for page in pages:

@@ -15,7 +15,7 @@ from PIL import Image, ImageFilter, ImageStat
 
 from ..core import dates
 from . import fonts
-from .draw import Page, blend_hex, text_width, wrap
+from .draw import Page, blend_hex, fit_line, text_width, wrap
 from .grid_compositions import get_composition
 
 
@@ -328,8 +328,9 @@ def _grid_art_matched(fmt: dict, concept: dict, month_no: int, label: str,
         if names:
             holiday_lines = wrap(" · ".join(names).upper(), c["body_font"], 25, cw - 52)
             for i, line in enumerate(holiday_lines):
+                line, lsize = fit_line(line, c["body_font"], 25, cw - 56)                    # không tràn ô
                 t = p.text(left + 28, top + ch - 24 - (len(holiday_lines) - 1 - i) * 32,
-                           line, c["body_font"], 25, accent, role="holiday")
+                           line, c["body_font"], lsize, accent, role="holiday")
                 p.cell_texts.append((t, row, col))
     p.grid_box = (gx0, grid_top, gx1, grid_bottom)
     p.calendar = {"year": c["year"], "month": month_no, "week_start": dates.MON, "rows": rows}

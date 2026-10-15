@@ -196,10 +196,12 @@ class Session:
                 break
         return out
 
-    def ask_text(self, prompt: str, timeout_s: float = 300) -> str:
+    def ask_text(self, prompt: str, timeout_s: float = 300, *, allow_cloud_browser: bool = False,
+                 response_ready=None) -> str:
         """Hỏi chữ trong cùng cuộc trò chuyện (ChatGPT thấy các ảnh ở trên)."""
         from ..llm import chatgpt_web as cw
-        chat = cw._WebChat(self.page, timeout_s)
+        chat = cw._WebChat(self.page, timeout_s, allow_cloud_browser=allow_cloud_browser,
+                           response_ready=response_ready)
         chat.rate = getattr(self.page, "_calforge_rate", None)
         try:
             return chat.ask(prompt, "clone_meta")
@@ -211,7 +213,15 @@ class Session:
     def ask_files(self, prompt: str, timeout_s: float = 900) -> tuple[str, list[tuple[str, bytes]]]:
         """Hỏi và lấy FILE ChatGPT trả về (vd artworks.zip): chờ trả lời xong, bấm từng link tải trong câu trả lời
         cuối, nhận file qua sự kiện download của trình duyệt. Trả (chữ trả lời, [(tên file, nội dung)])."""
-        reply = self.ask_text(prompt, timeout_s)
+        def ready():
+            if int(self.page.evaluate(FILE_LINKS_JS)):
+                return True
+            # A text progress update is not an artwork result. Direct image replies remain supported.
+            state = _eval(self.page, STATE_JS)
+            return any(im.get('done') and min(im.get('w', 0), im.get('h', 0)) >= MIN_SIDE
+                       for im in state.get('imgs', []) + state.get('pageImgs', []))
+
+        reply = self.ask_text(prompt, timeout_s, allow_cloud_browser=True, response_ready=ready)
         page, files = self.page, []
         try:
             n = int(page.evaluate(FILE_LINKS_JS))
@@ -431,13 +441,14 @@ def ext_of(data: bytes) -> str:
 
 def save(data: bytes, out_no_ext: Path) -> Path:
     """Ghi ảnh (đuôi theo định dạng thật), ghi tạm rồi đổi tên để không bao giờ có file dở."""
-    for old in out_no_ext.parent.glob(out_no_ext.name + ".*"):
-        old.unlink(missing_ok=True)
     dst = out_no_ext.with_suffix(ext_of(data))
     dst.parent.mkdir(parents=True, exist_ok=True)
     tmp = dst.with_suffix(dst.suffix + ".part")
     tmp.write_bytes(data)
     tmp.replace(dst)
+    for old in out_no_ext.parent.glob(out_no_ext.name + ".*"):
+        if old != dst and old.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}:
+            old.unlink(missing_ok=True)
     return dst
 
 

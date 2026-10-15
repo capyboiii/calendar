@@ -29,9 +29,9 @@ CACHE = DIST / "_cache"
 PY_VER = "3.12.10"
 PY_EMBED = f"https://www.python.org/ftp/python/{PY_VER}/python-{PY_VER}-embed-amd64.zip"
 # chặn cứng các thư mục/file riêng tư dù .gitignore có sót
-NEVER = ("projects/", ".chrome-profiles/", ".venv/", "dist/", ".cache/", ".git/", ".claude/", ".idea/", "models/",
+NEVER = ("projects/", ".chrome-profiles/", ".ui-browser/", ".venv/", "dist/", ".cache/", ".git/", ".claude/", ".idea/", "models/",
          "__pycache__/", "logs/")
-NEVER_FILES = ("calforge.json", "data/account_emails.json")
+NEVER_FILES = ("calforge.json", "data/account_emails.json", ".ui-install-id", ".ui-install-id.tmp")
 EXTRA = ("data/kjv.json",)          # không nằm trong git (tải về) nhưng app cần, phạm vi công cộng
 
 
@@ -128,6 +128,8 @@ Type: filesandordirs; Name: "{app}\gpu"
 Type: filesandordirs; Name: "{app}\models"
 
 [Run]
+; mỗi lần cài lại có mã UI mới để tránh dùng lại tài nguyên frontend cũ
+Filename: "{app}\python\python.exe"; Parameters: "-m calforge.ui.cache"; WorkingDir: "{app}"; Flags: runhidden waituntilterminated
 ; máy có card NVIDIA: tải bộ làm nét ảnh Real-ESRGAN (~2.5 GB, chỉ lần đầu); máy khác thoát ngay
 Filename: "{app}\python\python.exe"; Parameters: "-m calforge.gpu_setup"; WorkingDir: "{app}"; StatusMsg: "Checking NVIDIA graphics card (image sharpening)..."; Flags: waituntilterminated skipifsilent
 Filename: "{app}\python\pythonw.exe"; Parameters: "-m calforge.app"; WorkingDir: "{app}"; Description: "Open CalForge Studio"; Flags: postinstall nowait skipifsilent

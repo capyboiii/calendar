@@ -18,7 +18,7 @@ from pathlib import Path
 from PIL import Image, ImageStat
 
 from ..core import dates
-from .draw import Page, blend_hex, text_width, wrap
+from .draw import Page, blend_hex, fit_line, text_width, wrap
 
 LAYOUTS = ["classic", "side_column", "open_lines", "big_numeral", "notes_column", "week_bands"]
 ROTATION = ["side_column", "open_lines", "big_numeral", "notes_column", "week_bands"]   # cuốn mới chia đều 5 bố cục
@@ -139,7 +139,8 @@ def _days(ctx, gx0, gy0, cw, ch, *, anchor="start", size=56, inset=26, other=Fal
                 lines = wrap(" · ".join(names).upper(), ctx["body_font"], hsize, cw - 2 * inset)
                 for i, line in enumerate(lines[:2]):
                     hy = top + ch - 22 - (min(len(lines), 2) - 1 - i) * 31
-                    h = p.text(x if anchor == "middle" else left + inset, hy, line, ctx["body_font"], hsize,
+                    line, lsize = fit_line(line, ctx["body_font"], hsize, cw - 2 * inset - 4)   # không tràn ô
+                    h = p.text(x if anchor == "middle" else left + inset, hy, line, ctx["body_font"], lsize,
                                ctx["accent"], anchor, role="holiday")
                     p.cell_texts.append((h, row, col))
 

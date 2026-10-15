@@ -372,7 +372,7 @@ def verify_session(udir: Path, wait_s: float = 30.0) -> str:
     """Mở ngầm profile (ngoài màn hình), vào ChatGPT, trả email nếu đã đăng nhập thật ('' nếu chưa)."""
     from playwright.sync_api import sync_playwright
 
-    from .browser import BASE_ARGS, HIDDEN_ARGS, hide_offscreen_from_taskbar
+    from .browser import BASE_ARGS, HIDDEN_ARGS, hide_offscreen_from_taskbar, register_hidden_context
     from .bulk_login import logged_in_email
     if is_profile_locked(udir):
         return ""
@@ -384,6 +384,7 @@ def verify_session(udir: Path, wait_s: float = 30.0) -> str:
                 user_data_dir=str(udir), headless=False, channel="chrome", no_viewport=True,
                 ignore_default_args=["--enable-automation", "--no-sandbox"], args=BASE_ARGS + HIDDEN_ARGS)
             try:
+                register_hidden_context(ctx, 'hidden')
                 hide_offscreen_from_taskbar()
                 page = ctx.pages[0] if ctx.pages else ctx.new_page()
                 page.goto("https://chatgpt.com/", timeout=60_000)

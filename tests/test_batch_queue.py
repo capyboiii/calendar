@@ -220,6 +220,18 @@ class OverlapNextTopicTest(unittest.TestCase):
         self.assertEqual(self.status(), [("a", "queued"), ("b", "queued"), ("c", "queued")])
         self.assertTrue(all(i["params"].get("resume") for i in self.q.snapshot()["items"][:2]))
 
+    def test_no_overlap_when_ram_is_low(self):
+        ram = {"gb": 3.0}
+        q = BatchQueue(self.tasks, Path(self.tmp.name) / "q3.json", args, lambda p: (2, 2),
+                       ideas_done=lambda p: True, free_ram=lambda: ram["gb"], overlap_min_gb=6)
+        q.add({"keyword": "a"})
+        q.add({"keyword": "b"})
+        q.tick()
+        self.assertEqual(self.tasks.started, ["a"])                  # thiếu RAM: không chồng
+        ram["gb"] = 9.0
+        q.tick()
+        self.assertEqual(self.tasks.started, ["a", "b"])             # đủ RAM: chồng
+
     def test_broken_state_falls_back_to_one_at_a_time(self):
         q = BatchQueue(self.tasks, Path(self.tmp.name) / "q2.json", args, lambda p: (2, 2),
                        ideas_done=lambda p: 1 / 0)

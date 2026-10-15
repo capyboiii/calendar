@@ -10,6 +10,7 @@ cấu hình tool này dùng tài khoản khác.
 from __future__ import annotations
 
 import json
+import re
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -19,7 +20,7 @@ SEL_PROMPT = ["#prompt-textarea", 'div.ProseMirror[contenteditable="true"]', "te
 SEL_SEND = ['button[data-testid="send-button"]', 'button[aria-label*="Send" i]']
 
 # Lượt trả lời của ChatGPT: thử nhiều mốc vì ChatGPT đã đổi DOM (xem ghi chú trong chatgpt_pool.py)
-TURNS_JS = """() => {
+TURNS_JS = r"""() => {
   const pick = (sel) => Array.from(document.querySelectorAll(sel));
   let a = pick('[data-message-author-role="assistant"]');
   if (!a.length) a = pick('article[data-turn="assistant"], [data-turn="assistant"]');
@@ -35,6 +36,9 @@ TURNS_JS = """() => {
                    'button[aria-label*="Stop" i]', '[data-testid="stop-generating"]']) {
     if (vis(document.querySelector(s))) { busy = true; break; }
   }
+  // Work can temporarily hide the composer Stop button between tool calls.
+  const work = pick('main .tabular-nums, main [role="status"], main button');
+  if (work.some(el => vis(el) && /^(Working for\b|Working[.…]|Đang (?:làm việc|xử lý)(?:\s|[.…]))/i.test((el.innerText || '').trim()))) busy = true;
   const last = a.length ? a[a.length - 1] : null;
   return {
     assistant: a.length, user: u.length, busy,
@@ -56,12 +60,59 @@ INSERT_JS = """(el, txt) => {
 
 class _WebChat:
     def __init__(self, page, timeout_s: float, settle_s: float = 4.0, no_response_grace_s: float = 30.0,
-                 no_start_grace_s: float = 90.0):
+                 no_start_grace_s: float = 90.0, allow_cloud_browser: bool = False, response_ready=None):
         self.page = page
         self.timeout_s = timeout_s
         self.settle_s = settle_s
         self.no_response_grace_s = no_response_grace_s
         self.no_start_grace_s = no_start_grace_s
+        self.allow_cloud_browser = allow_cloud_browser
+        self.response_ready = response_ready
+
+    def _continue_cloud_browser(self) -> bool:
+        """Only the link-fetch workflow authorizes this specific browser-use prompt.
+
+        Never click an unrelated Continue button (login, purchase, sharing, etc.).
+        """
+        if not self.allow_cloud_browser:
+            return False
+        topic = re.compile(r"cloud browser|trình duyệt (?:đám mây|trên đám mây)", re.I)
+        # The live Work UI uses an inline permission card, not role=dialog.
+        # Choose only the per-chat grant; never "Allow all relevant sites".
+        inline = self.page.get_by_role("button", name=re.compile(
+            r"^(?:Allow for this chat|Cho phép (?:cho |trong )?(?:cuộc )?(?:trò chuyện|chat) này)(?:\s*[⏎↵])?$", re.I))
+        for i in range(inline.count()):
+            button = inline.nth(i)
+            if not button.is_visible() or not button.is_enabled():
+                continue
+            card = button.evaluate("""el => {
+                for (let p=el.parentElement; p && p!==document.body; p=p.parentElement) {
+                    const t=p.innerText || '';
+                    if (/cloud browser|trình duyệt (?:đám mây|trên đám mây)/i.test(t))
+                        return t.length < 3000 ? t : '';
+                }
+                return '';
+            }""")
+            if card and topic.search(card):
+                button.click(timeout=4000)
+                return True
+        action = re.compile(r"^(?:Continue|Allow|Confirm|Use browser|Use cloud browser|"
+                            r"Tiếp tục|Cho phép|Xác nhận|Sử dụng trình duyệt)$", re.I)
+        dialogs = self.page.locator('[role="dialog"], [role="alertdialog"]').filter(has_text=topic)
+        for i in range(dialogs.count()):
+            dialog = dialogs.nth(i)
+            if not dialog.is_visible():
+                continue
+            # Do not authorize broader operations that happen to mention a browser.
+            text = dialog.inner_text()
+            if re.search(r"password|payment|purchase|publish|delete|mật khẩu|thanh toán|mua hàng|xoá|xóa", text, re.I):
+                raise SendFailed("Cloud browser đang chờ xác nhận thao tác khác; cần người dùng kiểm tra hộp thoại")
+            buttons = dialog.get_by_role("button", name=action)
+            if buttons.count() != 1 or not buttons.first.is_enabled():
+                raise SendFailed("Cloud browser đang chờ xác nhận; không xác định được nút tiếp tục an toàn")
+            buttons.first.click(timeout=4000)
+            return True
+        return False
 
     @staticmethod
     def _complete_json(codes: list[str]) -> bool:
@@ -156,15 +207,28 @@ class _WebChat:
         saw_reply_activity = False
         stopped_without_reply_since = None
         no_activity_since = started
+        browser_confirmations = 0
         while True:
+            if self.allow_cloud_browser:
+                if browser_confirmations >= 2:
+                    self.allow_cloud_browser = False  # bounded: never keep accepting a repeated prompt forever
+                elif self._continue_cloud_browser():
+                    browser_confirmations += 1
+                    print("   [chat] đã xác nhận dùng cloud browser để lấy ảnh từ link; tiếp tục chờ cùng chat", flush=True)
+                    stopped_without_reply_since = None
+                    no_activity_since = time.monotonic()
+                    self.page.wait_for_timeout(700)
+                    continue
             st = self._state()
             if st.get("busy") or st["assistant"] > before["assistant"]:
                 saw_reply_activity = True
             reply_changed = st["text"] != last_text
-            if st["assistant"] > before["assistant"] and (not st["busy"] or self._complete_json(st["codes"])):
+            if st["assistant"] > before["assistant"] and (not st["busy"] or
+                    (self.response_ready is None and self._complete_json(st["codes"]))):
                 if reply_changed:
                     last_text, stable_since = st["text"], time.monotonic()
-                elif time.monotonic() - stable_since >= self.settle_s and last_text.strip():
+                elif time.monotonic() - stable_since >= self.settle_s and last_text.strip() and (
+                        self.response_ready is None or self.response_ready()):
                     break
             if not (st["assistant"] > before["assistant"] and st["text"].strip()) and not st["busy"]:
                 limited = self._limited(started)
@@ -270,11 +334,12 @@ class _RotatingChat:
                 udir = self.backend.profiles_dir / name
                 self.profile = name                         # đã mượn: mở Chrome hỏng thì close() phải TRẢ lại
                 try:
-                    from .browser import launch_options
+                    from .browser import launch_options, register_hidden_context
                     with pool.launch_gate():
                         self.ctx = self.pw.chromium.launch_persistent_context(
                             user_data_dir=str(udir), channel="chrome", viewport={"width": 1400, "height": 950},
                             **launch_options(self.backend.headless))
+                    register_hidden_context(self.ctx, self.backend.headless)
                     page = self.ctx.pages[0] if self.ctx.pages else self.ctx.new_page()
                     if self.backend.headless in ("hidden", None):
                         from .browser import hide_offscreen_from_taskbar

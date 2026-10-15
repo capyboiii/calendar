@@ -126,7 +126,7 @@ _LOCK = threading.Lock()
 def _check_one(udir: Path) -> dict | None:
     from playwright.sync_api import sync_playwright
 
-    from .browser import BASE_ARGS, HIDDEN_ARGS, hide_offscreen_from_taskbar
+    from .browser import BASE_ARGS, HIDDEN_ARGS, hide_offscreen_from_taskbar, register_hidden_context
     with sync_playwright() as pw:
         from .browser import _start_keeper
         _start_keeper()                      # canh trước khi mở: Chrome ngầm không nháy lên thanh tác vụ
@@ -134,6 +134,7 @@ def _check_one(udir: Path) -> dict | None:
             user_data_dir=str(udir), headless=False, channel="chrome", no_viewport=True,
             ignore_default_args=["--enable-automation", "--no-sandbox"], args=BASE_ARGS + HIDDEN_ARGS)
         try:
+            register_hidden_context(ctx, 'hidden')
             hide_offscreen_from_taskbar()
             page = ctx.pages[0] if ctx.pages else ctx.new_page()
             page.goto("https://chatgpt.com/", wait_until="domcontentloaded", timeout=60_000)

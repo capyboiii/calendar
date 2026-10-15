@@ -7,6 +7,8 @@ Giữ danh sách ops thay vì vẽ thẳng để preflight kiểm tra được c
 from __future__ import annotations
 
 import os
+import threading
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
@@ -48,6 +50,23 @@ class Text:
         return left, self.y - top * self.size, left + w, self.y - bottom * self.size
 
 
+# Hệ số cỡ chữ khi dựng trang (1.0 = như thiết kế). build.py hạ xuống 0.92 / 0.85 / 0.78 / 0.72 để dựng lại một trang
+# không qua kiểm tra trước in (chữ tràn ô / ra ngoài lề / chồng nhau) - chỉ trang lỗi bị co, trang khác giữ nguyên.
+MIN_TEXT_PX = 6 / PX_TO_PT          # 6pt @300dpi = 25px: cỡ chữ nhỏ nhất preflight cho in (format.json min_text_pt)
+# Riêng từng luồng: hậu kỳ dựng 2 cuốn song song, cuốn này co chữ không ảnh hưởng cuốn kia.
+_SCALE = threading.local()
+
+
+@contextmanager
+def text_scale(k: float):
+    old = getattr(_SCALE, "k", 1.0)
+    _SCALE.k = k
+    try:
+        yield
+    finally:
+        _SCALE.k = old
+
+
 @dataclass
 class Page:
     width: int
@@ -76,6 +95,11 @@ class Page:
 
     def text(self, *args, **kwargs) -> Text:
         t = Text(*args, **kwargs)
+        k = getattr(_SCALE, "k", 1.0)
+        if k != 1.0:                                  # tự sửa lỗi dàn trang: dựng lại trang với chữ nhỏ hơn
+            new = max(t.size * k, min(t.size, MIN_TEXT_PX))   # không co xuống dưới cỡ nhỏ nhất in được (6pt)
+            t.tracking *= new / t.size if t.size else 1
+            t.size = new
         self.ops.append(("text", t))
         return t
 
@@ -113,6 +137,19 @@ def ink_extent(font: str, text: str) -> tuple[float, float]:
 
 def text_width(text: str, font: str, size: float, tracking: float = 0.0) -> float:
     return pdfmetrics.stringWidth(text, font, size) + tracking * max(0, len(text) - 1)
+
+
+def fit_line(text: str, font: str, size: float, max_w: float, min_size: float = 0) -> tuple[str, float]:
+    """Một dòng chữ phải nằm gọn trong max_w: co cỡ dần tới min_size (mặc định cỡ nhỏ nhất in được 6pt); vẫn dài thì
+    cắt bớt + "…". Dùng cho tên ngày lễ trong ô lịch (font rộng / tên lễ dài làm chữ tràn ô -> preflight chặn cả cuốn)."""
+    min_size = max(min_size, MIN_TEXT_PX)
+    while size > min_size and text_width(text, font, size) > max_w:
+        size -= 1
+    if text_width(text, font, size) > max_w:
+        while len(text) > 1 and text_width(text + "…", font, size) > max_w:
+            text = text[:-1].rstrip()
+        text += "…"
+    return text, size
 
 
 def wrap(text: str, font: str, size: float, max_w: float) -> list[str]:

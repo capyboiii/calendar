@@ -4,6 +4,7 @@ hết lượt. Mỗi lần mượn / trả tài khoản ghi vào file log chung:
 
 Chạy: python -m tests._idea_proc <thư mục profiles> <thư mục projects> <file log> <số ảnh> <seed>
 """
+import os
 import json
 import random
 import sys
@@ -29,7 +30,8 @@ def main():
     cap = int(sys.argv[6]) if len(sys.argv) > 6 else 6
     global SIDE
     SIDE = sys.argv[7] if len(sys.argv) > 7 else ""      # tên tiến trình trong log (2 batch ý tưởng chạy chồng)
-    pool = AccountPool(pdir, names, cap=cap, launch_gap_s=0, leases=True, later=poolmod._plus_saved_for_clone(cfg))
+    pool = AccountPool(pdir, names, cap=cap, launch_gap_s=0, leases=True, later=poolmod._plus_saved_for_clone(cfg),
+                       global_cap=int(os.environ["CALFORGE_TEST_GLOBAL_CAP"]) if os.environ.get("CALFORGE_TEST_GLOBAL_CAP") else None)
     pool.rest_s = 0.3
     rnd = random.Random(seed)
     lock = threading.Lock()
@@ -42,6 +44,15 @@ def main():
     def fake_open(profile):
         write(f"idea{SIDE} {profile} start {time.time():.4f}")
         try:
+            barrier = os.environ.get('CALFORGE_TEST_OVERLAP_BARRIER')
+            if barrier and profile == os.environ.get('CALFORGE_TEST_OVERLAP_PROFILE'):
+                marker = Path(barrier)
+                marker.with_suffix('.idea-ready').touch()
+                deadline = time.monotonic() + 15
+                while not marker.with_suffix('.clone-ready').exists():
+                    if time.monotonic() > deadline:
+                        raise RuntimeError('clone did not reach overlap barrier')
+                    time.sleep(.01)
             yield object()
         finally:
             write(f"idea{SIDE} {profile} end {time.time():.4f}")

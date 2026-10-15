@@ -23,6 +23,7 @@ DEFAULTS = {
     "idea_lookahead": None,      # nghĩ ý trước tối đa bấy nhiêu cuốn chưa kịp vẽ (tự tính: = book_workers)
     "p2_parallel": None,         # số concept (P2) viết song song mỗi lượt (tự tính: 3..5)
     "finish_workers": None,      # số cuốn làm hậu kỳ (dàn trang, mockup) cùng lúc (tự tính: 1..2)
+    "account_busy_max_wait_s": 600,  # clone: acc bị chiếm / hết chỗ Chrome quá lâu thì để cuốn chạy tiếp sau
     "quota_wait_s": 1800,        # cả 5 tài khoản hết lượt: tạm dừng batch, cứ bấy nhiêu giây thử lại một lần
     "quota_max_wait_h": 24,      # chờ tối đa bấy nhiêu giờ cho một chỗ kẹt rồi mới coi là hỏng   # vòng vét cuối batch: chờ tài khoản ChatGPT hồi lượt rồi làm lại cuốn dở
     "max_repairs": 2,

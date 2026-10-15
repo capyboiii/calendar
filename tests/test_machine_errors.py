@@ -76,7 +76,9 @@ class AppStartTest(unittest.TestCase):
         with mock.patch.object(app, "_chrome", lambda: Path("C:/chrome.exe")), \
                 mock.patch.object(app.subprocess, "Popen") as popen:
             app._open_window("http://127.0.0.1:8080")
-        self.assertIn("--app=http://127.0.0.1:8080", popen.call_args[0][0])
+        args=popen.call_args[0][0]
+        self.assertTrue(any(a.startswith("--app=http://127.0.0.1:8080?ui_install=") for a in args))
+        self.assertIn(f"--user-data-dir={app.ROOT / '.ui-browser'}",args)
         with mock.patch.object(app, "_chrome", lambda: None), mock.patch.object(app.webbrowser, "open") as wb:
             app._open_window("http://127.0.0.1:8080")
         wb.assert_called_once()

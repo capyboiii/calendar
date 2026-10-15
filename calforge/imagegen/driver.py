@@ -499,7 +499,7 @@ def run_jobs(jobs: list[GenJob], profiles_dir: Path, profiles: list[str], *, hea
     @contextmanager
     def default_open(profile: str):
         from playwright.sync_api import sync_playwright
-        from ..llm.browser import launch_options
+        from ..llm.browser import launch_options, register_hidden_context
         udir = profiles_dir / profile
         with sync_playwright() as pw:
             with pool.launch_gate():
@@ -507,6 +507,7 @@ def run_jobs(jobs: list[GenJob], profiles_dir: Path, profiles: list[str], *, hea
                     str(udir), channel="chrome", viewport={"width": 1400, "height": 950},
                     **launch_options(headless))
             try:
+                register_hidden_context(ctx, headless)
                 page = ctx.pages[0] if ctx.pages else ctx.new_page()
                 if headless in ("hidden", None):
                     from ..llm.browser import hide_offscreen_from_taskbar

@@ -1,34 +1,30 @@
 const fs = require('fs');
 const vm = require('vm');
 const assert = require('assert');
+// Clone now accepts product links. Validate pasted input without discarding extras.
 const source = fs.readFileSync('calforge/ui/static/clone.js', 'utf8');
-const handlers = {};
-const state = {refs: []};
-let errors = [];
-const context = vm.createContext({
-  Promise, Array, MAX_REFS: 10, C: state,
-  loadImage: async f => { await Promise.resolve(); return {name: f.name}; },
-  renderRefs: () => {}, toast: msg => errors.push(msg),
-  $: () => ({addEventListener: (name, fn) => handlers[name] = fn, focus: () => {}}),
-});
-vm.runInContext(source.slice(source.indexOf('let fileQueue'), source.indexOf('function renderRefs')), context);
-vm.runInContext(source.slice(source.indexOf("const drop = $('cloneDrop');"), source.indexOf("drop.addEventListener('dragover'")), context);
-(async () => {
-  let prevented = 0;
-  const image = {name: 'clipboard.png', type: 'image/png'};
-  const event = {clipboardData: {items: [{kind: 'file', type: 'image/png', getAsFile: () => image}], files: [image]}, preventDefault: () => prevented++};
-  handlers.paste(event);
-  await vm.runInContext('fileQueue', context);
-  assert.equal(state.refs.length, 1); // items + files must not duplicate the same image
-  assert.equal(prevented, 1);
-  for (let i = 0; i < 15; i++) handlers.paste(event);
-  await vm.runInContext('fileQueue', context);
-  assert.equal(state.refs.length, 10);
-  handlers.paste({clipboardData: {items: [], files: []}, preventDefault: () => {throw Error('intercepted text');}});
-  state.refs.length = 0;
-  handlers.paste({clipboardData: {files: [image]}, preventDefault: () => {}});
-  await vm.runInContext('fileQueue', context);
-  assert.equal(state.refs.length, 1);
-  assert(errors.length > 0);
-  console.log('PASS: paste image, no duplicate, rapid paste limit, text handling, files fallback');
-})().catch(e => {console.error(e); process.exitCode = 1;});
+const input = {value: ''};
+const context = vm.createContext({$: () => input});
+const start = source.indexOf('  function linkError()');
+const end = source.indexOf('  function running()');
+assert(start >= 0 && end > start, 'clone link validators missing');
+vm.runInContext(source.slice(start, end), context);
+for (const value of [
+  '', 'not a URL', 'javascript:alert(1)',
+  'https://example.com/a\nhttps://example.com/b',
+  'https://example.com/a,https://example.com/b',
+  'https://example.com/a https://example.com/b',
+  'https://example.com/a\nhttps://example.com/a',
+  'https://example.com/a trailing text',
+]) {
+  input.value = value;
+  assert(vm.runInContext('linkError()', context), value);
+  assert.equal(vm.runInContext('links().length', context), 0, value);
+}
+for (const value of ['https://example.com/a', ' \nhttps://example.com/a?tag=one,two \n']) {
+  input.value = value;
+  assert.equal(vm.runInContext('linkError()', context), '');
+  assert.equal(vm.runInContext('links().length', context), 1);
+  assert.equal(vm.runInContext('links()[0]', context), value.trim());
+}
+console.log('PASS: clipboard product links; exactly one URL; no silent truncation');

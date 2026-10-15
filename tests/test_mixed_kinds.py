@@ -2,6 +2,7 @@
 batch "theo ý tưởng" ở tiến trình khác. Lỗi gài ngẫu nhiên: hết lượt giữa chừng, tab đứng treo, không thấy ô chat /
 nút gửi, lỗi server, lỗi mạng (Playwright hết giờ, đính ảnh lỗi), tài khoản bị đăng xuất / bị khoá, ChatGPT từ chối,
 tiến trình bị tắt ngang. Code điều phối / xử lý lỗi là code thật; chỉ Chrome / ChatGPT là giả."""
+import os
 import json
 import random
 import subprocess
@@ -21,6 +22,7 @@ from calforge.llm.pool import AccountPool
 
 from tests.test_clone import META, png
 from tests.test_clone_errors import FakeSession, Killed, World, complete, partial, setup
+from tests._process_output import drain_process, finish_process
 
 PLUS20 = [f"acc{i}" for i in range(1, 21)]
 
@@ -177,7 +179,7 @@ class TwoProcessesMixedTest(unittest.TestCase):
             self.cfg["projects_dir"], [(f"r{i}.png", png((i * 40, 30, 60))) for i in range(3)], group="hai")["id"]
             for _ in range(self.BOOKS)]
         world = World(random_faults(5, dead={"plus05": "open"}))
-        pool = AccountPool(self.pdir, self.FREE + self.PLUS, cap=self.CLONE_CAP, launch_gap_s=0, leases=True)
+        pool = AccountPool(self.pdir, self.FREE + self.PLUS, cap=self.CLONE_CAP, launch_gap_s=0, leases=True, global_cap=len(self.FREE + self.PLUS))
         pool.rest_s = 0.3
 
         @contextmanager
@@ -193,15 +195,17 @@ class TwoProcessesMixedTest(unittest.TestCase):
         idea = subprocess.Popen([sys.executable, "-m", "tests._idea_proc", str(self.pdir), self.cfg["projects_dir"],
                                  str(self.log.with_name(self.log.name + ".idea")), str(self.IDEA_JOBS), "9",
                                  str(self.IDEA_CAP)], cwd=str(Path(__file__).resolve().parents[1]),
-                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                env={**os.environ, "CALFORGE_TEST_GLOBAL_CAP": str(len(self.FREE + self.PLUS))})
         self.addCleanup(lambda: idea.poll() is None and idea.kill())
+        drain_process(idea)
         with mock.patch.object(run.session, "Session", lambda page, pdir: MixedSession(world, Path(pdir).name)), \
                 mock.patch("calforge.imagegen.generate.accept_grid_page", world.accept), \
                 mock.patch.object(run.Book, "finish", lambda self, plus: {"ok": True, "stage": "listing"}), \
                 mock.patch.object(run, "GRID_POLL_S", 0.05), mock.patch.object(run.driver, "NAV_REST_S", 0.2), \
                 mock.patch.object(run, "MAX_SESSIONS", 12):
             run.run_queue(self.cfg, on_event=lambda *_: None, accts=accts, plus=self.PLUS)
-        out, err = idea.communicate(timeout=300)
+        out, err = finish_process(idea, timeout=300)
         self.assertEqual(idea.returncode, 0, err[-800:])
         self.assertEqual(json.loads(out.strip().splitlines()[-1]), {"ok": self.IDEA_JOBS, "total": self.IDEA_JOBS})
         for d in normals:
@@ -301,6 +305,7 @@ class CloneLinksPlusTwoIdeaBatchesTest(unittest.TestCase):
                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) for k in (1, 2)]
         for p in idea:
             self.addCleanup(lambda p=p: p.poll() is None and p.kill())
+            drain_process(p)
         with mock.patch.object(run.session, "Session", lambda page, pdir: MixedSession(world, Path(pdir).name)), \
                 mock.patch.object(MixedSession, "ask_files", ask_files, create=True), \
                 mock.patch.object(MixedSession, "harvest", lambda s: [], create=True), \
@@ -310,7 +315,7 @@ class CloneLinksPlusTwoIdeaBatchesTest(unittest.TestCase):
                 mock.patch.object(run, "MAX_SESSIONS", 12):
             run.run_queue(self.cfg, on_event=lambda *_: None, accts=accts, plus=self.PLUS)
         for p in idea:
-            out, err = p.communicate(timeout=300)
+            out, err = finish_process(p, timeout=300)
             self.assertEqual(p.returncode, 0, err[-800:])
             self.assertEqual(json.loads(out.strip().splitlines()[-1]), {"ok": 100, "total": 100})
         for d in links:

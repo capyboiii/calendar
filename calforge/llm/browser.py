@@ -8,6 +8,9 @@ Chế độ (config "headless"):
 """
 from __future__ import annotations
 
+import threading
+from functools import lru_cache
+
 BASE_ARGS = ["--disable-blink-features=AutomationControlled",
              "--hide-crash-restore-bubble",            # không hiện bong bóng "Restore pages?" sau lần tắt ngang
              # cửa sổ bị che/ở ngoài màn hình vẫn vẽ và chạy JS bình thường
@@ -24,16 +27,125 @@ def launch_options(mode) -> dict:
     return {"headless": mode is True, "args": BASE_ARGS + (HIDDEN_ARGS if hidden else [])}
 
 
+@lru_cache(maxsize=1)
 def _user32():
     import ctypes
     from ctypes import wintypes
 
     u = ctypes.WinDLL("user32", use_last_error=True)
-    u.GetWindowLongPtrW.restype = ctypes.c_ssize_t
-    u.GetWindowLongPtrW.argtypes = [wintypes.HWND, ctypes.c_int]
-    u.SetWindowLongPtrW.restype = ctypes.c_ssize_t
-    u.SetWindowLongPtrW.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_ssize_t]
+    # ctypes defaults to 32-bit integers; every HWND/HANDLE must be declared
+    # explicitly or 64-bit Windows can truncate it and silently skip the window.
+    signatures = {
+        "GetWindowLongPtrW": (ctypes.c_ssize_t, [wintypes.HWND, ctypes.c_int]),
+        "SetWindowLongPtrW": (ctypes.c_ssize_t, [wintypes.HWND, ctypes.c_int, ctypes.c_ssize_t]),
+        "GetClassNameW": (ctypes.c_int, [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]),
+        "IsWindowVisible": (wintypes.BOOL, [wintypes.HWND]),
+        "IsIconic": (wintypes.BOOL, [wintypes.HWND]),
+        "GetWindowRect": (wintypes.BOOL, [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]),
+        "GetWindowPlacement": (wintypes.BOOL, [wintypes.HWND, ctypes.c_void_p]),
+        "GetWindowThreadProcessId": (wintypes.DWORD, [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]),
+        "ShowWindow": (wintypes.BOOL, [wintypes.HWND, ctypes.c_int]),
+        "SetWindowPos": (wintypes.BOOL, [wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int,
+                                        ctypes.c_int, ctypes.c_int, wintypes.UINT]),
+        "GetWindow": (wintypes.HWND, [wintypes.HWND, wintypes.UINT]),
+        "GetWindowTextW": (ctypes.c_int, [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]),
+        "EnumWindows": (wintypes.BOOL, [ctypes.c_void_p, wintypes.LPARAM]),
+    }
+    # 32-bit Windows exports only Get/SetWindowLongW.
+    for name, (result, args) in signatures.items():
+        if not hasattr(u, name) and "LongPtr" in name:
+            setattr(u, name, getattr(u, name.replace("LongPtr", "Long")))
+        fn = getattr(u, name)
+        fn.restype, fn.argtypes = result, args
     return u
+
+
+@lru_cache(maxsize=1)
+def _kernel32():
+    import ctypes
+    from ctypes import wintypes
+    k = ctypes.WinDLL("kernel32", use_last_error=True)
+    k.OpenProcess.restype = wintypes.HANDLE
+    k.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    k.QueryFullProcessImageNameW.restype = wintypes.BOOL
+    k.QueryFullProcessImageNameW.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR,
+                                            ctypes.POINTER(wintypes.DWORD)]
+    k.CloseHandle.restype = wintypes.BOOL
+    k.CloseHandle.argtypes = [wintypes.HANDLE]
+    k.GetProcessTimes.restype = wintypes.BOOL
+    k.GetProcessTimes.argtypes = [wintypes.HANDLE] + [ctypes.POINTER(wintypes.FILETIME)] * 4
+    return k
+
+
+_HIDDEN_PIDS = {}
+_HIDDEN_PIDS_LOCK = threading.Lock()
+
+
+def _process_stamp(pid):
+    """Process creation time prevents an old registration from matching a reused PID."""
+    import ctypes
+    from ctypes import wintypes
+    k = _kernel32()
+    handle = k.OpenProcess(0x1000, False, pid)
+    if not handle:
+        return None
+    try:
+        times = [wintypes.FILETIME() for _ in range(4)]
+        if k.GetProcessTimes(handle, *(ctypes.byref(t) for t in times)):
+            return (times[0].dwHighDateTime << 32) | times[0].dwLowDateTime
+    finally:
+        k.CloseHandle(handle)
+    return None
+
+
+def _registered_window(u, hwnd):
+    import ctypes
+    from ctypes import wintypes
+    pid = wintypes.DWORD()
+    u.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+    with _HIDDEN_PIDS_LOCK:
+        record = _HIDDEN_PIDS.get(pid.value)
+    return bool(record and _process_stamp(pid.value) == record['stamp'])
+
+
+def register_hidden_context(ctx, mode) -> bool:
+    """Register the exact browser PID for each hidden persistent context, including later books."""
+    import os
+    if os.name != 'nt' or mode not in ('hidden', None):
+        return False
+    cdp = None
+    try:
+        cdp = ctx.browser.new_browser_cdp_session()
+        processes = cdp.send('SystemInfo.getProcessInfo')['processInfo']
+        pid = int(next(p['id'] for p in processes if p['type'] == 'browser'))
+        stamp = _process_stamp(pid)
+        if stamp is None:
+            raise RuntimeError('không đọc được thời điểm tạo tiến trình Chrome')
+        with _HIDDEN_PIDS_LOCK:
+            record = _HIDDEN_PIDS.setdefault(pid, {'stamp': stamp, 'refs': 0})
+            if record['stamp'] != stamp:
+                record = _HIDDEN_PIDS[pid] = {'stamp': stamp, 'refs': 0}
+            record['refs'] += 1
+        def closed(*_):
+            with _HIDDEN_PIDS_LOCK:
+                record = _HIDDEN_PIDS.get(pid)
+                if record and record['stamp'] == stamp:
+                    record['refs'] -= 1
+                    if record['refs'] <= 0:
+                        _HIDDEN_PIDS.pop(pid, None)
+        ctx.on('close', closed)
+        _start_keeper()
+        hide_offscreen_from_taskbar()
+        return True
+    except Exception as e:
+        print(f'[Chrome ẩn] Không đăng ký được PID, dùng chế độ theo tọa độ: {type(e).__name__}: {e}', flush=True)
+        return False
+    finally:
+        if cdp is not None:
+            try:
+                cdp.detach()
+            except Exception:
+                pass
 
 
 GWL_EXSTYLE, WS_EX_TOOLWINDOW, WS_EX_APPWINDOW = -20, 0x00000080, 0x00040000
@@ -41,6 +153,23 @@ GWL_EXSTYLE, WS_EX_TOOLWINDOW, WS_EX_APPWINDOW = -20, 0x00000080, 0x00040000
 # 175% -> -18724...). Ngưỡng -15000 phủ mọi tỉ lệ tới 200% mà vẫn xa hẳn mọi màn hình thật.
 OFFSCREEN_X = -15000
 SW_HIDE, SW_SHOWNOACTIVATE = 0, 4
+
+
+def _enum_windows(u, callback):
+    """Read physical coordinates even on machines with 250–400% display scaling."""
+    import ctypes
+    from ctypes import wintypes
+    dpi = getattr(u, "SetThreadDpiAwarenessContext", None)
+    previous = None
+    if dpi is not None:
+        dpi.restype = wintypes.HANDLE
+        dpi.argtypes = [wintypes.HANDLE]
+        previous = dpi(ctypes.c_void_p(-4))  # PER_MONITOR_AWARE_V2, this thread only
+    try:
+        return u.EnumWindows(callback, 0)
+    finally:
+        if previous:
+            dpi(previous)
 
 
 def _window_info(u, hwnd):
@@ -58,7 +187,7 @@ def _window_info(u, hwnd):
     normal_left = wp.rcNormalPosition.left if u.GetWindowPlacement(hwnd, ctypes.byref(wp)) else 0
     pid = wintypes.DWORD()
     u.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-    k = ctypes.WinDLL("kernel32", use_last_error=True)
+    k = _kernel32()
     exe = ""
     hp = k.OpenProcess(0x1000, False, pid.value)              # PROCESS_QUERY_LIMITED_INFORMATION
     if hp:
@@ -83,10 +212,9 @@ def _is_our_hidden_chrome(u, hwnd) -> bool:
 def hide_offscreen_from_taskbar() -> int:
     """Bỏ biểu tượng thanh tác vụ của các cửa sổ Chrome do tool mở ngầm (chế độ "hidden" ở trên).
 
-    Đánh dấu cửa sổ là "tool window" (loại cửa sổ Windows không đưa lên thanh tác vụ). Chỉ đụng cửa sổ chrome.exe
-    đang mở (không thu nhỏ) mà vị trí thường nằm ngoài màn hình (<= OFFSCREEN_X), tức Chrome do tool mở ngầm - cửa sổ
-    người dùng (kể cả đang thu nhỏ, kể cả app khác dùng nền Chrome như Claude) không bị ảnh hưởng. Trả về số cửa sổ
-    đã ẩn."""
+    Đánh dấu cửa sổ là "tool window" và giữ ngoài màn hình. Ưu tiên PID được đăng ký từ phiên Playwright ngầm;
+    cửa sổ mới/khôi phục vị trí vẫn bị nhận diện. Các đường gọi cũ chưa đăng ký PID dùng nhận diện theo tọa độ.
+    Trả số cửa sổ đã sửa."""
     import os
     if os.name != "nt":
         return 0
@@ -102,16 +230,22 @@ def hide_offscreen_from_taskbar() -> int:
         u.GetClassNameW(hwnd, cls, 64)
         if cls.value.startswith("Chrome_WidgetWin") and u.IsWindowVisible(hwnd):
             r = wintypes.RECT()
-            if u.GetWindowRect(hwnd, ctypes.byref(r)) and r.left <= OFFSCREEN_X:
+            registered = _registered_window(u, hwnd)
+            if u.GetWindowRect(hwnd, ctypes.byref(r)) and (registered or r.left <= OFFSCREEN_X):
                 ex = u.GetWindowLongPtrW(hwnd, GWL_EXSTYLE)
-                if not ex & WS_EX_TOOLWINDOW and _is_our_hidden_chrome(u, hwnd):
-                    found.append((hwnd, ex))
+                needs_style = not ex & WS_EX_TOOLWINDOW or ex & WS_EX_APPWINDOW
+                if (registered and (needs_style or r.left > OFFSCREEN_X or u.IsIconic(hwnd))) or (
+                        needs_style and _is_our_hidden_chrome(u, hwnd)):
+                    found.append((hwnd, ex, registered))
         return True
 
-    u.EnumWindows(each, 0)
-    for hwnd, ex in found:
+    _enum_windows(u, each)
+    for hwnd, ex, registered in found:
         u.ShowWindow(hwnd, SW_HIDE)                     # đổi kiểu phải ẩn/hiện lại thì thanh tác vụ mới cập nhật
         u.SetWindowLongPtrW(hwnd, GWL_EXSTYLE, (ex | WS_EX_TOOLWINDOW) & ~WS_EX_APPWINDOW)
+        if registered:
+            # Chrome may restore saved placement or open a popup on another display.
+            u.SetWindowPos(hwnd, None, -32000, -32000, 0, 0, 0x0001 | 0x0004 | 0x0010 | 0x0020)
         u.ShowWindow(hwnd, SW_SHOWNOACTIVATE)
     _start_keeper()
     return len(found)
@@ -152,11 +286,12 @@ def restore_user_windows() -> list[str]:
         fixed.append(title.value)
         return True
 
-    u.EnumWindows(each, 0)
+    _enum_windows(u, each)
     return fixed
 
 
 _KEEPER = {"on": False}
+_KEEPER_LOCK = threading.Lock()
 
 
 def _start_keeper(every_s: float = 0.2) -> None:
@@ -166,21 +301,28 @@ def _start_keeper(every_s: float = 0.2) -> None:
     vụ rồi mới tắt (người dùng báo 14/10/2026)."""
     import threading
     import time
-    if _KEEPER["on"]:
+    import os
+    if os.name != "nt":
         return
-    _KEEPER["on"] = True
+    with _KEEPER_LOCK:
+        if _KEEPER["on"]:
+            return
+        _KEEPER["on"] = True
     try:                                                # sửa luôn cửa sổ người dùng bị lỗi cũ ẩn nhầm (nếu còn)
         restore_user_windows()
     except Exception:  # noqa: BLE001
         pass
 
     def loop():
+        last_error = -1e9
         while True:
             time.sleep(every_s)
             try:
                 hide_offscreen_from_taskbar()
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as e:  # noqa: BLE001
+                if time.monotonic() - last_error >= 60:
+                    print(f"[Chrome ẩn] Không ẩn được taskbar: {type(e).__name__}: {e}", flush=True)
+                    last_error = time.monotonic()
     threading.Thread(target=loop, daemon=True, name="an-chrome").start()
 
 
@@ -206,7 +348,7 @@ def show_in_taskbar(left_marker: int) -> bool:
             hit.append(hwnd)
         return True
 
-    u.EnumWindows(each, 0)
+    _enum_windows(u, each)
     for hwnd in hit:
         ex = u.GetWindowLongPtrW(hwnd, GWL_EXSTYLE)
         u.ShowWindow(hwnd, SW_HIDE)

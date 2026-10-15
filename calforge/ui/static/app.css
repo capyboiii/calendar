@@ -642,3 +642,7 @@ input[type="text"], input[type="number"], select {
 .tile-detail-pill { position: absolute; top: 8px; right: 8px; padding: 2px 10px; border: 0; border-radius: 999px;
   background: rgba(20, 20, 20, .68); color: #fff; font: inherit; font-size: .75rem; font-weight: 600; cursor: pointer; }
 .tile-detail-pill:hover, .tile-detail-pill:focus-visible { background: rgba(20, 20, 20, .88); outline: none; }
+
+.clone-book-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 8px; }
+.clone-reviewed { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; font-size: .8rem; }
+.clone-reviewed input { accent-color: var(--primary); width: 16px; height: 16px; }

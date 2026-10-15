@@ -113,12 +113,13 @@ class LeaseTest(unittest.TestCase):
             (Path(tmp) / "acc1" / LEASE).write_text(str(other.pid), encoding="utf-8")
             self.assertEqual(mine.acquire("image"), "acc2")
             self.assertIsNone(mine.acquire("image"))              # acc1 vẫn của tiến trình kia
-            self.assertEqual((Path(tmp) / "acc2" / LEASE).read_text(encoding="utf-8"), str(os.getpid()))
+            self.assertEqual((Path(tmp) / "acc2" / LEASE).read_text(encoding="utf-8").split()[0], str(os.getpid()))
             mine.release("acc2")
             self.assertFalse((Path(tmp) / "acc2" / LEASE).exists())
             other.kill()
             other.wait()
             self.assertEqual(mine.acquire("image", only="acc1"), "acc1")   # tiến trình kia tắt: khoá mồ côi được dọn
+            mine.release("acc1")
 
     def test_real_two_pools_race_for_one_account(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -143,6 +144,8 @@ class LeaseTest(unittest.TestCase):
             self.assertEqual(p.acquire("image"), "acc3")            # Free trước
             self.assertEqual(p.acquire("image"), "acc1")            # hết Free mới tới Plus
             self.assertEqual(p.acquire("image", only="acc2"), "acc2")   # clone hỏi đích danh: vẫn được
+            for name in p.names:
+                p.release(name)
 
     def test_plus_saved_only_while_clone_queue_has_work(self):
         from calforge.llm import plan

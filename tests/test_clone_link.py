@@ -120,6 +120,32 @@ class LinkFlowTest(unittest.TestCase):
         self.assertEqual(world.calls, [])                                          # không vẽ gì khi chưa có ảnh mẫu
         self.assertGreater(len(calls), 1)                                           # đã thử nhiều phiên
 
+    def test_invalid_download_retries_original_prompt_then_recovers(self):
+        bad_files = [
+            ("artworks.zip", b"PK broken zip"),
+            ("artworks.zip", zip_of({"README.txt": b"no artwork"})),
+            ("artworks.zip", zip_of({})),
+            ("artworks.zip", b"<html>download expired</html>"),
+            ("answer.txt", b"Here is your artwork"),
+            ("artwork.png", b"not an image"),
+        ]
+        for bad in bad_files:
+            with self.subTest(filename=bad[0], content=bad[1][:30]):
+                ds, calls, _ = self.go(lambda k, p: ("ok", [bad] if k == 1 else [("artworks.zip", GOOD_ZIP)]))
+                self.assertEqual(len(calls), 2)
+                if bad[0].endswith('.zip'):
+                    self.assertIn('File ZIP bạn vừa gửi', calls[1][1])
+                    self.assertEqual(calls[0][0], calls[1][0])
+                else:
+                    self.assertEqual(calls[0][1], calls[1][1])
+                complete(self, ds[0])
+
+    def test_valid_png_without_zip_is_accepted(self):
+        ds, calls, _ = self.go(lambda k, p: ("Artwork attached", [("artwork.png", art(1))]))
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(len(store.refs(ds[0])), 1)
+        complete(self, ds[0])
+
     def test_images_shown_in_chat_become_refs(self):
         """Prompt không đòi ZIP: ChatGPT thường gửi thẳng các ảnh đã cắt trong chat -> tool tự lưu làm ảnh mẫu."""
         cfg, _, world, pool, go = setup(self, n_books=0)

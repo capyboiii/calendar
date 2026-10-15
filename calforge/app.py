@@ -28,9 +28,13 @@ def _message(text: str) -> None:
 
 
 def _open_window(url: str) -> None:
+    from .ui.cache import install_id, UI_PROFILE
+    token = install_id(ROOT)
+    url += ('&' if '?' in url else '?') + 'ui_install=' + token
     chrome = _chrome()
     if chrome:
-        subprocess.Popen([str(chrome), f"--app={url}", "--new-window"])
+        subprocess.Popen([str(chrome), f"--app={url}", "--new-window",
+                          f"--user-data-dir={ROOT / UI_PROFILE}", '--no-first-run', '--no-default-browser-check'])
     else:
         webbrowser.open(url)
 
