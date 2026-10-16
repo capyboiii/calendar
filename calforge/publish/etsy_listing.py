@@ -66,8 +66,7 @@ ETSY RULES (must all be met)
 3. "tags": exactly 13 different tags, each at most 20 characters, lowercase, only letters, numbers and spaces.
    Mix broad and specific long-tail phrases buyers actually type; include the year in 1-2 tags; do not repeat the
    exact title phrase in every tag.
-4. Only describe this original artwork. Do not mention or imply any brand, celebrity, trademark, team, film,
-   franchise or other company's characters.
+4. Only describe this original artwork.
 
 Return ONLY this JSON in a ```json code block:
 {{"title": "", "description": "", "tags": []}}"""

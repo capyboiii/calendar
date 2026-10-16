@@ -292,7 +292,7 @@ ETSY RULES (must all be met)
 1. "etsy_title": at most 140 characters, natural and readable. Put the most important search phrase first (e.g. "{year} ... Wall Calendar"), then 1-2 short descriptive phrases. Do not repeat the same word more than twice. Use each of these characters at most once: % : & +. Never use $ ^ ` or °. No more than 3 words in ALL CAPS. No emojis, no "free shipping", no prices, no shop name.
 2. "etsy_description": plain text (no HTML, no markdown, no emojis). Start with 1-2 sentences that say exactly what the product is, using the main search phrase naturally. Then a short paragraph on the artwork and who it is for (gift ideas). Then a line "What's inside" followed by 3-4 lines starting with "- ". 600 to 1500 characters. Do NOT include sizes, binding, printing or shipping details (they are added automatically).
 3. "tags": exactly 13 different tags, each at most 20 characters, lowercase, only letters, numbers and spaces. Mix broad and specific long-tail phrases buyers actually type; include the year in 1-2 tags.
-4. Only describe this original artwork. Do not mention or imply any brand, celebrity, trademark, team, film, franchise or other company's characters."""
+4. Only describe this original artwork."""
 
 
 def meta_prompt(year: int) -> str:
