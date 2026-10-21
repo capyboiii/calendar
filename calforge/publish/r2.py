@@ -111,7 +111,17 @@ def read_state(cdir: Path) -> dict:
 
 
 def write_state(cdir: Path, st: dict) -> None:
-    state_file(cdir).write_text(json.dumps(st, ensure_ascii=False, indent=2), encoding="utf-8")
+    import os
+    import tempfile
+    target = state_file(cdir)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix="r2-", suffix=".tmp", dir=target.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            stream.write(json.dumps(st, ensure_ascii=False, indent=2))
+        os.replace(temporary, target)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
 
 
 PAGE_ORDER = ["front_cover"] + [f"m{m:02d}_{k}" for m in range(1, 13) for k in ("month", "grid")] + ["back_cover"]
@@ -271,6 +281,11 @@ def push_book(cdir: Path, cfg: dict, on_event=print, s3=None, gate: Throttle | N
         write_state(cdir, st)
     if errors:
         raise R2Error(f"còn {len(errors)} file chưa lên sau {tries} lần thử (lần đẩy sau làm nốt): {errors[0]}")
-    st.update(key_base=key_base, files=files, pushed_at=time.strftime("%Y-%m-%d %H:%M:%S"))
+    st.update(key_base=key_base, files=files)
+    if todo or not st.get("pushed_at"):
+        st["pushed_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
     write_state(cdir, st)
+    from .listing import clean_listing_txt
+    if clean_listing_txt(cdir):
+        on_event(f"  ✔ {cdir.name}: đã gọn listing.txt (bỏ SKU Printable và DESIGN URLS)")
     return st

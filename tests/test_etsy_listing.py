@@ -193,11 +193,21 @@ class ListingTxtTest(unittest.TestCase):
             text = (c / "listing.txt").read_text(encoding="utf-8-sig")
             self.assertTrue(text.startswith("SKU\nWCB-"), text[:200])        # SKU gốc + từng biến thể trước
             base = text.splitlines()[1]
-            for v in ("11SM", "11PD", "14SM", "14SG", "14PD"):            # đúng 5 biến thể như CSV Crayonahub
+            # A legacy text file missing 11SG is repaired without touching prose.
+            from calforge.publish.listing import clean_listing_txt
+            legacy='\n'.join(line for line in text.split('\n') if f'{base}-11SG  (' not in line)
+            (c/'listing.txt').write_text(legacy,encoding='utf-8-sig')
+            self.assertTrue(clean_listing_txt(c))
+            self.assertEqual((c/'listing.txt').read_text(encoding='utf-8-sig'),text)
+            for v in ("11SM", "11SG", "14SM", "14SG"):
                 self.assertIn(f"{base}-{v}  (", text)
+            for v in ("11PD", "14PD"):
+                self.assertNotIn(f"{base}-{v}  (", text)
             self.assertIn("\nTITLE\n" + lst["title"] + "\n\nTAGS\n", text)
             self.assertIn(", ".join(lst["tags"]), text)
             self.assertNotIn("<", text)                                    # chữ thường, không còn thẻ HTML
+            self.assertIn('- Paper: Matte or Glossy', text)
+            self.assertNotIn('- Finish:', text)
             self.assertIn("Details\n- Sizes:\n  - 11 x 8.5 in (opens to 11 x 17 in)\n  - 14 x 11.5 in", text)
             write_listing_txt(c, {"title": "T", "tags": ["a"], "description": "<p>x</p>", "description_text": "PLAIN"})
             self.assertIn("DESCRIPTION\nPLAIN", (c / "listing.txt").read_text(encoding="utf-8-sig"))   # bản Etsy

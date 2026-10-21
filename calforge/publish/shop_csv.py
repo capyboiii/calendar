@@ -19,6 +19,7 @@ from pathlib import Path
 
 from .. import layout
 from . import r2
+from .guard import serialized
 
 TEMPLATE = ["External ID", "Label", "Shipping method", "First name", "Last name", "Email", "Phone", "Country",
           "Region", "Address line 1", "Address line 2", "City", "Zip", "Quantity", "Print Provider ID",
@@ -127,6 +128,7 @@ def ready_books(projects_root: Path) -> list[Path]:
     return out
 
 
+@serialized
 def publish_all(cfg: dict, on_event=print, only: list[Path] | None = None) -> dict:
     """Đẩy lên R2 rồi xuất CSV.
 
@@ -167,5 +169,7 @@ def publish_all(cfg: dict, on_event=print, only: list[Path] | None = None) -> di
             st = r2.read_state(b)
             st.update(exported_at=stamp, exported_csv=csv_path.name)
             r2.write_state(b, st)
+    from .sheets import sync_books
+    sheet = sync_books([b for b in successful if r2.read_state(b).get("exported_at")], cfg, on_event)
     return {"books": len(books), "pushed": pushed, "exported": [b.name for b in todo],
-            "csv": str(csv_path) if csv_path else None, "failed": failed}
+            "csv": str(csv_path) if csv_path else None, "failed": failed, "sheet": sheet}

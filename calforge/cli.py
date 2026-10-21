@@ -189,6 +189,12 @@ def cmd_run(args, cfg):
 
 
 def cmd_produce(args, cfg):
+    from .llm.book_budget import book_slot
+    with book_slot(cfg, _concept_dir(args.concept).resolve()):
+        return _cmd_produce(args, cfg)
+
+
+def _cmd_produce(args, cfg):
     from .pipeline import produce
 
     if args.profiles:
@@ -201,6 +207,12 @@ def cmd_produce(args, cfg):
 
 
 def cmd_finish(args, cfg):
+    from .llm.book_budget import book_slot
+    with book_slot(cfg, _concept_dir(args.concept).resolve()):
+        return _cmd_finish(args, cfg)
+
+
+def _cmd_finish(args, cfg):
     """Hoàn thiện một cuốn đã vẽ đủ tranh (không cần ChatGPT): upscale, trang in, PDF, ảnh quảng cáo, listing."""
     from .pipeline import finish_book, upscale_concept, _read_status
 
@@ -225,6 +237,12 @@ def cmd_finish(args, cfg):
 
 
 def cmd_redo(args, cfg):
+    from .llm.book_budget import book_slot
+    with book_slot(cfg, _concept_dir(args.concept).resolve()):
+        return _cmd_redo(args, cfg)
+
+
+def _cmd_redo(args, cfg):
     from .pipeline import produce, redo_pages
 
     d = _concept_dir(args.concept)
@@ -300,6 +318,10 @@ def cmd_shop(args, cfg):
     for f in res["failed"]:
         print(f"✘ {f}")
     print(f"CSV: {res['csv']}" if res["csv"] else "CSV: không có cuốn mới cần xuất")
+    sheet = res.get("sheet") or {}
+    print(f"Sheet: {len(sheet.get('synced', []))} cuốn vừa đồng bộ · {len(sheet.get('failed', []))} cuốn chờ đồng bộ")
+    if res["failed"] or sheet.get("failed"):
+        sys.exit(1)
 
 
 def cmd_rename_sku(args, cfg):
@@ -313,9 +335,13 @@ def cmd_clone_run(args, cfg):
     import os
     from .clone.run import run_queue
     os.environ["CALFORGE_CLONE_RUN"] = "1"          # bộ điều phối của tiến trình clone: không để dành Plus cho ai
+    # Older running UI backends may still send this variable. Clone queue IDs
+    # are global; the item's project_id determines the output project later.
+    if os.environ.pop('CALFORGE_PROJECT_ID', None):
+        cfg = config.load()
     if args.show:                                   # hiện cửa sổ Chrome để người dùng xem tool làm việc
         cfg.setdefault("imagegen", {})["headless"] = False
-    res = run_queue(cfg)
+    res = run_queue(cfg, item_ids=getattr(args, 'item', None))
     sys.exit(0 if res and all(r.get("ok") for r in res) else (1 if res else 0))
 
 
@@ -476,6 +502,7 @@ def main(argv=None):
     p.set_defaults(func=cmd_rename_sku)
 
     p = sub.add_parser("clone-run", help="chạy hàng đợi trang Làm theo ảnh mẫu (chỉ tài khoản Plus)")
+    p.add_argument("--item", action="append", help="chỉ chạy mã cuốn được giao từ hàng đợi chung; có thể lặp")
     p.add_argument("--show", action="store_true", help="hiện cửa sổ Chrome (mặc định chạy ngầm)")
     p.set_defaults(func=cmd_clone_run)
 

@@ -1,4 +1,4 @@
-"""Hàng đợi batch: bấm Bắt đầu nhiều lần = xếp nhiều batch, máy chạy lần lượt từng batch một.
+"""Hàng đợi chung: ưu tiên thứ tự, dùng tài khoản rảnh để làm thêm mục kế tiếp.
 
 - Lưu ở projects/.hang_doi.json nên tắt/mở lại tool vẫn còn hàng đợi (batch đang chạy dở được xếp lại đầu hàng,
   chạy lại chỉ làm nốt phần thiếu nhờ _he_thong/batch.json của từng chủ đề).
@@ -20,16 +20,23 @@ PARTIAL = "partial"          # chạy xong nhưng chỉ đạt một phần số
 
 class BatchQueue:
     def __init__(self, tasks, state_file: Path, build_args, report, ideas_done=None, free_ram=None,
-                 overlap_min_gb: float = 6.0):
-        """tasks: TaskManager; report(params) -> (ok, total[, retryable]);
-        ideas_done(params) -> True khi batch đó đã lên đủ ý, chỉ còn vẽ (thì chủ đề kế tiếp được bắt đầu lên ý)."""
+                 overlap_min_gb: float = 6.0, capacity=None, fill_delay_s=3.0, clock=time.monotonic, conflicts=None):
+        """tasks: TaskManager; report(params) -> (ok, total[, retryable]).
+        capacity() -> global spare slots/limit; absent means sequential operation.
+        """
         self.tasks, self.file, self.build_args, self.report = tasks, Path(state_file), build_args, report
         self.ideas_done = ideas_done or (lambda params: False)
-        # chồng 2 batch chỉ khi máy còn đủ RAM trống (2 tiến trình cùng mở Chrome: thiếu RAM -> Chrome sập, lỗi cuốn)
+        # Legacy constructor options remain accepted; capacity decides admission.
         self.free_ram, self.overlap_min_gb = free_ram, float(overlap_min_gb)
+        self.capacity = capacity
+        self.conflicts = conflicts
+        self.fill_delay_s, self.clock = max(0, float(fill_delay_s)), clock
+        self.last_launch = -1e9
+        self.pool_limit = None
         self.lock = threading.RLock()
         self.items: list[dict] = []
         self.paused = False
+        self.unified = False
         self._load()
         for it in self.items:                     # tool vừa mở lại: batch "đang chạy" cũ đã chết theo tool
             if it["status"] == RUNNING:
@@ -51,18 +58,19 @@ class BatchQueue:
         try:
             data = json.loads(self.file.read_text(encoding="utf-8"))
             self.items, self.paused = list(data.get("items", [])), bool(data.get("paused"))
+            self.unified = bool(data.get('unified'))
         except (OSError, ValueError):
             self.items, self.paused = [], False
 
     def _save(self) -> None:
         self.file.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.file.with_suffix(".tmp")
-        tmp.write_text(json.dumps({"paused": self.paused, "items": self.items}, ensure_ascii=False, indent=1),
+        tmp.write_text(json.dumps({"paused": self.paused, "items": self.items, 'unified': self.unified}, ensure_ascii=False, indent=1),
                        encoding="utf-8")
         tmp.replace(self.file)
 
     # ---- thao tác từ UI --------------------------------------------------------------------------------------
-    def add(self, params: dict) -> dict:
+    def add(self, params: dict, *, start: bool = True) -> dict:
         self.build_args(params)                  # kiểm tra tham số ngay (thiếu chủ đề -> báo lỗi lúc bấm)
         with self.lock:
             same = self._same_book_waiting(params)
@@ -84,12 +92,20 @@ class BatchQueue:
                     "added_at": time.strftime("%Y-%m-%d %H:%M:%S"), "started_at": "", "finished_at": ""}
             self.items.append(item)
             self._save()
-        self.tick()
+        if start:
+            self.tick()
         return item
 
     def _same_book_waiting(self, params: dict) -> dict | None:
         """Việc ĐANG CHỜ cùng loại (vẽ lại / làm tiếp / hoàn thiện) cho đúng cuốn này, nếu có."""
         action, concept = params.get("action"), params.get("concept")
+        if action == 'clone':
+            ids = set(params.get('clone_ids') or [])
+            return next((i for i in self.items if i['status'] in (WAITING, RUNNING)
+                         and i['params'].get('action') == 'clone'
+                         and (i['status'] == WAITING or
+                              getattr(self.tasks.tasks.get(i.get('task_id')), 'status', '') in ('running', 'stopping'))
+                         and ids == set(i['params'].get('clone_ids') or [])), None)
         if not action or not concept:
             return None
         return next((i for i in self.items if i["status"] == WAITING and i["params"].get("action") == action
@@ -124,7 +140,7 @@ class BatchQueue:
         with self.lock:
             self.paused = True
             task_ids = []
-            # đưa MỌI batch đang chạy (có thể 2: batch đang vẽ nốt + chủ đề kế tiếp đang lên ý) về đầu hàng, giữ thứ tự
+            # Preserve order, including legacy state that had overlapping batches.
             for cur in reversed(self._runnings()):
                 task_ids.append(cur["task_id"])
                 cur.update(status=WAITING, task_id=None, paused_from=True)
@@ -158,9 +174,7 @@ class BatchQueue:
 
     # ---- vòng chạy -----------------------------------------------------------------------------------------
     def tick(self) -> None:
-        """Cập nhật các batch đang chạy; rảnh (không tạm dừng, không việc chính nào chạy) thì chạy batch kế tiếp.
-        CHỒNG LƯỢT: batch đang chạy đã lên đủ ý (chỉ còn vẽ nốt - phần lớn tài khoản rảnh) thì chủ đề kế tiếp được
-        bắt đầu luôn để lên ý trước; tối đa 2 batch cùng lúc (hai tiến trình chia tài khoản bằng khoá trong profile)."""
+        """Start in FIFO order; fill spare account capacity with the next queue entry."""
         with self.lock:
             for cur in self._runnings():
                 t = self.tasks.tasks.get(cur["task_id"])
@@ -169,13 +183,30 @@ class BatchQueue:
             running = self._runnings()
             if self.paused:
                 return
+            if any(t.status == 'stopping' for t in self.tasks.tasks.values()):
+                return
+            if not running:
+                self.pool_limit = None
+                if self.capacity is not None:
+                    try:
+                        self.pool_limit = max(1, int(self.capacity()['limit']))
+                    except (OSError, ValueError, TypeError, KeyError):
+                        return
             if running:
-                if not self._can_overlap(running):
+                if self.capacity is None or self.clock() - self.last_launch < self.fill_delay_s:
                     return
+                try:
+                    room = self.capacity()
+                    from ..llm.book_budget import limit_for_capacity
+                    if room['slots'] <= 0 or len(running) >= limit_for_capacity(room['limit']):
+                        return
+                except (OSError, ValueError, TypeError, KeyError):
+                    return  # unreadable pool state must never trigger a launch burst
             elif self.tasks.running():                 # việc chính ngoài hàng đợi (người dùng tự bấm) đang chạy
                 return
-            nxt = next((i for i in self.items if i["status"] == WAITING), None)
-            if not nxt or (running and not self._overlap_ok(nxt, running[0])):
+            nxt = next((i for i in self.items if i["status"] == WAITING
+                        and not any(self._conflicts(i['params'], r['params']) for r in running)), None)
+            if not nxt:
                 return
             try:
                 # Trạng thái trên đĩa có thể đổi trong lúc chờ (ví dụ cuốn vừa bị loại vì TM).
@@ -185,8 +216,17 @@ class BatchQueue:
                            error=str(e), finished_at=time.strftime("%Y-%m-%d %H:%M:%S"))
                 self._save()
                 return
-            nxt.update(status=RUNNING, task_id=self.tasks.start_task(cmd_args, desc, "run", nxt["params"]),
+            action = 'clone' if nxt['params'].get('action') == 'clone' else 'run'
+            # A monotonic queue rank travels into every account request in the
+            # subprocess. Earlier jobs win the next free account; no preemption.
+            rank = max([int(i.get('queue_rank', 0)) for i in self.items] + [int(time.time() * 1000)]) + 1
+            nxt['queue_rank'] = rank
+            nxt['params'] = {**nxt['params'], '_queue_rank': rank}
+            if self.pool_limit is not None:
+                nxt['params']['_pool_cap'] = self.pool_limit
+            nxt.update(status=RUNNING, task_id=self.tasks.start_task(cmd_args, desc, action, nxt["params"]),
                        started_at=time.strftime("%Y-%m-%d %H:%M:%S"), user_stopped=False, overlapped=bool(running))
+            self.last_launch = self.clock()
             self._save()
 
     def _finish(self, cur: dict, t) -> None:
@@ -207,27 +247,22 @@ class BatchQueue:
                    retryable=retryable, status=final)
         self._save()
 
-    def _can_overlap(self, running: list[dict]) -> bool:
-        """Đúng 1 batch đang chạy, là batch theo ý tưởng, và nó đã lên đủ ý (chỉ còn vẽ nốt)."""
-        if len(running) != 1 or running[0]["params"].get("action"):
-            return False
-        if self.free_ram is not None:
+    def _conflicts(self, a: dict, b: dict) -> bool:
+        if a.get('concept') and b.get('concept') and Path(a['concept']).resolve() == Path(b['concept']).resolve():
+            return True
+        if a.get('action') == b.get('action') == 'clone':
+            if set(a.get('clone_ids') or []) & set(b.get('clone_ids') or []):
+                return True
+        if not a.get('action') and not b.get('action'):
+            if (a.get('keyword'), a.get('product'), a.get('project_id')) == \
+                    (b.get('keyword'), b.get('product'), b.get('project_id')):
+                return True
+        if self.conflicts:
             try:
-                if float(self.free_ram()) < self.overlap_min_gb:
-                    return False                       # máy đang thiếu RAM: chờ batch trước xong như cũ
-            except Exception:  # noqa: BLE001 - không đo được RAM: an toàn là không chồng
-                return False
-        try:
-            return bool(self.ideas_done(running[0]["params"]))
-        except Exception:  # noqa: BLE001 - đọc trạng thái lỗi: không chồng lượt, chạy tuần tự như cũ
-            return False
-
-    @staticmethod
-    def _overlap_ok(nxt: dict, cur: dict) -> bool:
-        """Chỉ chồng một batch theo ý tưởng KHÁC chủ đề (cùng chủ đề thì khoá batch.lock bắt chờ, vô ích); việc sửa
-        sách lẻ (Làm tiếp / Vẽ lại / Hoàn thiện) vẫn chờ chạy sau như cũ."""
-        p, q = nxt["params"], cur["params"]
-        return not p.get("action") and (p.get("keyword"), p.get("product"), p.get('project_id')) != (q.get("keyword"), q.get("product"), q.get('project_id'))
+                return bool(self.conflicts(a, b))
+            except (OSError, ValueError, KeyError):
+                return True  # unreadable ownership must not allow concurrent writes
+        return False
 
     def start(self, every: float = 2.0) -> None:
         def loop():

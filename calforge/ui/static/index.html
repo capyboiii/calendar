@@ -150,7 +150,7 @@
       <div class="mode-panel" id="clonePanel" data-mode="clone" hidden>
         <div class="notice" id="clonePlusNotice" hidden></div>
         <fieldset class="kinds refs-box">
-          <legend>Link sản phẩm <small class="muted">1 link · 1 cuốn</small></legend>
+          <legend>Link sản phẩm <small class="muted">1 link · tối đa 5 cuốn</small></legend>
           <textarea id="cloneLinks" class="clone-links" rows="2" spellcheck="false"
                     placeholder="Dán link sản phẩm…"></textarea>
         </fieldset>
@@ -169,6 +169,14 @@
           <label class="field grow">
             <span>Chủ đề *</span>
             <input id="cloneGroup" type="text" placeholder="Nhập chủ đề…" maxlength="80" autocomplete="off" required>
+          </label>
+          <label class="field narrow">
+            <span>Số cuốn / link</span>
+            <select id="cloneBookCount">
+              <option value="1">1 cuốn</option><option value="2">2 cuốn</option>
+              <option value="3">3 cuốn</option><option value="4">4 cuốn</option>
+              <option value="5">5 cuốn</option>
+            </select>
           </label>
           <label class="field narrow">
             <span>Năm lịch</span>
@@ -222,14 +230,14 @@
         <pre id="cloneRunLog"></pre>
       </details>
     </section>
-    <!-- Hàng đợi chung: 2 phần chạy riêng (batch theo ý tưởng - app.js / clone sản phẩm - clone.js), gộp chung khung -->
+    <!-- Một hàng đợi FIFO cho cả idea và clone. -->
     <section class="card queue" id="queueCard" hidden>
       <div class="run-head">
         <h2>Hàng đợi</h2>
       </div>
       <div class="queue-part" id="ideaQueueBox" hidden>
         <div class="queue-part-head">
-          <h3>Theo ý tưởng <span class="zone-n" id="ideaQueueCount">0</span></h3>
+          <h3>Idea &amp; Clone <span class="zone-n" id="ideaQueueCount">0</span></h3>
           <span class="grow"></span>
           <button class="btn btn-small btn-ghost" id="btnQueuePause">Tạm dừng</button>
         </div>
@@ -243,7 +251,7 @@
       </div>
       <div class="queue-part" id="cloneQueueCard" hidden>
         <div class="queue-part-head">
-          <h3>Clone sản phẩm <span class="zone-n" id="cloneQueueCount">0</span></h3>
+          <h3>Cuốn clone cần xử lý <span class="zone-n" id="cloneQueueCount">0</span></h3>
           <span class="grow"></span>
           <button class="btn btn-small btn-accent" id="btnCloneRun" hidden>Chạy hàng đợi</button>
         </div>
@@ -268,6 +276,11 @@
         </div>
       </div>
       <div class="zone-bar" id="zoneBar" role="group" aria-label="Lọc theo trạng thái" hidden></div>
+      <div class="sheet-export-row">
+        <button class="btn btn-small btn-ghost" id="btnImportSkuTxt">Nhập TXT → Excel</button>
+        <input type="file" id="skuTxtFile" accept=".txt,text/plain" hidden>
+        <span class="hint" id="skuTxtResult" role="status">Lọc Sheet theo SKU đã chọn</span>
+      </div>
       <p class="hint" id="shopResult" hidden></p>
       <div class="notice" id="unfinishedNotice" hidden>
         <span id="unfinishedText"></span>
@@ -341,6 +354,10 @@
       <label class="field"><span>Secret Access Key</span><input id="r2Secret" type="password" autocomplete="new-password"></label>
       <label class="field"><span>Bucket</span><input id="r2Bucket" type="text" autocomplete="off"></label>
       <label class="field"><span>Public URL</span><input id="r2Public" type="text" placeholder="https://cdn.example.com" autocomplete="off"></label>
+      <h3>Google Sheet</h3>
+      <label class="field"><span>Web app URL</span><input id="sheetEndpoint" type="url" placeholder="https://script.google.com/macros/s/…/exec" autocomplete="off"></label>
+      <label class="field"><span>Khóa đồng bộ</span><input id="sheetSecret" type="password" autocomplete="new-password"></label>
+      <p class="muted">Tự cập nhật theo SKU sau khi xuất CSV. Dùng cùng kết nối trên các máy.</p>
       <button class="btn btn-primary" id="btnR2Save">Lưu</button>
     </div>
   </div>

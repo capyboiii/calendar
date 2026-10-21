@@ -20,10 +20,10 @@ class ClonePoolsTest(unittest.TestCase):
         with mock.patch.object(run, "run_book", side_effect=work):
             return run.run_queue(self.cfg, on_event=lambda *_: None, accts=mock.Mock(), plus=names, stop=stop)
 
-    def test_all_six_slots_work_and_each_book_keeps_stage_order(self):
+    def test_six_books_finish_in_bounded_waves_and_keep_stage_order(self):
         for _ in range(5):
             new_item(self.root)
-        barrier = threading.Barrier(6)
+        barrier = threading.Barrier(2)  # shared unfinished-book budget, not one slot per account
         calls = {}
         lock = threading.Lock()
 
@@ -57,8 +57,8 @@ class ClonePoolsTest(unittest.TestCase):
         self.assertTrue(all(r.get("ok") for r in results))
         self.assertTrue(advanced.is_set())
 
-    def test_new_books_use_idle_slots_while_first_art_is_still_running(self):
-        started = threading.Barrier(4)
+    def test_new_books_fill_budget_while_first_art_is_still_running(self):
+        started = threading.Barrier(2)
 
         def work(cfg, d, *args, step, **kw):
             if step == "art":
@@ -102,3 +102,29 @@ class ClonePoolsTest(unittest.TestCase):
         work = mock.Mock()
         self.assertEqual(self.go(work, ["acc1"]), [])
         work.assert_not_called()
+
+    def test_temporary_stage_errors_are_retried_without_aborting_other_books(self):
+        new_item(self.root)
+        self.cfg['crash_retry_waits_s']=[0,0]
+        calls={}
+        def work(cfg,d,*args,step,**kw):
+            key=(d.name,step);calls[key]=calls.get(key,0)+1
+            if d==self.first and calls[key]==1:
+                raise {'art':PermissionError,'grid':TimeoutError,'finish':MemoryError}[step]('temporary')
+            return {'next':{'art':'grid','grid':'finish'}[step]} if step!='finish' else {'ok':True}
+        results=self.go(work,['acc1','acc2'])
+        self.assertTrue(all(r.get('ok') for r in results))
+        self.assertEqual([calls[(self.first.name,s)] for s in ('art','grid','finish')],[2,2,2])
+
+    def test_locked_status_file_does_not_abort_remaining_batch(self):
+        new_item(self.root)
+        original=store.write
+        def locked(d,**kw):
+            if d==self.first:raise PermissionError('status file locked')
+            return original(d,**kw)
+        def work(cfg,d,*args,step,**kw):
+            if d==self.first:raise RuntimeError('broken first book')
+            return {'next':{'art':'grid','grid':'finish'}[step]} if step!='finish' else {'ok':True}
+        with mock.patch.object(store,'write',side_effect=locked):
+            results=self.go(work,['acc1','acc2'])
+        self.assertEqual(sorted(r.get('ok') for r in results),[False,True])

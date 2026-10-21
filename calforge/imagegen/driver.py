@@ -362,6 +362,7 @@ class _Worker:
         chosen, since, quiet_since, progressed = None, 0.0, None, False
         old_srcs = {im["src"] for im in before.get("pageImgs", []) + before.get("imgs", [])}
         drawing = False
+        last_report = start
         # quá giờ mà vẫn đang vẽ, hoặc ảnh vừa ra đang chờ đứng yên: cho thêm tới hard_deadline
         while time.monotonic() < deadline or ((drawing or chosen) and time.monotonic() < hard_deadline):
             st = _eval(page, STATE_JS)
@@ -371,6 +372,11 @@ class _Worker:
             if classify(st.get("tail", "")) == "ip_refused":
                 raise ThirdPartyIPRefused(st["tail"][-300:])
             drawing = generating(st) if new_turn else bool(st.get("pending"))
+            now = time.monotonic()
+            if now - last_report >= 30 and getattr(self, 'on_progress', None):
+                state = 'ChatGPT đang vẽ' if drawing else 'chờ ảnh trả về'
+                self.on_progress(f'{state} ({now - start:.0f}s)')
+                last_report = now
             big = _new_images(st, before) if new_turn else []
             if not big:
                 big = [im for im in st.get("pageImgs", []) if im["src"] not in old_srcs
@@ -407,7 +413,7 @@ class _Worker:
             else:
                 quiet_since = None
             page.wait_for_timeout(1000)
-        raise TempError(f"quá {self.timeout_s:.0f}s chưa ra ảnh")
+        raise TempError(f"quá {time.monotonic() - start:.0f}s chưa ra ảnh")
 
     def run_job(self, page, job: GenJob) -> Path:
         if not hasattr(page, "_calforge_rate"):
@@ -486,7 +492,7 @@ def run_jobs(jobs: list[GenJob], profiles_dir: Path, profiles: list[str], *, hea
     for j in jobs:
         q.put(j)
     lock = threading.Lock()
-    state = {"remaining": len(jobs), "alive": 0}
+    state = {"remaining": len(jobs), "alive": 0, "starting": 0}
     broken: set[str] = set()                          # không mở được Chrome trong lần chạy này
     fatal_ip = threading.Event()                      # một job dính IP/TM => huỷ mọi job chưa gửi của cuốn
     fatal_ip_detail = {"text": ""}
@@ -523,6 +529,7 @@ def run_jobs(jobs: list[GenJob], profiles_dir: Path, profiles: list[str], *, hea
         job.attempts += 1
         on_event(f"[{profile}] {job.id}: gen (lần {job.attempts})")
         try:
+            w.on_progress = lambda message: on_event(f'[{profile}] {job.id}: {message}')
             job.result = w.run_job(page, job)
             job.error = None
             on_event(f"[{profile}] {job.id}: xong -> {job.result.name}")
@@ -594,15 +601,20 @@ def run_jobs(jobs: list[GenJob], profiles_dir: Path, profiles: list[str], *, hea
     def worker(profile: str) -> None:
         w = _Worker(profiles_dir / profile, headless, timeout_s)
         completed = False
+        starting = True
         try:
             with opener(profile) as page:
                 while not fatal_ip.is_set():
                     if completed and pool.should_yield(profile):
                         return
-                    try:
-                        job = q.get_nowait()
-                    except queue.Empty:
-                        return                        # hết việc: trả tài khoản cho cuốn khác / chat
+                    with lock:
+                        try:
+                            job = q.get_nowait()
+                        except queue.Empty:
+                            return
+                        if starting:
+                            state['starting'] -= 1
+                            starting = False
                     if not handle(profile, w, page, job):
                         return
                     completed = True
@@ -615,6 +627,8 @@ def run_jobs(jobs: list[GenJob], profiles_dir: Path, profiles: list[str], *, hea
         finally:
             with lock:
                 state["alive"] -= 1
+                if starting:
+                    state['starting'] -= 1
             pool.release(profile)
 
     threads: list[threading.Thread] = []
@@ -629,23 +643,36 @@ def run_jobs(jobs: list[GenJob], profiles_dir: Path, profiles: list[str], *, hea
                 cancelled.error = f"IP/TM_REJECTED: {fatal_ip_detail['text']}"
                 finish(cancelled)
         with lock:
-            remaining, alive = state["remaining"], state["alive"]
+            remaining, alive, starting = state["remaining"], state["alive"], state['starting']
+            queued = q.qsize()
         if remaining <= 0 and alive == 0:
             break
-        queued = q.qsize()
         spawned = False
-        if queued > alive:                            # còn việc chưa có người làm: mượn thêm tài khoản
+        if queued > starting:  # busy workers already removed their images from q
             prefer = [n for n in profiles if n not in broken]
             name = pool.acquire(IMAGE, prefer=prefer)
             if name and name in broken:
                 pool.release(name)
             elif name:
                 with lock:
-                    state["alive"] += 1
-                t = threading.Thread(target=worker, args=(name,), daemon=True)
-                t.start()
-                threads.append(t)
-                spawned = True
+                    reserve = q.qsize() > state['starting']
+                    if reserve:
+                        state["alive"] += 1
+                        state['starting'] += 1
+                if reserve:
+                    t = threading.Thread(target=worker, args=(name,), daemon=True)
+                    try:
+                        t.start()
+                    except Exception:
+                        with lock:
+                            state['alive'] -= 1
+                            state['starting'] -= 1
+                        pool.release(name)
+                        raise
+                    threads.append(t)
+                    spawned = True
+                else:
+                    pool.release(name)
         if not spawned:
             if alive == 0 and queued:
                 usable = [n for n in pool.names if n not in broken]

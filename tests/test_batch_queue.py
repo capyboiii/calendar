@@ -179,22 +179,14 @@ class OverlapNextTopicTest(unittest.TestCase):
     def status(self):
         return [(i["params"]["keyword"], i["status"]) for i in self.q.snapshot()["items"]]
 
-    def test_next_topic_starts_when_current_only_drawing(self):
-        for kw in ("a", "b", "c"):
-            self.q.add({"keyword": kw})
-        self.assertEqual(self.tasks.started, ["a"])                  # a còn đang lên ý: chưa chồng
-        self.done.add("a")
+    def test_next_topic_waits_even_after_ideas_done(self):
+        for kw in ('a','b','c'):self.q.add({'keyword':kw})
+        self.done.add('a')
         self.q.tick()
-        self.assertEqual(self.tasks.started, ["a", "b"])             # a chỉ còn vẽ: b lên ý luôn
+        self.assertEqual(self.tasks.started,['a'])
+        self.tasks.tasks['t1'].status='success'
         self.q.tick()
-        self.assertEqual(self.tasks.started, ["a", "b"])             # tối đa 2 batch: c chờ
-        self.done.add("b")
-        self.q.tick()
-        self.assertEqual(self.tasks.started, ["a", "b"])             # vẫn 2 đang chạy: c chờ a xong
-        self.tasks.tasks["t1"].status = "success"
-        self.q.tick()
-        self.assertEqual(self.tasks.started, ["a", "b", "c"])        # a xong, b chỉ còn vẽ: c chạy
-        self.assertEqual(self.status()[0], ("a", "done"))
+        self.assertEqual(self.tasks.started,['a','b'])
 
     def test_no_overlap_while_still_ideating_or_for_book_fixes(self):
         self.q.add({"keyword": "a"})
@@ -216,9 +208,9 @@ class OverlapNextTopicTest(unittest.TestCase):
         self.done.add("a")
         self.q.tick()
         self.q.pause()
-        self.assertEqual(sorted(self.tasks.stopped), ["t1", "t2"])
+        self.assertEqual(sorted(self.tasks.stopped), ["t1"])
         self.assertEqual(self.status(), [("a", "queued"), ("b", "queued"), ("c", "queued")])
-        self.assertTrue(all(i["params"].get("resume") for i in self.q.snapshot()["items"][:2]))
+        self.assertTrue(all(i["params"].get("resume") for i in self.q.snapshot()["items"][:1]))
 
     def test_no_overlap_when_ram_is_low(self):
         ram = {"gb": 3.0}
@@ -230,7 +222,7 @@ class OverlapNextTopicTest(unittest.TestCase):
         self.assertEqual(self.tasks.started, ["a"])                  # thiếu RAM: không chồng
         ram["gb"] = 9.0
         q.tick()
-        self.assertEqual(self.tasks.started, ["a", "b"])             # đủ RAM: chồng
+        self.assertEqual(self.tasks.started, ["a"])                   # strict FIFO even with spare RAM
 
     def test_broken_state_falls_back_to_one_at_a_time(self):
         q = BatchQueue(self.tasks, Path(self.tmp.name) / "q2.json", args, lambda p: (2, 2),

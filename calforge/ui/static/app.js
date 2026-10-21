@@ -87,6 +87,8 @@ function bindEvents() {
   $('btnR2Save').addEventListener('click', saveR2);
   $('btnShop').addEventListener('click', () => openShopPicker('printify'));
   $('btnCalendaria').addEventListener('click', () => openShopPicker('calendaria'));
+  $('btnImportSkuTxt').addEventListener('click', () => $('skuTxtFile').click());
+  $('skuTxtFile').addEventListener('change', exportSkuTxt);
   $('btnShopGo').addEventListener('click', () => {
     const books = [...SHOP.picked];
     $('shopModal').hidden = true;
@@ -106,10 +108,10 @@ function bindEvents() {
     const mode = b.dataset.pick;
     const shown = shopVisible();
     if (mode === 'none') shown.forEach((x) => SHOP.picked.delete(x.path));
-    else shown.forEach((x) => { if (mode === 'all' || !shopExported(x)) SHOP.picked.add(x.path); });
+    else shown.forEach((x) => { if (!shopBlocked(x) && (mode === 'all' || !shopExported(x))) SHOP.picked.add(x.path); });
     if (mode === 'new') {
       shown.forEach((x) => { if (shopExported(x)) SHOP.picked.delete(x.path); });
-      const n = shown.filter((x) => !shopExported(x)).length;
+      const n = shown.filter((x) => !shopBlocked(x) && !shopExported(x)).length;
       toast(n ? `Đã chọn ${n} cuốn chưa xuất.` : 'Không có cuốn nào chưa xuất: mọi cuốn đều đã xuất CSV rồi.', 'info');
     }
     renderShopBooks();
@@ -128,6 +130,37 @@ function bindEvents() {
 
 function countValue() {
   return Math.max(1, Math.min(20, parseInt($('inputCount').value, 10) || 1));
+}
+
+async function exportSkuTxt() {
+  const input = $('skuTxtFile'), file = input.files[0];
+  if (!file) return;
+  const button = $('btnImportSkuTxt'), result = $('skuTxtResult');
+  button.disabled = true;
+  result.textContent = 'Đang đọc Sheet và lọc SKU…';
+  try {
+    if (file.size > 200000) throw new Error('File TXT quá lớn (tối đa 200 KB).');
+    const text = await file.text();
+    if (!text.trim()) throw new Error('File TXT chưa có SKU.');
+    const data = await api('/api/sheet/export-selected', { text });
+    if (!data.xlsx_base64) throw new Error('Backend chưa cập nhật xuất Excel. Tắt tool rồi mở lại để nạp bản mới.');
+    const bytes = Uint8Array.from(atob(data.xlsx_base64), c => c.charCodeAt(0));
+    const url = URL.createObjectURL(new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+    const link = document.createElement('a');
+    link.href = url; link.download = data.filename;
+    document.body.appendChild(link); link.click(); link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    result.textContent = `Đã xuất ${data.products} sản phẩm · ${data.rows} dòng (SKU chung + biến thể)`;
+  } catch (error) {
+    const message = error.status === 404
+      ? 'Backend đang chạy bản cũ, chưa có chức năng nhập TXT. Tắt tool rồi mở lại từ thư mục đã cập nhật.'
+      : error.message;
+    result.textContent = message;
+    toast(message, 'error');
+  } finally {
+    button.disabled = false;
+    input.value = ''; // Cho phép chọn lại cùng file sau lỗi mạng hoặc đổi nội dung.
+  }
 }
 
 function setCount(n) {
@@ -150,7 +183,11 @@ async function api(path, body) {
     body: JSON.stringify(body),
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok || data.error) throw new Error(data.error || `Lỗi máy chủ (${res.status})`);
+  if (!res.ok || data.error) {
+    const error = new Error(data.error || `Lỗi máy chủ (${res.status})`);
+    error.status = res.status;
+    throw error;
+  }
   return data;
 }
 
@@ -315,11 +352,12 @@ async function loadQueue() {
     return;
   }
   renderQueue();
-  const run = (S.queue.items || []).find((i) => i.status === 'running' && i.task_id);
+  const run = (S.queue.items || []).find((i) => i.status === 'running' && i.task_id && i.params.action !== 'clone');
   if (run && (!S.task || S.task.id !== run.task_id)) {        // hàng đợi vừa chạy batch kế tiếp -> hiện tiến độ
     attachTask({ id: run.task_id, params: run.params, start_time: Date.now() / 1000 });
   }
 }
+window.refreshUnifiedQueue = loadQueue;
 
 const PRODUCT_LABEL = { wall_grid: 'Wall Calendar (Blank)', wall_premade: 'Wall Calendar' };
 
@@ -346,6 +384,8 @@ function renderQueue() {
 
   const label = (i) => {
     const p = i.params;
+    if (p.action === 'clone') return `<strong>Clone · ${esc(p.title || 'sản phẩm')}</strong>
+      <span class="chip">${esc(projectName(p.project_id))}</span><span class="muted">${(p.clone_ids || []).length} cuốn</span>`;
     if (p.action === 'produce') return `<strong>Làm tiếp</strong> <span class="muted">${esc(p.title || '')}</span>`;
     if (p.action === 'finish') {
       const one = Array.isArray(p.redo_previews);
@@ -554,11 +594,12 @@ function bookState(b) {
   const st = b.status || {};
   if (st.ok && (st.stage === 'listing' || st.stage === 'printify')) return 'done';
   if (st.stage === 'ip_rejected') return 'rejected';
+  if (st.queue_wait) return 'queued';
   if (st.ok === false) return 'error';
   return 'pending';
 }
 
-const STATE_LABEL = { done: 'Xong', rejected: 'Bỏ · bị từ chối', error: 'Bị dở', pending: 'Chưa xong' };
+const STATE_LABEL = { done: 'Xong', rejected: 'Bỏ · bị từ chối', error: 'Bị dở', pending: 'Đang làm', queued: 'Đang chờ' };
 
 // Lỗi bất ngờ: nói đúng loại lỗi thay vì câu chung "mất mạng"; lỗi tạm thời đã được tự làm lại vài lần rồi
 function crashReason(raw) {
@@ -597,7 +638,8 @@ function bookMatches(c, keyword, q) {
 
 function searchHits() {
   const q = bookQuery();
-  return scopedProjects().flatMap((p) => (p.concepts || []).filter((c) => bookMatches(c, p.keyword, q)));
+  const projects = S.openWorkspace === null ? S.projects : scopedProjects();
+  return projects.flatMap((p) => (p.concepts || []).filter((c) => bookMatches(c, p.keyword, q)));
 }
 
 function renderProjectPicker() {
@@ -654,7 +696,10 @@ function renderWorkspaceCards() {
   const groups = [...S.workspaces];
   if (S.projects.some((p) => !p.project_id && (p.concepts || []).length)) groups.push({ id: '', name: 'Chưa phân dự án' });
   const q = bookQuery();
-  groups.filter((p) => !q || p.name.toLowerCase().includes(q)).forEach((p) => {
+  const matchedGroups = groups.filter((p) => !q || p.name.toLowerCase().includes(q));
+  if (q) $('bookCount').textContent = matchedGroups.length
+    ? `${matchedGroups.length} dự án · ${searchHits().length} cuốn khớp` : `${searchHits().length} cuốn khớp`;
+  matchedGroups.forEach((p) => {
     const books = S.projects.filter((x) => (x.project_id || '') === p.id).flatMap((x) => x.concepts || []);
     const card = button('', 'workspace-card', () => {
       S.openWorkspace = p.id; $('bookSearch').value = '';
@@ -668,7 +713,31 @@ function renderWorkspaceCards() {
     if (p.id) container.appendChild(button('Xóa dự án', 'btn-small btn-danger-ghost', () => deleteProject(p)));
     box.appendChild(container);
   });
-  if (!box.children.length) box.innerHTML = '<p class="empty">Chưa có dự án. Tạo dự án ở phía trên.</p>';
+  if (q) {
+    S.projects.forEach((p) => {
+      const hits = (p.concepts || []).filter((c) => bookMatches(c, p.keyword, q));
+      if (!hits.length) return;
+      const group = document.createElement('section');
+      group.className = 'done-group';
+      group.innerHTML = `<div class="done-group-head"><span class="chip chip-topic">${esc(projectName(p.project_id || ''))} · ${esc(p.keyword)}</span>
+        <small>${hits.length} cuốn</small></div><div class="done-grid"></div>`;
+      group.querySelector('.done-group-head').appendChild(button('Mở dự án', 'btn-small btn-ghost', () => {
+        S.openWorkspace = p.project_id || ''; $('bookSearch').value = '';
+        if (p.project_id) $('runProject').value = p.project_id;
+        renderResults();
+      }));
+      const grid = group.querySelector('.done-grid');
+      hits.forEach((c) => {
+        if (zoneOf(c) === 'done') grid.appendChild(doneTile(c, p.keyword));
+        else group.appendChild(bookRow(c, p.keyword, zoneOf(c)));
+      });
+      if (!grid.children.length) grid.remove();
+      box.appendChild(group);
+    });
+  }
+  if (!box.children.length) box.innerHTML = q
+    ? `<p class="empty">Không tìm thấy dự án hoặc cuốn khớp "${esc(q)}".</p>`
+    : '<p class="empty">Chưa có dự án. Tạo dự án ở phía trên.</p>';
 }
 
 // "Lịch đã làm": thẻ tổng quan + 3 vùng có khung riêng, xếp theo mức cần để ý:
@@ -678,10 +747,12 @@ function renderWorkspaceCards() {
 // Thanh lọc (nhớ trong máy) + ô tìm SKU lọc trên cả 3 vùng.
 const ZONES = [
   { key: 'broken', title: 'Bị dở', icon: '!', hint: 'Cần bạn xử lý: lỗi giữa chừng hoặc bị ChatGPT từ chối', states: ['error', 'rejected'] },
-  { key: 'running', title: 'Đang làm', icon: '…', hint: 'Chưa xong, chưa lỗi: đang chạy hoặc chờ tới lượt', states: ['pending'] },
+  { key: 'running', title: 'Đang làm', icon: '…', hint: 'Các cuốn đã được nhận xử lý', states: ['pending'] },
+  { key: 'queued', title: 'Đang chờ', icon: '⌛', hint: 'Chờ cuốn đang làm hoàn tất rồi mới nhận xử lý', states: ['queued'] },
   { key: 'done', title: 'Đã xong', icon: '✓', hint: 'Đủ trang in, ảnh quảng cáo và listing - bấm bìa để mở thư mục', states: ['done'] },
 ];
 const STAGE_LABEL = {
+  queued: 'Đang chờ',
   angles: 'Lên ý tưởng', concept: 'Viết concept', images: 'Vẽ ảnh', render: 'Dàn trang in', mockup: 'Ảnh quảng cáo',
   listing: 'Viết listing', printify: 'Đẩy Printify', crash: 'Lỗi bất ngờ', ip_rejected: 'Bị từ chối',
 };
@@ -753,11 +824,10 @@ function openDetail(c, keyword) {
 }
 
 function cloneBookControls(c) {
-  if (c.source !== 'clone') return null;
   const box = document.createElement('div');
   box.className = 'clone-book-controls';
   box.addEventListener('click', (e) => e.stopPropagation());
-  if (c.source_url) {
+  if (c.source === 'clone' && c.source_url) {
     const btn = button('Copy URL', 'btn-small btn-ghost', async () => {
       try { await navigator.clipboard.writeText(c.source_url); toast('Đã chép URL sản phẩm gốc', 'success'); }
       catch (_) { toast('Không chép được URL. Hãy cho phép trình duyệt truy cập clipboard.', 'error'); }
@@ -860,10 +930,10 @@ function renderResults() {
   const overview = S.openWorkspace === null;
   $('btnBackProjects').hidden = overview;
   $('resultsTitle').textContent = overview ? 'Dự án' : (S.workspaces.find((p) => p.id === S.openWorkspace)?.name || 'Chưa phân dự án');
-  $('bookSearch').placeholder = overview ? 'Tìm tên dự án…' : 'Tìm SKU / tên cuốn…';
+  $('bookSearch').placeholder = overview ? 'Tìm dự án / SKU / tên…' : 'Tìm SKU / tên cuốn…';
   if (overview) {
     $('zoneBar').hidden = true;
-    $('bookCount').textContent = `${S.workspaces.length} dự án`;
+    $('bookCount').textContent = bookQuery() ? `${searchHits().length} cuốn khớp` : `${S.workspaces.length} dự án`;
     renderWorkspaceCards(); return;
   }
   const books = scopedProjects().reduce((n, p) => n + (p.concepts || []).length, 0);
@@ -1349,6 +1419,9 @@ async function openR2() {
   $('r2Secret').placeholder = d.secret_set ? `Đã lưu (${d.secret_hint || '••••'}) - để trống để giữ` : '';
   $('r2Bucket').value = d.bucket || '';
   $('r2Public').value = d.public_url || '';
+  $('sheetEndpoint').value = d.sheets?.endpoint || '';
+  $('sheetSecret').value = '';
+  $('sheetSecret').placeholder = d.sheets?.secret_set ? 'Đã lưu — để trống để giữ' : 'Ít nhất 32 ký tự';
   $('r2Modal').hidden = false;
 }
 
@@ -1357,10 +1430,12 @@ async function saveR2() {
     await api('/api/r2', {
       account_id: $('r2Account').value, access_key_id: $('r2Key').value, secret_access_key: $('r2Secret').value,
       bucket: $('r2Bucket').value, public_url: $('r2Public').value,
+      sheets: { endpoint: $('sheetEndpoint').value, secret: $('sheetSecret').value },
     });
     $('r2Secret').value = '';
+    $('sheetSecret').value = '';
     $('r2Modal').hidden = true;
-    toast('Đã lưu khoá R2.', 'success');
+    toast('Đã lưu kết nối R2 / Sheet.', 'success');
   } catch (err) {
     toast(err.message, 'error');
   }
@@ -1371,6 +1446,10 @@ const SHOP = { books: [], picked: new Set(), format: 'printify' };
 
 function shopExported(book) {
   return SHOP.format === 'calendaria' ? book.calendaria_exported_at : book.exported_at;
+}
+
+function shopBlocked(book) {
+  return SHOP.format === 'calendaria' && Boolean(book.exported_at || book.exported_csv);
 }
 
 async function openShopPicker(format = 'printify') {
@@ -1389,7 +1468,7 @@ async function openShopPicker(format = 'printify') {
     $('shopBooks').innerHTML = `<p class="empty">${esc(err.message)}</p>`;
     return;
   }
-  SHOP.picked = new Set(SHOP.books.filter((b) => !shopExported(b)).map((b) => b.path));
+  SHOP.picked = new Set(SHOP.books.filter((b) => !shopBlocked(b) && (!shopExported(b) || b.sheet_pending)).map((b) => b.path));
   renderShopBooks();
 }
 
@@ -1417,9 +1496,12 @@ function renderShopBooks() {
     const row = document.createElement('label');
     row.className = 'shop-book';
     const exportedAt = shopExported(b);
-    const state = exportedAt ? `<span class="tag">Đã xuất ${esc(exportedAt.slice(5, 16))}</span>`
+    const blocked = shopBlocked(b);
+    const state = blocked ? '<span class="tag">Đã xuất Printify</span>'
+      : b.sheet_pending ? '<span class="tag">Chờ đồng bộ Sheet</span>'
+      : exportedAt ? `<span class="tag">Đã xuất ${esc(exportedAt.slice(5, 16))}</span>`
       : b.pushed_at ? '<span class="tag">Đã đẩy R2, chưa xuất CSV</span>' : '<span class="tag new">Mới</span>';
-    row.innerHTML = `<input type="checkbox" ${SHOP.picked.has(b.path) ? 'checked' : ''}>
+    row.innerHTML = `<input type="checkbox" ${blocked ? 'disabled' : ''} ${SHOP.picked.has(b.path) ? 'checked' : ''}>
       ${b.cover ? `<img src="${thumbUrl(b.cover, 120)}" alt="" loading="lazy">` : '<img alt="">'}
       <span class="t"><strong>${esc(b.title)}</strong><small>${b.sku ? `${esc(b.sku)} · ` : ''}Xong ${esc(b.done_at.slice(5))}</small></span>${state}`;
     row.querySelector('input').addEventListener('change', (e) => {
@@ -1432,6 +1514,7 @@ function renderShopBooks() {
 }
 
 function updateShopPicked() {
+  SHOP.books.filter(shopBlocked).forEach((b) => SHOP.picked.delete(b.path));
   const n = SHOP.picked.size;
   const again = SHOP.books.filter((b) => SHOP.picked.has(b.path) && shopExported(b)).length;
   $('shopPicked').textContent = n ? `Đã chọn ${n} cuốn${again ? ` (${again} cuốn đã xuất trước đây, sẽ xuất lại)` : ''}` : 'Chưa chọn cuốn nào';
@@ -1459,10 +1542,12 @@ async function runShop(books, format = 'printify') {
       const summary = logs.find((l) => l.startsWith('Đã đẩy lên R2')) || '';
       const csvLine = logs.find((l) => l.startsWith('CSV: ')) || '';
       const csvPath = csvLine.slice(5).trim();
+      const sheetSummary = logs.filter((l) => l.startsWith('Sheet:')).at(-1) || '';
+      const sheetError = logs.find((l) => l.startsWith('Sheet: ✘'));
       const rel = csvPath.includes('projects') ? csvPath.slice(csvPath.indexOf('projects')).split(String.fromCharCode(92)).join('/') : '';
       box.innerHTML = t.status === 'success'
-        ? `${esc(summary)}${rel ? ` · <a href="${fileUrl(rel)}" download="${esc(rel.split('/').pop())}">Tải CSV</a>` : ` · ${esc(csvPath)}`}`
-        : `<span class="why">${esc(err || 'Có lỗi, xem Chi tiết.')}</span>`;
+        ? `${esc(summary)}${rel ? ` · <a href="${fileUrl(rel)}" download="${esc(rel.split('/').pop())}">Tải CSV</a>` : ` · ${esc(csvPath)}`} · ${esc(sheetSummary)}`
+        : `<span class="why">${esc(err || sheetError || 'Có lỗi, xem Chi tiết.')}</span>${rel ? ` · <a href="${fileUrl(rel)}" download>Tải CSV đã xuất</a>` : ''}`;
       if (t.status !== 'success' && /khoá R2/.test(err || '')) openR2();
     }, 2000);
   } catch (err) {

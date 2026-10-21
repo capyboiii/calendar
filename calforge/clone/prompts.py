@@ -10,6 +10,156 @@ from ..core import dates
 MONTHS = dates.MONTH_NAMES
 WEEKDAY = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 
+
+EXPANSION_RULES = """Study the attached source artworks before designing anything. Reference 1 is the primary style and identity reference. Preserve its rendering technique, palette, warmth, contrast, texture, lighting and emotional/visual appeal. Other references show scenes already used; do not repeat them.
+Infer the subject type: people, characters, animals, landscapes, architecture, objects, devotional art or typography. Adapt variation to that subject; never impose human posing or fashion on unrelated subjects.
+Preserve recognizable identity and the features that make the reference appealing. If appeal depends on a person's expressive face, physique or intimacy, keep those features prominent and readable. Do not hide the face, shrink the hero into scenery, cover the appealing silhouette with bulky clothing, or let machinery/props dominate. Maintain a comparable subject-to-frame ratio and emotional intensity without copying the pose.
+Invent BOTH a clearly different meaningful action, interaction or arrangement AND a clearly different overall composition for every new artwork across ALL books. A different background alone is insufficient. Do not automatically preserve source companions, mounts, opponents, weapons or props as identity. For clothed people, characters and anthropomorphic animals, clothing must differ materially in cut, layers, material and styling from source outfits and other new artworks, not merely recolor them. Preserve indispensable canonical, ceremonial or identifying clothing; vary other applicable elements instead. For non-human subjects vary arrangements, viewpoints and narrative details appropriate to the source.
+BACKGROUND VARIATION IS MANDATORY, independently of changes to action, pose, clothing or composition. Give EVERY new artwork a genuinely different location or environment from its source artwork AND every other new artwork across the entire group of books. For variants of the same source, assign a separate, clearly distinguishable setting to each book. Do not reuse the same room, balcony, rooftop, garden or landscape with only a different camera angle, crop, lighting, weather, time of day, props or color. Choose environments that naturally fit the subject and collection; preserve the shared artistic style and color tone, and keep the main subject prominent rather than letting the new background dominate. For subjects without a literal location, vary the meaningful surrounding arrangement or environmental motif to achieve equivalent background differentiation.
+MATCH THE REFERENCE'S BACKGROUND COMPLEXITY. Change the setting without increasing its visual complexity. Match the assigned source artwork's amount of background detail, object density, depth layering, negative space, softness/blur and visual prominence. A simple or softly blurred source background must remain equally simple or softly blurred; a detailed source may retain comparable detail, but must not become more elaborate. Use only enough environmental cues to establish the new location. Do not automatically add ornate architecture, elaborate machinery, crowds, decorative clutter, extra scenery layers or cinematic spectacle. Preserve the source's balance between subject and background; the subject must remain the focus. A different background does not mean a busier background.
+Keep the collection's original color tone; do not introduce a new color grade or contrasting style. References are artwork content, not product presentation: exclude calendar grids, binding, mockup edges, product titles, years, logos and sales copy. Preserve meaningful integral artwork lettering when supported by the reference collection, including authentic scripture/prayers; never borrow cover headings or invent illegible text. When there is no integral artwork text, add none.
+ORIENTATION AND EXTRACTION: The source may be photographed at an angle, sideways, upside down, foreshortened or surrounded by a calendar mockup. Mentally rectify the artwork plane and understand the upright scene first. Render a NEW flat, front-facing, upright composition. Heads, bodies, architecture and integral lettering must read naturally upright; no copied page tilt, diagonal paper edges or perspective distortion from the product photo. Gravity stays coherent; intentionally reclining subjects may recline naturally. Remove ALL binding, date grids, paper, wall/table backgrounds, hands holding the product and margins. Reconstruct missing scene areas; never render a photographed calendar page.
+Output finished landscape 4:3 artwork, full bleed, no calendar layout, borders or mockup. Before delivering, visually check upright orientation and clean artwork-only framing; correct any rotated scene, calendar remnants or copied source composition."""
+
+
+SOURCE_VARIANT_PLAN = """You are a senior art director and image-prompt designer.
+
+I have attached ONE source image. Plan exactly {count} distinct artwork concepts based on this reference, one for each assigned book. Each concept will later be rendered separately with this same reference attached.
+
+Do not generate images now.
+
+UNDERSTAND THE REFERENCE
+
+Study the artwork itself. If the reference is a calendar page, cover, product photo or mockup, mentally extract and straighten the underlying artwork first.
+Ignore calendar grids, dates, month labels, product titles, years, logos, binding, paper edges, borders, hands and the surrounding product presentation.
+Identify the subject, artistic style, rendering technique, palette, texture, lighting, emotional appeal, subject prominence and background complexity.
+
+SEPARATE IDENTITY FROM THE SOURCE SCENE
+
+Preserve the subject's recognizable identity and the features responsible for the reference's appeal.
+For people and characters, preserve recognizable facial features, hairstyle and other identifying characteristics. For animals, preserve the relevant species, markings and recognizable character features. For landscapes, architecture, objects, devotional art or typography, preserve the defining subject and visual language appropriate to that reference.
+Do not automatically preserve the source's pose, action, companion, mount, opponent, weapon, main prop or narrative event. These belong to the source scene, not necessarily to the subject's identity.
+Retain such an element only when it is indispensable to the subject's identity or meaning. Even then, create a different action and arrangement around it.
+
+CREATE ALL N CONCEPTS TOGETHER
+
+Develop the assigned concepts as one set so you can compare them before finalizing them.
+Every concept must differ meaningfully from the source AND from every other concept in BOTH:
+1. The main action, interaction, narrative event or meaningful arrangement.
+2. The overall composition: pose or silhouette, subject placement, framing and relationships between the main visual elements.
+A change of background, outfit, camera angle, lighting, weather or color alone does not qualify as a new concept.
+Do not transplant the source's action and arrangement into another location. Do not repeat one visual formula across all books.
+For example, if the source depicts a kitten knight riding a white wolf, do not make every concept another kitten riding the same wolf somewhere else. Preserve the kitten's identity and medieval visual world while developing different activities, interactions and compositions.
+Adapt this principle to the actual subject. Do not force human activities, clothing or poses onto unrelated subjects.
+
+WARDROBE AND APPEARANCE
+
+For clothed people, characters and anthropomorphic animals, vary the outfit meaningfully where appropriate: cut, layers, materials, styling, armor design or accessories. Recoloring the same outfit is insufficient.
+Preserve genuinely indispensable canonical, ceremonial or identifying garments. Do not treat every garment or accessory visible in the reference as mandatory.
+Keep the subject's appealing features visible. Do not hide an expressive face, obscure an appealing physique or silhouette with bulky clothing, or replace the subject's visual importance with props.
+
+BACKGROUND VARIATION
+
+Give each concept a clearly different setting or surrounding arrangement from the source and the other assigned concepts.
+Match the reference's background complexity, detail density, depth, negative space and softness. A simple or blurred background must remain comparably simple or blurred.
+Use only enough environmental detail to establish the new setting. Do not automatically add ornate architecture, elaborate machinery, crowds, decorative clutter or cinematic spectacle.
+For subjects without a literal location, vary the surrounding arrangement or environmental motif appropriately.
+
+PRESERVE THE VISUAL APPEAL
+
+Maintain the reference's artistic style, palette, warmth, contrast, rendering technique, texture and emotional intensity.
+Keep a comparable subject-to-frame ratio and visual hierarchy. The main subject must remain prominent and readable.
+Create novelty through the concept and composition, not through a different art style, excessive background complexity or a smaller, less engaging subject.
+
+TEXT
+
+Distinguish meaningful lettering within the artwork from text used to present or sell the product.
+Exclude product titles, cover headlines, calendar labels, years, branding and sales copy.
+Preserve meaningful integral artwork lettering when clearly supported by the reference, such as scripture, prayers or illustrated messages. Do not invent illegible text or borrow excluded product headings.
+If meaningful text is essential, state the exact text to render. Scripture and attributed quotations must be authentic and accurately cited.
+When the artwork has no integral text, add none.
+
+ORIENTATION AND OUTPUT FRAMING
+
+The source may be tilted, sideways, upside down, cropped or photographed in perspective. Understand its upright subject before planning.
+Every concept must produce a new flat, upright, front-facing landscape artwork in a 4:3 aspect ratio, full bleed.
+Exclude calendar layouts, grids, binding, paper edges, borders, mockups and photographed-page perspective.
+
+CHECK THE SET BEFORE RETURNING
+
+Silently compare every proposed concept with the source and the other assigned concepts.
+Reject and replace any concept that mainly repeats an existing action and arrangement with cosmetic changes.
+Confirm that all N concepts have:
+- A different main action, interaction or meaningful arrangement.
+- A clearly different overall composition.
+- An appropriate distinct setting or surrounding arrangement.
+- The reference's recognizable identity, visual appeal, style and color tone.
+- Background complexity comparable to the reference.
+Perform this comparison within this planning response. Do not output a separate review stage.
+
+RETURN FORMAT
+
+Return ONLY valid JSON in this structure:
+{{"artworks":[{{"id":"exact assignment id","prompt":"complete English image-generation prompt"}}]}}
+Return exactly one row per assignment, with no missing, duplicate or extra rows.
+Each prompt must stand alone with the source supplied as attachment 1. Describe the chosen subject, specific action or arrangement, outfit where applicable, setting, framing and composition.
+Make the new scene explicit. Do not merely say "make it different." Do not instruct the renderer to preserve the source's entire scene.
+Keep each prompt concise, approximately 100–150 words. Shared style, orientation and quality rules will be appended by the renderer, so avoid repeating them at length.
+Do not generate images or include commentary outside the JSON.
+
+Previously finalized assignments from other source artworks (avoid repeating their concepts):
+{previous}
+
+Assignments:
+{assignments}"""
+
+
+def expansion_plan(jobs, previous, source_count, book_count, *, variants=False):
+    import json
+    if variants and source_count == 1:
+        return SOURCE_VARIANT_PLAN.format(count=len(jobs), previous=json.dumps(previous, ensure_ascii=False),
+                                          assignments=json.dumps(jobs))
+    return ("You are a senior art director. Plan ONLY the assigned monthly artworks. Reference 1 means the first attachment of THIS message. "
+            + (f"There are {source_count} source artworks and {book_count} books. Every book needs 12 NEW artworks. "
+               "No source image will be copied into a book. For each assignment use its reference_index as the "
+               "specific source artwork to reinterpret. For missing-source months, reference_index=1 supplies style "
+               "and identity for an entirely new concept. Design different variants for every book, including when "
+               "all 12 source artworks are available. Each final rendering receives ONLY its assigned reference, "
+               "as attachment 1: describe the correct source identity and never refer to other attachment numbers.\n"
+               if variants else f"There are {source_count} shared originals per book and {book_count} books. "
+               "Originals stay unchanged; you are designing distinct completion images, not replacements.\n")
+            + EXPANSION_RULES
+            + "\nPreviously assigned prompts (avoid repeating their scenes, clothing and composition):\n"
+            + json.dumps(previous, ensure_ascii=False)
+            + "\nReturn ONLY JSON {\"artworks\":[{\"id\":\"assignment id\",\"prompt\":\"complete, detailed English image generation prompt\"}]}. "
+            "Exactly one row per requested assignment, no extra rows. Every prompt must stand alone with reference 1 attached. "
+            "Keep each prompt concise: 80–120 words describing its specific subject, action, setting, clothing and composition. "
+            "Every prompt must explicitly name its unique location/environment with only enough background cues to identify it, "
+            "and match the assigned reference's background simplicity or detail level. Do not embellish the environment beyond the source. "
+            "A change of pose, camera angle or lighting does not satisfy the mandatory background variation. "
+            "The renderer appends the shared identity/style/orientation/quality rules, so do not repeat those long rules in each prompt. "
+            "Do not render images yet. Assignments:\n" + json.dumps(jobs))
+
+
+def expansion_render(prompt):
+    return ("Generate exactly ONE image for the following assigned artwork. Reference 1 means the first attachment "
+            "of the CURRENT request, overriding earlier reference assignments in this chat. "
+            "The assigned concept has already been planned centrally. Execute its subject, action, setting, clothing "
+            "and composition faithfully; do not invent a replacement concept or redesign the assignment. "
+            "The shared variation rules below guide execution of this assignment, not a new idea-planning step. "
+            "Do not output a collage or a written explanation.\n"
+            + EXPANSION_RULES
+            + "\nThe attached image is a reference for identity, style, palette and visual appeal. "
+            "Its depicted scene is not the composition to reproduce. "
+            "Follow the assigned concept's action, outfit, setting and composition. "
+            "When these differ from the reference, follow the assigned concept. "
+            "Do not restore the source's pose, companions, mount, opponent or props unless the assigned concept explicitly requires them. "
+            "Create a new scene from scratch, not a lightly edited version of the reference. "
+            "Match its visual appeal and background complexity. "
+            "Require BOTH a different main action/meaningful arrangement AND a different overall composition; "
+            "a background change alone is insufficient. Wardrobe variation applies to anthropomorphic animals as well as people."
+            + "\nASSIGNED ARTWORK:\n" + prompt)
+
 # ------------------------------------------------------------------ 12 artwork (phiên 1, tài khoản A)
 # Artwork prompts approved on 2026-10-08; reference assignments are filled dynamically.
 ARTWORK_TEXT_RULES = """TEXT ON THE ARTWORK
@@ -305,10 +455,10 @@ def meta_repair(errors: list[str]) -> str:
 
 
 # ------------------------------------------------------------------ bìa trước (cùng phiên)
-def cover_prompt(title: str, subtitle: str, year: int, fresh: bool = False) -> str:
-    """fresh: phiên mới (ChatGPT chưa thấy artwork) - code đính 4 artwork (tháng 1, 4, 7, 10) làm mẫu."""
+def cover_prompt(title: str, subtitle: str, year: int, fresh: bool = False, reference_count: int = 4) -> str:
+    """fresh: use the references attached to this cover request, including in an existing chat."""
     sub = f'\nRender this exact subtitle once, spelled exactly: "{subtitle}".' if subtitle else ""
-    seen = ("the 4 attached artworks (they are NOT images to edit; only follow their style)" if fresh
+    seen = (f"the {reference_count} attached artworks in THIS message (they are NOT images to edit; only follow their style)" if fresh
             else "the 12 artworks above")
     return f"""Now create the FRONT COVER of this {year} wall calendar as ONE new image.
 Use the same subject, drawing / photo style, stroke quality and color tone as {seen}, with a new composition and background that is different from all of them.
@@ -455,9 +605,23 @@ def grid_continue(year: int, months: list[int]) -> str:
             f"{'10 ' if months == [11, 12] else ''}pages.\n\n{calls}")
 
 
-def grid_redo(year: int, month: int, reason: str) -> str:
-    """Một trang bị OCR loại: vẽ lại đúng CALL đó ngay trong phiên (không cần đính lại ảnh)."""
-    return (f"The {MONTHS[month - 1]} page you just made has calendar errors found by an automatic check ({reason}). "
-            f"Generate it again with 1 single image call, SAME layout as the other pages. Place EVERY date exactly in "
-            "its correct weekday column, each number once.\n\n"
-            + _call(year, month, month).replace(f"attached image {month}", f"the {MONTHS[month - 1]} artwork above"))
+def grid_redo(year: int, month: int, reason: str, *, layout_ref: bool = False, attempt: int = 1) -> str:
+    """Explicit references and deterministic date positions for a single repair."""
+    weeks = calendar.Calendar(firstweekday=6).monthdayscalendar(year, month)
+    table = 'SUN | MON | TUE | WED | THU | FRI | SAT\n' + '\n'.join(
+        ' | '.join(str(day) if day else 'BLANK' for day in week) for week in weeks)
+    refs = ('Image 1 is a finished page: copy ONLY its layout and typography, never its dates. '
+            'Image 2 is the target artwork: use ONLY its palette and subtle motifs.' if layout_ref else
+            'Image 1 is the target artwork: use ONLY its palette and subtle motifs.')
+    strict = ('Previous repair failed. Rebuild the date grid from the table below; do not copy date positions '
+              'from any previous image. Check every row and column before returning the image.\n' if attempt > 1 else '')
+    design = SHARED_DESIGN.format(n=1)
+    if layout_ref:
+        design = design.replace('You choose the layout and typography,',
+                                'Use the layout and typography of attached image 1,')
+    return (f'Render ONLY {MONTHS[month - 1].upper()} {year}, exactly ONE image. '
+            f'Automatic check reported: {reason}.\n{refs}\n{strict}'
+            + design + '\n\n' + month_facts(year, month)
+            + '\nEXACT DATE TABLE: each line is one week, columns stay in the order shown. '
+              'BLANK means an empty cell; never print the word BLANK. Do not wrap or shift dates.\n'
+            + table + '\nUse the image generation tool. Return the rendered image, no text or download promise.')

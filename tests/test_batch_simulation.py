@@ -269,6 +269,11 @@ class Sim:
             (pdir / n).mkdir(parents=True)
         self.pool = AccountPool(pdir, names, cap=cap, launch_gap_s=0)
         self.pool.rest_s = 0.3
+        # Compress every cooldown, including fixed navigation/browser recovery
+        # durations (120/600s), while retaining real pool release/retry behavior.
+        real_rest = self.pool.rest
+        self.pool.rest = lambda name, role, seconds=None, reason='': real_rest(
+            name, role, min(float(seconds if seconds is not None else self.pool.rest_s), .3), reason)
         self.pool.throttle_window_s, self.pool.throttle_hold_s = 0.5, 0.3     # thời gian nén như rest_s
         self.pool._notify = lambda msg: None
         self.world = World(seed, self.pool, **world_kw)

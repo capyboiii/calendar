@@ -137,11 +137,13 @@ def _pid_alive(pid: int) -> bool:
 class AccountPool:
     def __init__(self, profiles_dir: Path, names: list[str], *, cap: int, launch_gap_s: float = 5.0,
                  locked=None, state_file: Path | None = None, clock=time.monotonic, sleep=time.sleep,
-                 free_ram=None, notify=None, leases: bool = False, later=None, global_cap: int | None = None):
+                 free_ram=None, notify=None, leases: bool = False, later=None, global_cap: int | None = None,
+                 queue_rank: int | None = None):
         self.profiles_dir = Path(profiles_dir)
         self.names = list(names)
         self.cap = max(1, int(cap))
         self.global_cap = max(1, int(global_cap)) if global_cap is not None else None
+        self.queue_rank = queue_rank
         self.launch_gap_s = float(launch_gap_s)
         self.state_file = state_file
         self._locked = locked or (lambda name: False)
@@ -151,6 +153,7 @@ class AccountPool:
         self._gate_busy = False
         self._leases = leases
         self._wait_owner = uuid.uuid4().hex
+        self._wait_cancels: set[str] = set()
         self._later = later or (lambda: set())            # tài khoản nên để dành cho tiến trình khác (lấy sau cùng)
         self._clock, self._sleep = clock, sleep
         self._cv = threading.Condition()
@@ -353,6 +356,11 @@ class AccountPool:
         room = min(self._limit(), len(self.names))          # ít tài khoản hơn trần: tính theo số tài khoản
         return max(0, room - self._count(CHAT) - need_chat)
 
+    def image_capacity(self) -> int:
+        """Current global artwork capacity, including RAM and chat reservation."""
+        with self._cv:
+            return self._image_slots()
+
     # ---------- trần co giãn ----------
     def _floor(self) -> int:
         return min(self.cap, MIN_LIMIT)
@@ -486,12 +494,15 @@ class AccountPool:
                     token = f'{self._wait_owner}:{request_id or threading.get_ident()}:{role}'
                     try:
                         state = waits.load(self.profiles_dir, _pid_alive)
+                        state['requests'] = [r for r in state['requests'] if r['token'] not in self._wait_cancels]
                         room = len(self.use) < self._limit() and (role != IMAGE or self._count(IMAGE) < self._image_slots())
-                        waits.register(state, token, [n for n in order if room and n not in self.dead and not self._resting(n, role)], role, priority)
+                        waits.register(state, token, [n for n in order if room and n not in self.dead and not self._resting(n, role)], role, priority,
+                                       self.queue_rank)
                         slots = max(0, budget - self._global_used(limit=budget))
                         reserved = waits.allocations(state, self._free_for, slots)
                         selected = next((r for r in state['requests'] if r['token'] == token), None)
                         waits.save(self.profiles_dir, state)
+                        self._wait_cancels.clear()
                     except OSError:
                         self._gate_busy = True
                         return None
@@ -525,10 +536,15 @@ class AccountPool:
         from . import pool_waiters as waits
         token = f'{self._wait_owner}:{request_id or threading.get_ident()}:{role}'
         try:
-            with self._cv, self._process_gate() as acquired:
-                state = waits.load(self.profiles_dir, _pid_alive)
-                state['requests'] = [r for r in state['requests'] if r['token'] != token]
-                waits.save(self.profiles_dir, state)
+            with self._cv:
+                self._wait_cancels.add(token)
+                with self._process_gate(wait=False) as acquired:
+                    if not acquired:
+                        return  # retry cleanup during the next acquisition/cancellation
+                    state = waits.load(self.profiles_dir, _pid_alive)
+                    state['requests'] = [r for r in state['requests'] if r['token'] not in self._wait_cancels]
+                    waits.save(self.profiles_dir, state)
+                    self._wait_cancels.clear()
         except OSError:
             pass  # abandoned requests expire; a cleanup failure must not fail a completed book
 
@@ -569,9 +585,24 @@ class AccountPool:
                             state = waits.load(self.profiles_dir, _pid_alive)
                         except OSError:
                             state = {'requests': []}
-                        if any(name in r['names'] for r in state['requests']):
+                        if any(name in r['names'] and (self.queue_rank is None or
+                               (r.get('queue_rank') or 0) <= self.queue_rank) for r in state['requests']):
                             return True
             return self._count(IMAGE) > self._image_slots() or len(self.use) > self._limit()   # chat thiếu chỗ / co trần
+
+    def spare_capacity(self) -> int:
+        """Read global free slots after reserving accounts for existing ready requests."""
+        from . import pool_waiters as waits
+        with self._cv, self._process_gate(wait=False) as acquired:
+            if not acquired:
+                return 0
+            budget = self.global_cap or self.cap
+            slots = max(0, budget - self._global_used(limit=budget))
+            free = {n for n in self.names if self._free_for(n, CHAT) or self._free_for(n, IMAGE)}
+            slots = min(slots, len(free))
+            state = waits.load(self.profiles_dir, _pid_alive)
+            reserved = waits.allocations(state, self._free_for, slots)
+            return max(0, slots - len(reserved))
 
     @contextmanager
     def reserve_chat(self, n: int = 1):
@@ -676,7 +707,10 @@ def get_pool(cfg: dict | None = None) -> AccountPool:
             _POOL = AccountPool(pdir, names, cap=cap, launch_gap_s=cfg.get("launch_gap_s", 5),
                                 locked=lambda n: is_profile_locked(pdir / n), free_ram=free_ram_gb,
                                 state_file=Path(cfg["projects_dir"]) / ".tai_khoan_live.json",
-                                leases=True, later=_plus_saved_for_clone(cfg))
+                                leases=True, later=_plus_saved_for_clone(cfg),
+                                global_cap=min(max(1, int(os.environ.get('CALFORGE_GLOBAL_BROWSER_CAP') or cap)),
+                                               max(1, int(cfg.get('max_browsers', 40))), max(1, len(names))),
+                                queue_rank=int(os.environ['CALFORGE_QUEUE_RANK']) if os.environ.get('CALFORGE_QUEUE_RANK') else None)
             _POOL.rest_s = float(cfg.get("quota_wait_s", 1800))
             print(f"[tài khoản] {len(names)} tài khoản, tối đa {cap} Chrome cùng lúc "
                   f"(RAM trống {free_ram_gb():.1f} GB), mở cách nhau {_POOL.launch_gap_s:.0f}s", flush=True)

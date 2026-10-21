@@ -11,6 +11,7 @@ import sys
 import threading
 import time
 import urllib.parse
+import uuid
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -24,7 +25,8 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 
 class Task:
-    def __init__(self, task_id: str, cmd: list[str], description: str, action: str = "", params: dict | None = None):
+    def __init__(self, task_id: str, cmd: list[str], description: str, action: str = "", params: dict | None = None,
+                 log_file: Path | None = None):
         self.id = task_id
         self.action = action
         self.params = params or {}
@@ -38,9 +40,19 @@ class Task:
         self.return_code: int | None = None
         self.process: subprocess.Popen | None = None
         self.lock = threading.Lock()
+        self.log_file = log_file
+        self.log_error = ""
 
     def append_log(self, text: str):
         with self.lock:
+            if self.log_file is not None:
+                try:
+                    self.log_file.parent.mkdir(parents=True, exist_ok=True)
+                    with self.log_file.open("a", encoding="utf-8") as stream:
+                        for line in text.splitlines() or [""]:
+                            stream.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {line}\n")
+                except OSError:
+                    self.log_error = "Không lưu được log tác vụ ra ổ đĩa."
             self.logs.append(text)
             if len(self.logs) > 3000:
                 self.logs.pop(0)
@@ -59,6 +71,8 @@ class Task:
                 "return_code": self.return_code,
                 "logs": self.logs[max(0, since - self.log_offset):],
                 "total_logs": self.log_offset + len(self.logs),
+                "log_file": str(self.log_file) if self.log_file is not None else "",
+                "log_error": self.log_error,
             }
 
 
@@ -79,10 +93,11 @@ class TaskManager:
         self.lock = threading.Lock()
 
     def start_task(self, args: list[str], description: str, action: str = "", params: dict | None = None) -> str:
-        task_id = f"t_{int(time.time() * 1000)}"
+        task_id = f"t_{int(time.time() * 1000)}_{uuid.uuid4().hex[:6]}"
         # -u: không đệm stdout, để log chảy trực tiếp lên UI (không dồn về cuối)
         cmd = [_console_python(), "-u", "-m", "calforge"] + args
-        task = Task(task_id, cmd, description, action, params)
+        log_file = Path(config.load()["projects_dir"]) / "_nhat_ky" / f"{task_id}.log"
+        task = Task(task_id, cmd, description, action, params, log_file=log_file)
         with self.lock:
             self.tasks[task_id] = task
 
@@ -92,29 +107,41 @@ class TaskManager:
             env["PYTHONUTF8"] = "1"
             env["PYTHONUNBUFFERED"] = "1"
             env.pop('CALFORGE_PROJECT_ID', None)
-            if task.params.get('project_id'):
+            env.pop('CALFORGE_QUEUE_RANK', None)
+            if task.params.get('_queue_rank'):
+                env['CALFORGE_QUEUE_RANK'] = str(task.params['_queue_rank'])
+            env.pop('CALFORGE_GLOBAL_BROWSER_CAP', None)
+            if task.params.get('_pool_cap'):
+                env['CALFORGE_GLOBAL_BROWSER_CAP'] = str(task.params['_pool_cap'])
+            if task.params.get('project_id') and task.action != 'clone' and args[0] != 'clone-run':
                 env['CALFORGE_PROJECT_ID'] = task.params['project_id']
             try:
                 task.append_log(f"🚀 Bắt đầu: python -m calforge {' '.join(args)}\n")
-                p = subprocess.Popen(
-                    cmd,
-                    cwd=str(ROOT),
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                    bufsize=1,
-                    env=env,
-                    creationflags=NO_WINDOW,
-                )
-                task.process = p
+                task.append_log(f"Nhật ký: {log_file}")
+                with self.lock:
+                    if task.status != 'running':
+                        return
+                    p = subprocess.Popen(
+                        cmd,
+                        cwd=str(ROOT),
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        text=True,
+                        encoding="utf-8",
+                        errors="replace",
+                        bufsize=1,
+                        env=env,
+                        creationflags=NO_WINDOW,
+                    )
+                    task.process = p
                 for line in p.stdout:
                     task.append_log(line.rstrip())
                 p.wait()
                 task.return_code = p.returncode
-                if task.status != "stopped":
+                if task.status not in ("stopped", "stopping"):
                     task.status = "success" if p.returncode == 0 else "failed"
+                if task.status == 'stopping':
+                    task.status = 'stopped'
                 task.end_time = time.time()
                 task.append_log(f"\n🏁 Hoàn thành (mã thoát: {p.returncode}) trong {task.end_time - task.start_time:.1f}s")
             except Exception as e:
@@ -131,13 +158,11 @@ class TaskManager:
             task = self.tasks.get(task_id)
             return task.to_dict(since) if task else None
 
-    def running(self, include_login: bool = False, include_clone: bool = False,
+    def running(self, include_login: bool = False, include_clone: bool = True,
                 include_shop: bool = False) -> Task | None:
-        """Việc chính đang chạy. Không tính: cửa sổ đăng nhập một tài khoản (không được chặn batch), lượt
-        "Clone sản phẩm" (chạy SONG SONG với batch theo ý tưởng - hai bên chia tài khoản bằng khoá trong profile), và
-        lượt đẩy R2 + xuất CSV (chỉ đọc cuốn đã xong + dùng mạng, không đụng tài khoản / Chrome / GPU)."""
+        """Idea, clone and book work share one queue; login and R2 remain independent."""
         with self.lock:
-            return next((t for t in self.tasks.values() if t.status == "running"
+            return next((t for t in self.tasks.values() if t.status in ("running", "stopping")
                          and (include_login or t.action != "login")
                          and (include_clone or t.action != "clone")
                          and (include_shop or t.action != "shop")), None)
@@ -148,7 +173,7 @@ class TaskManager:
 
     def clone_running(self) -> Task | None:
         with self.lock:
-            return next((t for t in self.tasks.values() if t.status == "running" and t.action == "clone"), None)
+            return next((t for t in self.tasks.values() if t.status in ("running", "stopping") and t.action == "clone"), None)
 
     def login_running(self, profile: str) -> Task | None:
         with self.lock:
@@ -159,15 +184,24 @@ class TaskManager:
         """Dừng tác vụ + mọi tiến trình con (Chrome của Playwright) để lần chạy sau không vướng profile."""
         with self.lock:
             task = self.tasks.get(task_id)
-        if not task or task.status != "running" or not task.process:
-            return False
-        task.status = "stopped"
-        task.append_log("\n⏹ Người dùng bấm Dừng")
-        if os.name == "nt":
-            subprocess.run(["taskkill", "/PID", str(task.process.pid), "/T", "/F"], capture_output=True, check=False,
-                           creationflags=NO_WINDOW)
-        else:
-            task.process.kill()
+            if not task or task.status != 'running':
+                return False
+            task.status = 'stopping' if task.process else 'stopped'
+            process = task.process
+        task.append_log("⏹ Đang dừng tác vụ; giữ phần đã hoàn thành")
+        if process is not None:
+            try:
+                if os.name == 'nt':
+                    subprocess.run(['taskkill', '/PID', str(process.pid), '/T', '/F'], capture_output=True,
+                                   check=False, creationflags=NO_WINDOW)
+                else:
+                    process.kill()
+                process.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                # Keep blocking the next FIFO entry until the worker observes exit.
+                return False
+            task.status = 'stopped'
+        task.end_time = time.time()
         return True
 
     def list_tasks(self) -> list[dict]:
@@ -180,8 +214,6 @@ CLONE_MAX_BODY = 120 * 1024 * 1024
 
 
 def _clone_book_info(book: Path, concept: dict) -> dict:
-    if concept.get("source") != "clone":
-        return {}
     from ..clone import store
     item = {}
     ident = str(concept.get("angle_id", ""))
@@ -196,6 +228,8 @@ def _clone_book_info(book: Path, concept: dict) -> dict:
         review = {}
     if not isinstance(review, dict):
         review = {}
+    if concept.get("source") != "clone":
+        return {"reviewed": review.get("reviewed") is True}
     return {"source": "clone", "source_url": concept.get("source_url") or item.get("source_url", ""),
             "reviewed": review.get("reviewed") is True}
 
@@ -240,7 +274,11 @@ def _clone_items() -> dict:
             it["reviewed"] = _clone_book_info(Path(it["book"]), {"source": "clone"}).get("reviewed", False)
     task = next(({k: v for k, v in t.items() if k != "logs"} for t in TASK_MANAGER.list_tasks()
                  if t.get("action") == "clone"), None)
-    return {"items": items, "plus": plus, "unknown": unknown, "task": task}
+    queue = batch_queue().snapshot()
+    scheduled = [ident for row in queue['items'] if row['status'] in ('queued', 'running')
+                 for ident in row['params'].get('clone_ids', [])]
+    return {"items": items, "plus": plus, "unknown": unknown, "task": task,
+            'scheduled_ids': scheduled, 'queue_paused': queue['paused']}
 
 
 def _free_profile(name: str) -> str:
@@ -343,6 +381,8 @@ def _shop_books() -> list[dict]:
             "exported_csv": st.get("exported_csv", ""),
             "calendaria_exported_at": st.get("calendaria_exported_at", ""),
             "calendaria_exported_csv": st.get("calendaria_exported_csv", ""),
+            "sheet_synced_at": st.get("sheet_synced_at", ""),
+            "sheet_pending": bool(st.get("sheet_pending")),
             "done_at": _done_at(b),
         })
     out.sort(key=lambda x: x["done_at"], reverse=True)
@@ -362,6 +402,25 @@ def run_args(params: dict) -> tuple[list[str], str]:
     kind = params.get("action") or "run"
     if params.get('project_id'):
         workspaces.require(Path(config.load()['projects_dir']), params['project_id'])
+    if kind == 'clone':
+        from ..clone import store
+        ids = params.get('clone_ids')
+        if (not isinstance(ids, list) or not ids or len(ids) > 5
+                or any(not isinstance(i, str) for i in ids) or len(set(ids)) != len(ids)):
+            raise ValueError('Danh sách cuốn clone không hợp lệ.')
+        projects = Path(config.load()['projects_dir'])
+        for ident in ids:
+            item = store.read(store.item_dir(projects, ident))
+            if not item:
+                raise ValueError('Cuốn clone đã bị bỏ khỏi hàng đợi.')
+            if (item.get('project_id') or '') != (params.get('project_id') or ''):
+                raise ValueError('Cuốn clone không thuộc dự án này.')
+        args = ['clone-run']
+        for ident in ids:
+            args += ['--item', ident]
+        if params.get('show'):
+            args += ['--show']
+        return args, f"Clone {len(ids)} cuốn: {params.get('title') or 'sản phẩm'}"
     if kind == "produce":
         target = _book_arg(params)
         _reject_terminal_book(target)
@@ -435,6 +494,14 @@ def _reject_terminal_book(target: Path) -> None:
 
 def _batch_result(params: dict) -> tuple[int, int, bool]:
     """(số đạt, tổng, còn việc có thể làm lại) cho hàng đợi."""
+    if params.get('action') == 'clone':
+        from ..clone import store
+        projects = Path(config.load()['projects_dir'])
+        rows = [store.read(store.item_dir(projects, ident)) for ident in params.get('clone_ids', [])]
+        ok = sum(r.get('status') == 'done' or store._book_finished(r.get('book')) for r in rows)
+        retryable = any(r and r.get('status') != 'rejected' and not r.get('terminal')
+                        and r.get('status') != 'done' and not store._book_finished(r.get('book')) for r in rows)
+        return ok, len(rows), retryable
     if (params.get("action") or "run") != "run":
         try:
             st = json.loads(layout.status_file(_book_arg(params)).read_text(encoding="utf-8"))
@@ -474,18 +541,101 @@ def _batch_ideas_done(params: dict) -> bool:
 
 
 _QUEUE = None
+_QUEUE_INIT_LOCK = threading.Lock()
+
+
+def _queue_conflicts(a: dict, b: dict) -> bool:
+    """A book repair cannot write while its parent idea/clone batch owns it."""
+    from ..clone import store
+    from ..ideation.pipeline import slugify
+    root = Path(config.load()['projects_dir'])
+    def targets(p):
+        if p.get('concept'):
+            return [(Path(p['concept']).resolve(), False)]
+        if p.get('action') == 'clone':
+            result = []
+            for ident in p.get('clone_ids') or []:
+                d = store.item_dir(root, ident)
+                item = store.read(d)
+                result.append(((Path(item['book']) if item.get('book') else d / 'work').resolve(), False))
+            return result
+        if (p.get('action') or 'run') == 'run' and p.get('keyword'):
+            topic = products.root(workspaces.run_root(root, p), p.get('product') or products.DEFAULT) / slugify(p['keyword'])
+            return [(topic.resolve(), True)]
+        return []
+    return any(x == y or (recursive_x and y.is_relative_to(x)) or (recursive_y and x.is_relative_to(y))
+               for x, recursive_x in targets(a) for y, recursive_y in targets(b))
 
 
 def batch_queue():
     global _QUEUE
-    if _QUEUE is None:
-        from .batch_queue import BatchQueue
-        cfg = config.load()
-        from ..llm.pool import free_ram_gb
-        _QUEUE = BatchQueue(TASK_MANAGER, Path(cfg["projects_dir"]) / ".hang_doi.json", run_args, _batch_result,
-                            ideas_done=_batch_ideas_done, free_ram=free_ram_gb,
-                            overlap_min_gb=float(cfg.get("overlap_min_free_ram_gb", 6)))
+    with _QUEUE_INIT_LOCK:
+        if _QUEUE is None:
+            from .batch_queue import BatchQueue
+            cfg = config.load()
+            from ..llm.pool import free_ram_gb
+            queue = BatchQueue(TASK_MANAGER, Path(cfg["projects_dir"]) / ".hang_doi.json", run_args, _batch_result,
+                                ideas_done=_batch_ideas_done, free_ram=free_ram_gb,
+                                overlap_min_gb=float(cfg.get("overlap_min_free_ram_gb", 6)),
+                                capacity=_queue_capacity, conflicts=_queue_conflicts)
+            # One-time migration: retain old idea ordering and append legacy pending
+            # clone groups. Never resurrect a queue entry deliberately removed later.
+            if not queue.unified:
+                from ..clone import store
+                _enqueue_clones([i for i in store.items(cfg['projects_dir']) if i.get('status') in ('pending', 'running')],
+                                queue=queue, start=False)
+                with queue.lock:
+                    queue.unified = True
+                    queue._save()
+            _QUEUE = queue
     return _QUEUE
+
+
+def _queue_capacity():
+    """Unused accounts/Chrome slots after satisfying pending work from started jobs."""
+    from ..llm import accounts
+    from ..llm.pool import AccountPool, RAM_HOLD_GB, GB_PER_BROWSER, free_ram_gb, browser_cap
+    cfg = config.load()
+    pdir = config.get_profiles_dir(cfg)
+    names = [p.name for p in pdir.iterdir() if p.is_dir() and not p.name.startswith('.')
+             and accounts.has_chatgpt_session(p)] if pdir.exists() else []
+    limit = min(max(1, int(cfg.get('max_browsers', 40))), len(names))
+    if not limit:
+        return {'slots': 0, 'limit': 1}
+    shared = _QUEUE.pool_limit if _QUEUE is not None else None
+    # Freeze the common RAM budget while jobs run. Leases include Chrome launches
+    # still waiting at the launch gate, so spare RAM must not be counted twice.
+    limit = min(limit, shared if shared is not None else browser_cap(cfg.get('max_browsers', 40)))
+    ram_slots = max(0, int((free_ram_gb() - RAM_HOLD_GB) / GB_PER_BROWSER))
+    monitor = AccountPool(pdir, names, cap=limit, global_cap=limit, leases=True,
+                          locked=lambda n: accounts.is_profile_locked(pdir / n))
+    return {'slots': min(ram_slots, monitor.spare_capacity()), 'limit': limit}
+
+
+def _enqueue_clones(items, *, queue=None, start=True):
+    """Publish exact clone groups to FIFO; future additions cannot be swept into a running job."""
+    q = queue if queue is not None else batch_queue()
+    if start:
+        q.tick()  # retire a just-stopped task before deduplicating a retry
+    entries = []
+    groups = {}
+    for item in sorted(items, key=lambda i: (i.get('created', ''), i['id'])):
+        key = (item.get('project_id') or '', item.get('source_group') or item['id'])
+        groups.setdefault(key, []).append(item)
+    with q.lock:
+        scheduled = {ident for entry in q.items if entry['status'] in ('queued', 'running')
+                     for ident in entry['params'].get('clone_ids', [])}
+        for (project_id, _), rows in groups.items():
+            rows = [i for i in rows if i['id'] not in scheduled]
+            if not rows:
+                continue
+            params = dict(action='clone', clone_ids=[i['id'] for i in rows], project_id=project_id,
+                          title=rows[0].get('group') or rows[0].get('title') or 'sản phẩm')
+            entries.append(q.add(params, start=False))
+            scheduled.update(params['clone_ids'])
+    if start:
+        q.tick()
+    return entries
 
 
 class StudioHandler(SimpleHTTPRequestHandler):
@@ -603,12 +753,14 @@ class StudioHandler(SimpleHTTPRequestHandler):
         if path == "/api/r2":
             cfg = config.load()
             r2 = cfg.get("r2") or {}
+            sheets = cfg.get("sheets") or {}
             sec = str(r2.get("secret_access_key") or "")
             return self._send_json({
                 "account_id": r2.get("account_id", ""), "access_key_id": r2.get("access_key_id", ""),
                 "bucket": r2.get("bucket", ""), "public_url": r2.get("public_url", ""),
                 "prefix": r2.get("prefix", "calendars"),
-                "secret_set": bool(sec), "secret_hint": ("…" + sec[-4:]) if len(sec) > 8 else ""})
+                "secret_set": bool(sec), "secret_hint": ("…" + sec[-4:]) if len(sec) > 8 else "",
+                "sheets": {"endpoint": sheets.get("endpoint", ""), "secret_set": bool(sheets.get("secret"))}})
         if path == "/api/unfinished":
             return self._send_json({"books": _unfinished_books()})
 
@@ -637,6 +789,22 @@ class StudioHandler(SimpleHTTPRequestHandler):
         return self._send_json({"error": f"Unknown endpoint: {path}"}, status=HTTPStatus.NOT_FOUND)
 
     def _handle_api_post(self, path: str):
+        if path == '/api/sheet/export-selected':
+            from ..publish.selected_sheet_csv import SelectionError
+            from ..publish.selected_sheet_xlsx import export_selected_xlsx
+            try:
+                length = int(self.headers.get('Content-Length', 0))
+                if not 0 < length <= 1_000_000:
+                    raise SelectionError('File TXT trống hoặc quá lớn.')
+                body = json.loads(self.rfile.read(length).decode('utf-8'))
+                if not isinstance(body, dict):
+                    raise SelectionError('Yêu cầu nhập TXT không hợp lệ.')
+                result = export_selected_xlsx(body.get('text'))
+                return self._send_json(result)
+            except (SelectionError, ValueError, UnicodeError) as error:
+                message = str(error) if isinstance(error, SelectionError) else 'Không đọc được nội dung TXT.'
+                return self._send_json({'error': message}, status=HTTPStatus.BAD_REQUEST)
+
         if path == "/api/action":
             try:
                 length = int(self.headers.get("Content-Length", 0))
@@ -656,8 +824,14 @@ class StudioHandler(SimpleHTTPRequestHandler):
                     if not params.get('resume'):
                         workspaces.require(Path(config.load()['projects_dir']), params.get('project_id'))
                     cmd_args, desc = run_args(params)
+                    entry = batch_queue().add(params)
+                    return self._send_json({'task_id': entry.get('task_id'), 'queue_id': entry['id'],
+                                            'description': desc, 'status': entry['status']})
                 except ValueError as e:
                     return self._send_json({"error": str(e)}, status=HTTPStatus.BAD_REQUEST)
+                except OSError as e:
+                    return self._send_json({'error': f'Không lưu được hàng đợi: {e}'},
+                                           status=HTTPStatus.INTERNAL_SERVER_ERROR)
 
             elif action == "ideate":
                 keyword = params.get("keyword", "").strip()
@@ -735,6 +909,12 @@ class StudioHandler(SimpleHTTPRequestHandler):
                         return self._send_json({"error": "Chưa chọn cuốn nào."}, status=HTTPStatus.BAD_REQUEST)
                     for b in picked:
                         cmd_args += ["--book", b]
+                    if export_format == "calendaria":
+                        from ..publish.guard import crayonahub_blocked
+                        from ..publish.r2 import read_state
+                        if all(crayonahub_blocked(read_state(Path(b))) for b in picked):
+                            return self._send_json({"error": "Các cuốn đã xuất Printify; không đẩy lại qua Crayonahub."},
+                                                   status=HTTPStatus.CONFLICT)
                 desc = f"Đẩy lên R2 + xuất CSV ({len(books)} cuốn)" if books is not None else "Đẩy lên R2 + xuất CSV"
 
             elif action == "login":
@@ -834,9 +1014,6 @@ class StudioHandler(SimpleHTTPRequestHandler):
                 target = (ROOT / str(body.get("path", "")).lstrip("/\\")).resolve()
                 if not _in_projects(target) or not layout.is_book(target):
                     raise ValueError("Cuốn không hợp lệ")
-                concept = json.loads(layout.concept_file(target).read_text(encoding="utf-8"))
-                if concept.get("source") != "clone":
-                    raise ValueError("Chỉ đánh dấu kiểm tra cho cuốn clone")
                 path = layout.tech(target) / "review.json"
                 path.parent.mkdir(parents=True, exist_ok=True)
                 import uuid
@@ -897,7 +1074,23 @@ class StudioHandler(SimpleHTTPRequestHandler):
                 return self._send_json({"error": "Dữ liệu không hợp lệ"}, status=HTTPStatus.BAD_REQUEST)
             keep = ("account_id", "access_key_id", "secret_access_key", "bucket", "public_url", "prefix")
             data = {k: str(body[k]).strip() for k in keep if k in body and str(body[k]).strip()}
+            sheet_data = None
+            if "sheets" in body:
+                from ..publish.sheets import validate_settings, SheetError
+                try:
+                    incoming = body["sheets"]
+                    if not isinstance(incoming, dict):
+                        raise SheetError("Cấu hình Sheet không hợp lệ.")
+                    sheet_data = {"endpoint": str(incoming.get("endpoint") or "").strip()}
+                    if str(incoming.get("secret") or "").strip():
+                        sheet_data["secret"] = str(incoming["secret"]).strip()
+                    merged = {**(config.load().get("sheets") or {}), **sheet_data}
+                    validate_settings(merged, required=bool(merged.get("endpoint")))
+                except SheetError as exc:
+                    return self._send_json({"error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
             config.save_section("r2", data)
+            if sheet_data is not None:
+                config.save_section("sheets", sheet_data)
             return self._send_json({"ok": True})
 
         if path.startswith("/api/clone/"):
@@ -1229,32 +1422,44 @@ class StudioHandler(SimpleHTTPRequestHandler):
             if op == "add" and body.get("links") is not None:
                 from ..clone.fetch import single_link
                 url = single_link(body.get("links"))
-                store.add_link(projects, url, group=str(body.get("group", "")), year=int(body.get("year") or 2027),
+                added = store.add_link_batch(projects, url, book_count=body.get("book_count", 1), group=str(body.get("group", "")), year=int(body.get("year") or 2027),
                                mockup_mode=str(body.get("mockup_mode") or "ai"), project_id=project_id)
+                _enqueue_clones(added)
             elif op == "add":
                 images = []
                 for im in body.get("images") or []:
                     data = str(im.get("data", ""))
                     images.append((str(im.get("name", "anh.png"))[:80],
                                    base64.b64decode(data.split(",", 1)[-1], validate=False)))
-                store.add(projects, images, group=str(body.get("group", "")), year=int(body.get("year") or 2027),
+                added = store.add(projects, images, group=str(body.get("group", "")), year=int(body.get("year") or 2027),
                           mockup_mode=str(body.get("mockup_mode") or "ai"), kind=str(body.get("kind") or "normal"), project_id=project_id)
+                _enqueue_clones([added])
             elif op == "remove":
-                store.remove(projects, str(body.get("id", "")), running_now=bool(TASK_MANAGER.clone_running()))
+                ident = str(body.get('id', ''))
+                q = batch_queue()
+                with q.lock:
+                    affected = [i for i in q.items if ident in i['params'].get('clone_ids', [])
+                                and i['status'] in ('queued', 'running')]
+                    if any(i['status'] == 'running' for i in affected):
+                        raise ValueError('Nhóm clone đang chạy; dừng trước khi bỏ cuốn.')
+                    store.remove(projects, ident, running_now=bool(TASK_MANAGER.clone_running()))
+                    for entry in affected:
+                        entry['params']['clone_ids'] = [i for i in entry['params']['clone_ids'] if i != ident]
+                        if not entry['params']['clone_ids']:
+                            q.items.remove(entry)
+                    q._save()
             elif op == "retry":
-                store.retry(projects, str(body.get("id", "")))
+                ident = str(body.get('id', ''))
+                item = store.read(store.item_dir(projects, ident))
+                if not item:
+                    raise ValueError('Không tìm thấy cuốn clone.')
+                if item.get('status') == 'rejected' or item.get('terminal'):
+                    raise ValueError('Cuốn đã bị loại không thể chạy tiếp.')
+                store.retry(projects, ident)
+                _enqueue_clones([store.read(store.item_dir(projects, ident))])
             elif op == "start":
-                # chạy SONG SONG với batch theo ý tưởng (hai bên chia tài khoản bằng khoá trong profile); chỉ chặn khi
-                # đã có một lượt clone đang chạy
-                busy = TASK_MANAGER.clone_running()
-                if busy:
-                    return self._send_json({"error": f"Đang chạy việc khác: {busy.description}. Chờ xong hoặc bấm Dừng."},
-                                           status=HTTPStatus.CONFLICT)
-                show = bool(body.get("show"))
-                tid = TASK_MANAGER.start_task(["clone-run"] + (["--show"] if show else []),
-                                              "Clone sản phẩm"
-                                              + (" - hiện Chrome" if show else ""), "clone")
-                return self._send_json({"task_id": tid, **_clone_items()})
+                _enqueue_clones([i for i in store.items(projects) if i.get('status') == 'pending'])
+                return self._send_json(_clone_items())
             else:
                 return self._send_json({"error": "Not found"}, status=HTTPStatus.NOT_FOUND)
         except ValueError as e:

@@ -275,6 +275,8 @@ input[type="text"], input[type="number"], select {
 .results-meta .count { flex:none; white-space:nowrap; text-align:left; }
 .results-toolbar { display:grid; grid-template-columns:minmax(140px,1fr) 78px 164px 204px; align-items:center; gap:10px; min-height:40px; }
 .results-toolbar .book-search { width:100%; min-width:0; }
+.sheet-export-row { display:flex; align-items:center; flex-wrap:wrap; gap:10px; margin:8px 0 14px; }
+.sheet-export-row .hint { margin:0; overflow-wrap:anywhere; }
 .results-toolbar .btn { width:100%; min-height:36px; white-space:nowrap; }
 html { scrollbar-gutter:stable; }
 @media (max-width:620px) {
@@ -292,7 +294,7 @@ html { scrollbar-gutter:stable; }
 .group-head h4 { text-transform: capitalize; font-size: 1rem; margin: 0; }
 
 /* ---------- Lịch đã làm: thẻ tổng quan + 3 vùng có khung ---------- */
-.zone-bar { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 12px 0 4px; }
+.zone-bar { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin: 12px 0 4px; }
 .zone-card { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; padding: 12px 14px;
   border: 1.5px solid var(--line); border-radius: 12px; background: var(--surface); color: var(--text);
   font: inherit; text-align: left; cursor: pointer; transition: border-color .15s, box-shadow .15s; }
@@ -660,8 +662,8 @@ html { scrollbar-gutter:stable; }
   background: rgba(20, 20, 20, .68); color: #fff; font: inherit; font-size: .75rem; font-weight: 600; cursor: pointer; }
 .tile-detail-pill:hover, .tile-detail-pill:focus-visible { background: rgba(20, 20, 20, .88); outline: none; }
 
-.clone-book-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 8px; }
-.clone-reviewed { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; font-size: .8rem; }
+.clone-book-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 6px 8px; }
+.clone-reviewed { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; font-size: .8rem; white-space: nowrap; }
 .clone-reviewed input { accent-color: var(--primary); width: 16px; height: 16px; }
 /* Dự án: chọn nơi lưu trước khi chạy, mở thư mục để xem các cuốn. */
 .workspace-form { display:flex; flex-wrap:wrap; align-items:center; gap:10px; margin:18px 0; }

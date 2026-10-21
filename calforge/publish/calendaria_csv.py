@@ -9,6 +9,7 @@ from pathlib import Path
 
 from .. import layout, products
 from . import r2
+from .guard import eligible_crayonahub, serialized
 from .shop_csv import ready_books, shop_settings
 
 HEADER = [
@@ -26,9 +27,9 @@ PRICES = {("11", False): (19.95, 29.95), ("11", True): (7.95, 12.95),
           ("14", False): (24.95, 39.95), ("14", True): (9.95, 14.95)}
 
 
-# Giấy bản in (Spiral) trên Crayonahub: khổ 14x11.5 của lịch tự thiết kế grid bán cả Matte lẫn Glossy (người dùng
-# chốt 10/10/2026); còn lại theo cài đặt shop chung. Glossy cùng file design, cùng giá với Matte.
-FINISHES = {"wall_grid": {"11x8.5": ["Matte"], "14x11.5": ["Matte", "Glossy"]}}
+# Lịch tự thiết kế grid trên Crayonahub: cả hai khổ bán Matte và Glossy,
+# dùng chung file design và cùng giá. Loại lịch khác giữ cài đặt shop chung.
+FINISHES = {"wall_grid": {"11x8.5": ["Matte", "Glossy"], "14x11.5": ["Matte", "Glossy"]}}
 
 
 def body_html(listing: dict) -> str:
@@ -120,12 +121,17 @@ def _book_rows(cdir: Path, shop: dict) -> list[dict]:
     return rows
 
 
+@serialized
 def publish_all(cfg: dict, on_event=print, only: list[Path] | None = None) -> dict:
     root = Path(cfg["projects_dir"])
     books = ready_books(root)
     if only is not None:
         chosen = {Path(book).resolve() for book in only}
         books = [book for book in books if book.resolve() in chosen]
+    books, skipped = eligible_crayonahub(books, on_event)
+    if not books and skipped:
+        return {"books": 0, "pushed": [], "exported": [], "csv": None, "failed": [],
+                "skipped": skipped, "sheet": {"synced": [], "failed": []}}
     s3 = r2.client(r2.settings(cfg))
     pushed, failed, successful = r2.push_books(books, cfg, on_event, s3=s3)    # nhiều cuốn song song
     todo = [book for book in successful if r2.read_state(book).get("files") and
@@ -153,5 +159,7 @@ def publish_all(cfg: dict, on_event=print, only: list[Path] | None = None) -> di
             state = r2.read_state(book)
             state.update(calendaria_exported_at=stamp, calendaria_exported_csv=csv_path.name)
             r2.write_state(book, state)
+    from .sheets import sync_books
+    sheet = sync_books([b for b in successful if r2.read_state(b).get("calendaria_exported_at")], cfg, on_event)
     return {"books": len(books), "pushed": pushed, "exported": [book.name for book in todo],
-            "csv": str(csv_path) if csv_path else None, "failed": failed}
+            "csv": str(csv_path) if csv_path else None, "failed": failed, "skipped": skipped, "sheet": sheet}

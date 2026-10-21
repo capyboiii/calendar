@@ -43,6 +43,7 @@ def build_listing(concept: dict) -> dict:
         # phần Details CỐ ĐỊNH cho mọi cuốn (người dùng duyệt 03/10/2026)
         "<p><strong>Details</strong></p><ul><li>Sizes:<ul><li>11 x 8.5 in (opens to 11 x 17 in)</li>"
         "<li>14 x 11.5 in (opens to 14 x 23 in)</li></ul></li>"
+        "<li>Finish: Matte or Glossy</li>"
         "<li>Binding: wire-bound, with a hanging hole</li>"
         "<li>Printing: printed on demand and shipped to you</li></ul>",
     ])
@@ -75,6 +76,56 @@ def write_listing(concept_dir: Path, cfg: dict | None = None, on_event=print) ->
 
 
 LISTING_TXT = "listing.txt"
+DESIGN_HEADER = "DESIGN URLS"
+
+
+def clean_listing_text(text: str) -> str:
+    """Remove legacy design section and Printable SKU lines, retaining prose."""
+    import re
+    text = text.replace('\r\n', '\n')
+    text = re.split(r'(?m)^DESIGN URLS:?\s*$', text, maxsplit=1)[0]
+    head, separator, body = text.partition('\nTITLE\n')
+    head = '\n'.join(line for line in head.split('\n')
+                     if not re.match(r'^\S+\s+\([^\n]*\bPrintable\b[^\n]*\)\s*$', line, re.I))
+    head = re.sub(r'(?im)^(\S+\s+\([^\n]*?)\bSpiral\s+', r'\1', head)
+    if separator and '\nDESCRIPTION\n' in body:
+        from .sheets import description_text
+        prefix, _, desc = body.partition('\nDESCRIPTION\n')
+        body = prefix + '\nDESCRIPTION\n' + description_text({'description_text': desc})
+    return (head + separator + body).rstrip() + '\n'
+
+
+def clean_listing_txt(concept_dir: Path) -> bool:
+    """Clean an older listing atomically, including after an R2 push."""
+    f = Path(concept_dir) / LISTING_TXT
+    if not f.exists():
+        return False
+    original = f.read_text(encoding='utf-8-sig')
+    text = clean_listing_text(original)
+    if text.startswith('SKU\n') and '\nTITLE\n' in text:
+        try:
+            data = json.loads(layout.listing_file(Path(concept_dir)).read_text(encoding='utf-8'))
+            base, variants = book_skus(Path(concept_dir), data)
+            if base:
+                body = text.partition('\nTITLE\n')[2]
+                text = '\n'.join(['SKU', base] + [f'{s}  ({label})' for s, label in variants]) + '\n\nTITLE\n' + body
+        except (OSError, ValueError):
+            pass  # Keep existing SKU lines if the book metadata is unavailable.
+    if text == original:
+        return False
+    import os
+    import tempfile
+    tmp = None
+    try:
+        with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8-sig', newline='',
+                                         dir=f.parent, prefix='.listing-', suffix='.tmp', delete=False) as out:
+            tmp = Path(out.name)
+            out.write(text)
+        os.replace(tmp, f)
+    finally:
+        if tmp is not None:
+            tmp.unlink(missing_ok=True)
+    return True
 NL = "\n"
 
 
@@ -102,7 +153,7 @@ def html_to_text(desc: str) -> str:
 
 
 def book_skus(concept_dir: Path, listing: dict) -> tuple[str, list[tuple[str, str]]]:
-    """SKU gốc + SKU từng biến thể, ĐÚNG như CSV Crayonahub xuất (khổ x định dạng x giấy). Lỗi thì ("", [])."""
+    """SKU gốc + SKU biến thể in cho listing.txt, không gồm Printable."""
     try:
         import hashlib
 
@@ -126,9 +177,11 @@ def book_skus(concept_dir: Path, listing: dict) -> tuple[str, list[tuple[str, st
             label = layout.SIZE_LABEL[size["format_id"]]
             for v in shop["variants"]:
                 printable = v["format"].lower() == "printable"
+                if printable:
+                    continue
                 if not printable and v["finish"] not in finishes.get(label, [v["finish"]]):
                     continue
-                kind = "Printable" if printable else f"Spiral {v['finish']}"
+                kind = v['finish']
                 out.append((f"{base}-{size['sku']}{v['sku']}", f"{size['label']} {kind}"))
         return base, out
     except Exception:  # noqa: BLE001 - thiếu SKU không được làm hỏng file listing
@@ -138,7 +191,8 @@ def book_skus(concept_dir: Path, listing: dict) -> tuple[str, list[tuple[str, st
 def write_listing_txt(concept_dir: Path, listing: dict) -> Path:
     """listing.txt ngay trong thư mục cuốn (cạnh 11x8.5 / 14x11.5 / preview): title, tags, mô tả - mở ra chép thẳng
     lên shop, khỏi phải mở tool."""
-    desc = listing.get("description_text") or html_to_text(listing.get("description", ""))
+    from .sheets import description_text
+    desc = description_text(listing)
     base, variants = book_skus(concept_dir, listing)
     sku = ["SKU", base] + [f"{s}  ({label})" for s, label in variants] + [""] if base else []
     text = NL.join(sku + ["TITLE", listing.get("title", ""), "", "TAGS", ", ".join(listing.get("tags", [])), "",

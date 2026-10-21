@@ -29,6 +29,8 @@ def load(root: Path, alive) -> dict:
             if r['pid'] not in owners:
                 owners[r['pid']] = alive(r['pid'])
             if 0 <= now - r['seen'] < TTL and owners[r['pid']]:
+                if not isinstance(r.get('queue_rank'), int):
+                    r['queue_rank'] = None
                 requests.append(r)
         except (KeyError, TypeError):
             continue
@@ -42,13 +44,14 @@ def save(root: Path, state: dict) -> None:
     tmp.replace(root / FILE)
 
 
-def register(state, token, names, role, priority):
+def register(state, token, names, role, priority, queue_rank=None):
     now = time.time()
     request = next((r for r in state['requests'] if r['token'] == token), None)
     if request is None:
         request = {'token': token, 'pid': os.getpid(), 'created': time.time_ns()}
         state['requests'].append(request)
-    request.update(names=names, role=role, priority=bool(priority), seen=now)
+    request.update(names=names, role=role, priority=bool(priority), seen=now,
+                   queue_rank=queue_rank if isinstance(queue_rank, int) else None)
 
 
 def allocations(state, free, slots):
@@ -66,6 +69,10 @@ def allocations(state, free, slots):
         runnable = [r for r in pending if any(n not in assigned and available(n, r['role']) for n in r['names'])]
         if not runnable:
             break
+        # FIFO between queue jobs, existing grid/chat fairness within each job.
+        # Requests that cannot use any spare account do not block later jobs.
+        first_rank = min(r.get('queue_rank') or 0 for r in runnable)
+        runnable = [r for r in runnable if (r.get('queue_rank') or 0) == first_rank]
         urgent = [r for r in runnable if r['priority']]
         ordinary = [r for r in runnable if not r['priority']]
         choices = ordinary if ordinary and streak >= 2 else urgent or ordinary

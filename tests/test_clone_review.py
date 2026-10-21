@@ -29,10 +29,12 @@ class CloneReviewTest(unittest.TestCase):
     def test_rejects_outside_project_and_non_boolean(self):
         self.assertEqual(self.request(True,self.root).kwargs['status'],400)
         for value in ('true',1,None):self.assertEqual(self.request(value).kwargs['status'],400)
-    def test_idea_book_has_no_clone_controls_or_review_write(self):
+    def test_idea_book_can_check_uncheck_without_clone_url(self):
         self.concept['source']='idea';layout.concept_file(self.book).write_text(json.dumps(self.concept))
-        self.assertEqual(server._clone_book_info(self.book,self.concept),{})
-        self.assertEqual(self.request(True).kwargs['status'],400)
+        self.assertEqual(server._clone_book_info(self.book,self.concept),{'reviewed':False})
+        self.assertTrue(self.request(True).args[0]['ok'])
+        self.assertEqual(server._clone_book_info(self.book,self.concept),{'reviewed':True})
+        self.assertFalse(self.request(False).args[0]['reviewed'])
     def test_legacy_clone_url_loaded_from_original_queue(self):
         c={'source':'clone','angle_id':'clone-123456'}
         with mock.patch('calforge.clone.store.read',return_value={'source_url':'https://example.com/legacy'}):

@@ -76,7 +76,7 @@ class BatchTest(unittest.TestCase):
     def test_crash_is_isolated_retried_and_reported(self):
         with self.patched(crash_once={"b1"}, missing_once={"b4"}):
             rows = pipeline.run("kw", cfg(self.root), auto_pick=4, retry_wait_s=0)
-        self.assertEqual(self.idea.calls, [3, 1])                     # lượt 3 + 1
+        self.assertEqual(self.idea.calls, [1, 1, 1, 1])  # nhận từng cuốn theo ngân sách chung
         # các cuốn vẽ song song nên thứ tự trong lượt không cố định: b1 lỗi không chặn b2..b4; vòng vét làm lại b1, b4
         self.assertEqual(sorted(self.produced[:4]), ["b1", "b2", "b3", "b4"])
         self.assertEqual(sorted(self.produced[4:]), ["b1", "b4"])

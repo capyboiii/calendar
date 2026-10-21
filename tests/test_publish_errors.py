@@ -94,7 +94,7 @@ class PublishErrorsTest(unittest.TestCase):
             with self.subTest(module=module.__name__):
                 for b in layout.books(self.root):
                     st = r2.read_state(b)
-                    for k in ("exported_at", "calendaria_exported_at"):
+                    for k in ("exported_at", "calendaria_exported_at", "exported_csv", "calendaria_exported_csv"):
                         st.pop(k, None)
                     if st:
                         r2.write_state(b, st)

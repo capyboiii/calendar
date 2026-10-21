@@ -73,7 +73,7 @@ class EarlyGridTest(unittest.TestCase):
         self.assertTrue(it["reason"])
         self.assertEqual(pool.use, {})
 
-    def test_many_books_many_accounts_use_all_accounts(self):
+    def test_legacy_books_do_not_open_extra_books_just_to_fill_accounts(self):
         busy, peak, lock = set(), [0], threading.Lock()
 
         class Count(FakeSession):
@@ -95,7 +95,8 @@ class EarlyGridTest(unittest.TestCase):
             go()
         for d in ds:
             complete(self, d)
-        self.assertGreaterEqual(peak[0], 5)            # 4 cuốn x (artwork + trang lịch) chạy cùng lúc > 4 tài khoản
+        self.assertGreaterEqual(peak[0], 2)
+        self.assertLessEqual(peak[0], 4)  # at most two admitted legacy books, each has art + grid
 
 
 class LeaseTest(unittest.TestCase):
@@ -173,7 +174,7 @@ class TasksRunTogetherTest(unittest.TestCase):
             def __init__(self, action):
                 self.status, self.action, self.params = "running", action, {}
         tm.tasks = {"c": T("clone")}
-        self.assertIsNone(tm.running())                            # hàng đợi theo ý tưởng vẫn chạy được
+        self.assertIsNotNone(tm.running())                         # shared FIFO waits for clone
         self.assertIsNotNone(tm.running(include_clone=True))
         self.assertIsNotNone(tm.clone_running())                   # nhưng không mở lượt clone thứ hai
         tm.tasks = {"r": T("run")}

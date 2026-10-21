@@ -31,7 +31,10 @@ def item_dir(projects_dir, item_id: str) -> Path:
 
 
 def refs(d: Path) -> list[Path]:
-    name = read(d).get("refs_dir", "refs")
+    data = read(d)
+    if data.get("kind") in ("source_expand", "source_variants"):
+        return refs(source_dir(d))
+    name = data.get("refs_dir", "refs")
     if not isinstance(name, str) or not re.fullmatch(r"refs(?:_[a-f0-9]{32})?", name):
         name = "refs"
     return sorted(p for p in (d / name).glob("*") if p.suffix.lower() in IMG_EXT)
@@ -149,6 +152,7 @@ def add_link(projects_dir, url: str, *, group: str = "", year: int = 2027, mocku
 
 
 def items(projects_dir) -> list[dict]:
+    recover_batches(projects_dir)
     r = root(projects_dir)
     out = []
     for d in sorted(r.iterdir(), reverse=True) if r.is_dir() else []:
@@ -178,6 +182,7 @@ def _book_finished(book) -> bool:
 
 def pending(projects_dir) -> list[Path]:
     """Mục cần chạy (chưa xong, chưa bị loại), cũ trước."""
+    recover_batches(projects_dir)
     r = root(projects_dir)
     return [d for d in sorted(r.iterdir()) if d.is_dir() and read(d).get("status") in ("pending", "failed", "running")] \
         if r.is_dir() else []
@@ -189,6 +194,10 @@ def remove(projects_dir, item_id: str, *, running_now: bool = True) -> None:
     d = item_dir(projects_dir, item_id)
     if running_now and read(d).get("status") == "running":
         raise ValueError("cuốn đang chạy - bấm Dừng trước rồi mới bỏ")
+    if read(d).get("kind") in ("source_expand", "source_variants"):
+        group = source_dir(d)
+        with _BATCH_LOCK:
+            write(group, removed=sorted(set(read(group).get("removed", [])) | {item_id}))
     shutil.rmtree(d, ignore_errors=True)
 
 
@@ -199,6 +208,7 @@ def mark_stopped(projects_dir) -> int:
     """Lượt clone đã dừng (bấm Dừng / tắt tool / tiến trình chết): cuốn còn ghi "running" chuyển về "Bị dở".
     Ảnh đã vẽ giữ nguyên; Làm tiếp chỉ làm phần thiếu."""
     n = 0
+    recover_batches(projects_dir)
     r = root(projects_dir)
     for d in sorted(r.iterdir()) if r.is_dir() else []:
         if d.is_dir() and read(d).get("status") == "running":
@@ -211,3 +221,74 @@ def retry(projects_dir, item_id: str) -> None:
     d = item_dir(projects_dir, item_id)
     if read(d).get("status") in ("failed", "rejected"):
         write(d, status="pending", reason="")
+
+
+_BATCH_LOCK = threading.Lock()
+
+
+def source_dir(d: Path) -> Path:
+    """Resolve a shared source only inside this projects tree."""
+    value = read(d).get("source_path", "")
+    if not value:
+        raise ValueError("thiếu nhóm ảnh nguồn")
+    result = Path(value).resolve()
+    result.relative_to(d.parent.parent.resolve())
+    if result.parent.name != "_clone_sources" or not re.fullmatch(r"[a-z0-9]{6,20}", result.name):
+        raise ValueError("nhóm ảnh nguồn không hợp lệ")
+    return result
+
+
+def add_link_batch(projects_dir, url: str, *, book_count=1, group="", year=2027,
+                   mockup_mode="ai", project_id="") -> list[dict]:
+    """Commit one source and its children together; queue publication is recoverable."""
+    from .fetch import valid_url
+    from ..projects import run_root
+    if isinstance(book_count, bool) or not isinstance(book_count, int) or not 1 <= book_count <= 5:
+        raise ValueError("số cuốn phải từ 1 đến 5")
+    url = valid_url(url)
+    if not 2024 <= int(year) <= 2100:
+        raise ValueError("năm không hợp lệ")
+    base = run_root(Path(projects_dir), {"project_id": project_id}) / "_clone_sources"
+    gid = time.strftime("%y%m%d%H%M%S") + secrets.token_hex(2)
+    target, staging = base / gid, base / (".tmp_" + gid)
+    staging.mkdir(parents=True)
+    children = []
+    for index in range(1, book_count + 1):
+        ident = time.strftime("%y%m%d%H%M%S") + secrets.token_hex(4)
+        children.append(dict(id=ident, created=time.strftime("%Y-%m-%d %H:%M:%S"),
+            group=_group(group), year=int(year), project_id=project_id, status="pending",
+            stage="", reason="", book="", title="", names=[], source_url=url,
+            source_path=str(target.resolve()), source_group=gid, book_index=index,
+            book_count=book_count, mockup_mode=mockup_mode if mockup_mode in ("ai", "template") else "ai",
+            kind="source_variants", planning_mode="single_session"))
+    write(staging, id=gid, source_url=url, children=children, book_count=book_count,
+          planning_mode="single_session", plan_ready=False)
+    staging.rename(target)
+    _publish_group(projects_dir, target)
+    return children
+
+
+def _publish_group(projects_dir, group: Path) -> None:
+    with _BATCH_LOCK:
+        manifest = read(group)
+        if manifest.get("published"):
+            return
+        removed = set(manifest.get("removed", []))
+        for child in manifest.get("children", []):
+            if child["id"] in removed:
+                continue
+            d = item_dir(projects_dir, child["id"])
+            if (d / "item.json").exists():
+                continue
+            d.mkdir(parents=True, exist_ok=True)
+            write(d, **child)
+        write(group, published=True)
+
+
+def recover_batches(projects_dir) -> None:
+    base = Path(projects_dir)
+    groups = list((base / "_clone_sources").glob("*/item.json"))
+    groups += list((base / "_du_an").glob("*/_clone_sources/*/item.json"))
+    for manifest in groups:
+        if not manifest.parent.name.startswith("."):
+            _publish_group(projects_dir, manifest.parent)

@@ -231,6 +231,26 @@ class BookArtTest(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.cfg, self.d = new_item(Path(self.tmp.name))
 
+    def test_each_clone_cover_attaches_its_own_different_months_even_in_existing_chat(self):
+        pairs = []
+        for index in range(1, 6):
+            with self.subTest(book=index):
+                store.write(self.d, book_index=index)
+                b = run.Book(self.cfg, self.d, on_event=lambda *_: None)
+                s = FakeSession([session.Turn(distinct(1, 40))])
+                s.has_art = True
+                with mock.patch.object(b, 'missing', return_value=[]), \
+                        mock.patch.object(b, 'meta', return_value=META), \
+                        mock.patch.object(b, '_adopt'), mock.patch.object(b, '_grid_ready_check'), \
+                        mock.patch.object(b, 'done', side_effect=lambda job: None if job == 'cover' else b.raw(job)):
+                    b.art_work(s, 'acc3')
+                prompt, want, attached = s.sent[-1]
+                self.assertEqual(want, 1)
+                self.assertEqual([p.stem for p in attached], [f'm{index*2-1:02d}', f'm{index*2:02d}'])
+                self.assertIn('2 attached artworks in THIS message', prompt)
+                pairs.append(tuple(attached))
+        self.assertEqual(len(set(pairs)), 5)
+
     def test_ten_then_two_then_name_then_cover(self):
         b = run.Book(self.cfg, self.d, on_event=lambda *_: None)
         s = FakeSession([session.Turn(distinct(10)), session.Turn(distinct(2, 20)), session.Turn(distinct(1, 40))])
@@ -288,8 +308,8 @@ class BookArtTest(unittest.TestCase):
         b.art_work(s2, "acc4")
         self.assertEqual(s2.sent[0][0], "attach")
         self.assertEqual(len(s2.sent[0][1]), 10)                            # 10 artwork đầu cho ChatGPT nhìn
-        self.assertIn("4 attached artworks", s2.sent[2][0])                 # bìa: đính 4 artwork làm mẫu
-        self.assertEqual(len(s2.sent[2][2]), 4)
+        self.assertIn("2 attached artworks in THIS message", s2.sent[2][0])
+        self.assertEqual([p.stem for p in s2.sent[2][2]], ['m01', 'm02'])
 
     def test_meta_repair_then_ok(self):
         bad = dict(META, tags=["too", "few"])
@@ -358,7 +378,9 @@ class BookGridTest(unittest.TestCase):
         with mock.patch("calforge.imagegen.generate.accept_grid_page", self.accept):
             self.b.grid_work(s, "acc4")
         self.assertEqual(self.b.missing("g"), [])
-        self.assertIn("The October page you just made has calendar errors", s.sent[1][0])
+        self.assertIn("Render ONLY OCTOBER 2027", s.sent[1][0])
+        self.assertIn("EXACT DATE TABLE", s.sent[1][0])
+        self.assertEqual([p.name for p in s.sent[1][2]], ['g01.png', 'm10.png'])
         self.assertTrue(list((layout.tech(Path(self.b.item["book"])) / "anh_bi_loai").glob("grid-10*")))
 
     def test_new_session_uses_a_finished_page_as_layout(self):

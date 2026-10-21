@@ -1,0 +1,15 @@
+const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict');
+const app=fs.readFileSync('calforge/ui/static/app.js','utf8');
+const c=vm.createContext({});
+vm.runInContext(app.slice(app.indexOf('function bookState('),app.indexOf('const STATE_LABEL')),c);
+vm.runInContext(app.slice(app.indexOf('const ZONES ='),app.indexOf('const STAGE_LABEL')),c);
+vm.runInContext(app.slice(app.indexOf('function zoneOf('),app.indexOf('function zonePick(')),c);
+const zone=status=>vm.runInContext(`zoneOf({status:${JSON.stringify(status)}})`,c);
+assert.equal(zone({queue_wait:true,ok:null,stage:'queued'}),'queued');
+assert.equal(zone({queue_wait:true,ok:false,stage:'queued'}),'queued');
+assert.equal(zone({queue_wait:false,ok:null,stage:'images'}),'running');
+assert.equal(zone({queue_wait:true,ok:true,stage:'listing'}),'done');
+assert.equal(zone({queue_wait:true,ok:false,stage:'ip_rejected'}),'broken');
+assert.equal(zone({ok:false,stage:'crash'}),'broken');
+assert.equal(vm.runInContext('ZONES.length',c),4);
+console.log('PASS: waiting books have their own zone; running, finished, terminal and failed stay distinct');

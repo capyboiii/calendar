@@ -415,15 +415,18 @@ class _Finisher:
         self.pool = ThreadPoolExecutor(max_workers=_parallel(cfg)["finish_workers"], thread_name_prefix="hau_ky")
         self.jobs = []
 
-    def submit(self, cdir: Path) -> None:
+    def submit(self, cdir: Path, on_complete=None) -> None:
         # log hậu kỳ có nhãn cuốn và không mang dấu "▶ Bước" để UI không nhầm tiến độ của cuốn đang gen ảnh
         log = lambda m, n=cdir.name: self.on_event(f"  [hậu kỳ · {n}] " + str(m).replace("▶ ", "").strip())
 
         def run():
-            st = _safe_call(finish_book, cdir, self.cfg, log, **self.kw)
-            # mốc cho UI đếm tiến độ khi nhiều cuốn chạy song song
-            self.on_event(f"◆ CUỐN {'XONG' if st.get('ok') else 'LỖI'}: {cdir.name}")
-            return st
+            try:
+                st = _safe_call(finish_book, cdir, self.cfg, log, **self.kw)
+                self.on_event(f"◆ CUỐN {'XONG' if st.get('ok') else 'LỖI'}: {cdir.name}")
+                return st
+            finally:
+                if on_complete:
+                    on_complete()
         self.jobs.append(self.pool.submit(run))
 
     def wait(self) -> None:
@@ -481,14 +484,20 @@ def _crash(cdir: Path, e: Exception, tb: str, on_event=print) -> dict:
         return st
 
 
-def _safe_pipelined(cdir: Path, cfg: dict, finisher: "_Finisher", on_event=print) -> None:
+def _safe_pipelined(cdir: Path, cfg: dict, finisher: "_Finisher", on_event=print, on_complete=None) -> None:
     """Gen ảnh ở luồng chính (cần Chrome); đủ ảnh thì đẩy hậu kỳ sang luồng nền."""
-    res = _safe_call(lambda c, g, on_event: produce_images(c, g, on_event=on_event) or {"ok": True, "_next": True},
-                     cdir, cfg, on_event)
-    if res.get("_next"):
-        finisher.submit(cdir)
-    else:
-        on_event(f"◆ CUỐN LỖI: {cdir.name}")
+    transferred = False
+    try:
+        res = _safe_call(lambda c, g, on_event: produce_images(c, g, on_event=on_event) or {"ok": True, "_next": True},
+                         cdir, cfg, on_event)
+        if res.get("_next"):
+            finisher.submit(cdir, on_complete=on_complete)
+            transferred = True
+        else:
+            on_event(f"◆ CUỐN LỖI: {cdir.name}")
+    finally:
+        if not transferred and on_complete:
+            on_complete()
 
 
 def _safe_produce(cdir: Path, cfg: dict, on_event=print, **kw) -> dict:
@@ -727,6 +736,18 @@ def _batch_family_quota(kdir: Path, batch: dict, n: int) -> dict[str, int]:
 
 
 def _run_batch(keyword, cfg, kdir, batch, backend, common, finisher, pick, wait, on_event):
+    from .llm.book_budget import for_config
+    budget = for_config(cfg)
+    try:
+        return _run_bounded_batch(keyword, cfg, kdir, batch, backend, common, finisher, pick, wait, on_event, budget)
+    finally:
+        try:
+            finisher.wait()
+        finally:
+            budget.close()
+
+
+def _run_bounded_batch(keyword, cfg, kdir, batch, backend, common, finisher, pick, wait, on_event, budget):
     from .ideation.pipeline import ROUND_SIZE, run_ideation
     from .llm.chatgpt_web import NoAccountLeft
 
@@ -737,31 +758,56 @@ def _run_batch(keyword, cfg, kdir, batch, backend, common, finisher, pick, wait,
     from concurrent.futures import ThreadPoolExecutor
 
     par = _parallel(cfg)
-    lookahead = par["idea_lookahead"]
+    lookahead = min(par["idea_lookahead"], budget.limit)
+    par['book_workers'] = min(par['book_workers'], budget.limit)
     books = ThreadPoolExecutor(max_workers=par["book_workers"], thread_name_prefix="cuon")
     on_event(f"▶ Phân luồng: {par['book_workers']} cuốn vẽ cùng lúc, {par['p2_parallel']} concept viết song song, "
              f"{par['finish_workers']} luồng hậu kỳ")
+    on_event(f'▶ Ưu tiên hoàn tất: tối đa {budget.limit} cuốn idea/clone đang xử lý chung, tính cả hậu kỳ')
     waiting = {"n": 0}
     cv = threading.Condition()
     futures = []
 
-    def produce_one(cdir: Path) -> None:
+    def reserve(key):
+        next_log = 0
+        while not budget.acquire(key):
+            if time.monotonic() >= next_log:
+                on_event(f'⏳ Chờ cuốn đang làm hoàn tất; giới hạn chung {budget.limit} cuốn idea/clone')
+                next_log = time.monotonic() + 30
+            time.sleep(.25)
+
+    def produce_one(cdir: Path, key) -> None:
         with cv:
             waiting["n"] -= 1
             cv.notify_all()
-        _safe_pipelined(cdir, cfg, finisher, on_event)
+        try:
+            _status(cdir, queue_wait=False, ok=None, reason='')
+        except BaseException:
+            budget.release(key)
+            raise
+        _safe_pipelined(cdir, cfg, finisher, on_event, on_complete=lambda: budget.release(key))
 
-    def submit(cdir: Path) -> None:
+    def submit(cdir: Path, held_key=None) -> None:
+        key = held_key or str(cdir.resolve())
+        _status(cdir, stage='queued', queue_wait=True, ok=None, reason='')
+        if held_key is None:
+            reserve(key)
         with cv:
             waiting["n"] += 1
-        futures.append(books.submit(produce_one, cdir))
+        try:
+            futures.append(books.submit(produce_one, cdir, key))
+        except BaseException:
+            budget.release(key)
+            raise
 
     try:
         # 1) Cuốn đã có ý tưởng từ lần chạy trước nhưng chưa xong: làm nốt trước.
-        for rel in list(batch["concepts"]):
-            if (layout.is_book(kdir / rel) and not _finished_ok(kdir / rel)
-                    and not _read_status(kdir / rel).get("terminal")):
-                submit(kdir / rel)
+        resumed = [kdir / rel for rel in batch['concepts'] if layout.is_book(kdir / rel)
+                   and not _finished_ok(kdir / rel) and not _read_status(kdir / rel).get('terminal')]
+        for cdir in resumed:
+            _status(cdir, stage='queued', queue_wait=True, ok=None, reason='')
+        for cdir in resumed:
+            submit(cdir)
 
         # 2) Lên ý + sản xuất theo lượt cho đủ số còn thiếu.
         on_event("▶ Bước 1/6: Lên ý tưởng (P1 góc tiếp cận → P2 concept). Chờ ChatGPT vài phút...")
@@ -782,18 +828,21 @@ def _run_batch(keyword, cfg, kdir, batch, backend, common, finisher, pick, wait,
             with cv:                                   # đủ ý chờ vẽ rồi: đợi bớt mới nghĩ tiếp
                 while waiting["n"] >= lookahead:
                     cv.wait(5)
-            n = min(ROUND_SIZE, left)
+            n = 1  # reserve one book through planning, artwork, grid and postproduction
             on_event(f"▶ Lượt lên ý: {n} cuốn (còn thiếu {left}/{batch['target']})")
             # "Ngẫu nhiên" (không ép phong cách): chia đều phong cách TRONG BATCH NÀY - lượt này lấy các phong cách
             # mà batch đang có ít cuốn nhất (hoà thì bốc ngẫu nhiên, cố định theo batch)
             quota = None if (common.get("family") or pick) else _batch_family_quota(kdir, batch, n)
             if quota:
                 on_event("  phong cách lượt này: " + ", ".join(f"{k} x{v}" for k, v in quota.items()))
+            reservation = f'idea:{kdir.resolve()}:{len(batch["concepts"])}'
+            reserve(reservation)
             try:
                 res = run_ideation(keyword, backend, Path(cfg["projects_dir"]), pick=pick, auto_pick=n,
                                    keyword_root=kdir.parent, p2_parallel=par["p2_parallel"],
                                    family_quota=quota, **common)
             except NoAccountLeft:
+                budget.release(reservation)
                 # hết lượt chat ở mọi tài khoản: chờ rồi làm lại đúng lượt này (sổ hỏi/đáp giữ phần đã có)
                 slept = _wait_for_quota(cfg, idea_waited, on_event, "chat")
                 if slept:
@@ -803,6 +852,7 @@ def _run_batch(keyword, cfg, kdir, batch, backend, common, finisher, pick, wait,
                 _save_batch(kdir, batch)
                 break
             except Exception as e:  # noqa: BLE001 - ChatGPT/mạng hỏng: ghi lại, vẫn vét + báo cáo các cuốn đã có
+                budget.release(reservation)
                 batch["errors"].append(f"{type(e).__name__}: {e}"[:500])
                 _save_batch(kdir, batch)
                 on_event(f"  ✘ Lên ý tưởng lỗi: {e}")
@@ -816,14 +866,18 @@ def _run_batch(keyword, cfg, kdir, batch, backend, common, finisher, pick, wait,
                 batch["errors"].append("2 lượt lên ý liền không ra cuốn mới - dừng nghĩ thêm")
                 _save_batch(kdir, batch)
             for cdir in new:
-                submit(cdir)
+                _status(cdir, stage='queued', queue_wait=True, ok=None, reason='')
+            for index, cdir in enumerate(new):
+                submit(cdir, held_key=reservation if index == 0 else None)
+            if not new:
+                budget.release(reservation)
             if pick:
                 break
         # Hết phần lên ý (đủ số / dừng nghĩ thêm): chỉ còn vẽ nốt. Hàng đợi đọc dấu này để cho chủ đề KẾ TIẾP bắt đầu
         # lên ý ngay, không đợi batch này vẽ xong (lúc vẽ nốt phần lớn tài khoản rảnh).
         batch["ideas_done"] = time.strftime("%Y-%m-%d %H:%M:%S")
         _save_batch(kdir, batch)
-        on_event("▶ Đã lên đủ ý cho batch này - còn vẽ nốt; chủ đề kế tiếp trong hàng đợi được bắt đầu lên ý luôn")
+        on_event("▶ Đã lên đủ ý cho batch này — tiếp tục vẽ và hậu kỳ; acc rảnh được giao cho việc kế tiếp trong hàng đợi")
     finally:
         books.shutdown(wait=True)                      # chờ mọi cuốn vẽ xong (mỗi cuốn tự cô lập lỗi)
     for f in futures:
@@ -838,7 +892,9 @@ def _run_batch(keyword, cfg, kdir, batch, backend, common, finisher, pick, wait,
         on_event(f"▶ Vòng vét: {len(retry)} cuốn dở - chờ {int(wait)}s cho tài khoản hồi lượt rồi làm lại")
         time.sleep(wait)
         for rel in retry:
-            _safe_pipelined(kdir / rel, cfg, finisher, on_event)
+            key = str((kdir / rel).resolve())
+            reserve(key)
+            _safe_pipelined(kdir / rel, cfg, finisher, on_event, on_complete=lambda key=key: budget.release(key))
         finisher.wait()
 
     batch["finished"] = time.strftime("%Y-%m-%d %H:%M:%S")

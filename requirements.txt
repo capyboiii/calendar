@@ -1,6 +1,6 @@
 playwright>=1.40
 reportlab>=4
-pymupdf>=1.24
+pymupdf>=1.24,<2   # 2.x kéo thêm pymupdf-layout/pymupdf4llm nặng mà tool không dùng
 pillow>=9
 numpy
 scipy

@@ -83,8 +83,8 @@
     const n = links().length;
     const hasTopic = !!$('cloneGroup').value.trim();
     b.disabled = !n || !hasTopic || !(C.data && C.data.plus.length);
-    b.textContent = running() ? 'Thêm vào hàng đợi' : 'Bắt đầu';
-    $('cloneStartHint').textContent = !hasTopic ? 'Nhập chủ đề để bắt đầu clone.' : linkError() || '1 link · 1 cuốn';
+    b.textContent = 'Thêm vào hàng đợi';
+    $('cloneStartHint').textContent = !hasTopic ? 'Nhập chủ đề để bắt đầu clone.' : linkError() || `1 link · ${$('cloneBookCount').value} cuốn · Mỗi cuốn 12 artwork mới`;
   }
 
   async function start() {
@@ -99,13 +99,12 @@
     try {
       const mockup = (document.querySelector('input[name="clone_mockup_mode"]:checked') || {}).value || 'ai';
       let data = await api('/api/clone/add', {
-        links: links(), project_id, group: $('cloneGroup').value.trim(), year: +$('cloneYear').value || 2027, mockup_mode: mockup,
+        links: links(), project_id, book_count: +$('cloneBookCount').value, group: $('cloneGroup').value.trim(), year: +$('cloneYear').value || 2027, mockup_mode: mockup,
       });
       $('cloneLinks').value = '';
-      const wasRunning = running();
-      if (!wasRunning) data = await api('/api/clone/start', { show: false });
-      toast(wasRunning ? 'Đã thêm vào hàng đợi clone.' : 'Đã bắt đầu clone.', 'success');
+      toast('Đã thêm clone vào hàng đợi chung.', 'success');
       render(data);
+      if (window.refreshUnifiedQueue) await window.refreshUnifiedQueue();
     } catch (e) {
       toast(e.message, 'error');
     }
@@ -162,7 +161,8 @@
   function renderQueue() {
     // Không có lượt clone nào chạy thật mà cuốn vẫn ghi "running" (bấm Dừng / tắt tool giữa chừng): là "Đã dừng".
     const live = running();
-    const items = C.data.items.filter((i) => ['pending', 'running', 'failed', 'rejected'].includes(i.status))
+    const scheduled = new Set(C.data.scheduled_ids || []);
+    const items = C.data.items.filter((i) => !scheduled.has(i.id) && ['pending', 'failed', 'rejected'].includes(i.status))
       .map((i) => (i.status === 'running' && !live ? { ...i, status: 'failed', stopped: true,
         reason: i.reason || 'đã dừng giữa chừng - bấm Làm tiếp để làm phần còn thiếu' } : i));
     $('cloneQueueCard').hidden = !items.length;
@@ -193,6 +193,7 @@
             ${chip(window.projectName ? window.projectName(i.project_id) : 'Chưa phân dự án')}
             ${topic ? chip(topic, 'chip-topic', i.group) : ''}
             ${chip(`Lịch ${i.year}`)}
+            ${['source_expand', 'source_variants'].includes(i.kind) ? chip(`Cuốn ${i.book_index}/${i.book_count} · cùng nguồn`) : ''}
             ${chip(i.refs ? `${i.refs} ảnh mẫu` : (i.source_url ? 'Chờ lấy ảnh từ link' : '0 ảnh mẫu'))}
             ${i.stage ? chip(i.stage, cls) : ''}
           </div>
@@ -208,7 +209,7 @@
           catch (_) { toast('Không chép được URL từ clipboard.', 'error'); }
         }));
       }
-      if (i.status === 'failed' || i.status === 'rejected') {
+      if (i.status === 'failed' && !i.terminal) {
         acts.appendChild(button('Làm tiếp', 'btn-small btn-accent', () => op('retry', i.id, true)));
       }
       if (i.status !== 'running' || !running()) {
@@ -250,8 +251,8 @@
   async function op(name, id, autostart = false) {
     try {
       let data = await api(`/api/clone/${name}`, { id });
-      if (autostart && !running()) data = await api('/api/clone/start', { show: false });
       render(data);
+      if (window.refreshUnifiedQueue) await window.refreshUnifiedQueue();
     } catch (e) {
       toast(e.message, 'error');
     }
@@ -287,6 +288,7 @@
 
   $('cloneLinks').addEventListener('input', renderStartButton);
   $('cloneGroup').addEventListener('input', renderStartButton);
+  $('cloneBookCount').addEventListener('change', renderStartButton);
   document.querySelectorAll('.stepper-y button').forEach((b) => b.addEventListener('click', () => {
     const y = $('cloneYear');
     y.value = Math.max(2025, Math.min(2100, (+y.value || 2027) + Number(b.dataset.ystep)));

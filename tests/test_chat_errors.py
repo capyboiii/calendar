@@ -91,6 +91,28 @@ class Page:
 
 
 class AskTest(unittest.TestCase):
+    def test_finished_text_without_expected_file_stops_early(self):
+        with self.assertRaisesRegex(cw.SendFailed, 'chưa gửi file/ảnh hợp lệ'):
+            self.ask(lambda t: st(assistant=1, text='I am done, here is your result'),
+                     timeout_s=900, response_ready=lambda:False)
+        self.assertLess(self.clock.t, 150)
+
+    def test_finished_text_waits_for_real_file(self):
+        self.assertIn('result', self.ask(lambda t: st(assistant=1, text='result'),
+                      timeout_s=900, response_ready=lambda:self.clock.t >= 70))
+
+    def test_reply_identity_survives_virtualized_turn_counts(self):
+        before = st(assistant=8, assistant_id='old')
+        self.assertTrue(cw._WebChat._new_reply(st(assistant=8, assistant_id='new'), before))
+        self.assertTrue(cw._WebChat._new_reply(st(assistant=4, assistant_id='new'), before))
+        self.assertFalse(cw._WebChat._new_reply(st(assistant=8, assistant_id='old'), before))
+        self.assertFalse(cw._WebChat._new_reply(st(assistant=4, assistant_id='old'), before))
+
+    def test_virtualized_reply_is_read_even_when_turn_count_stays_zero(self):
+        out = self.ask(lambda t: st(user=0, user_id='new-user', assistant=0,
+                                   assistant_id='new-answer', text='Reply', codes=['{"a":1}']))
+        self.assertIn('{"a":1}', out)
+
     def ask(self, script, notice="", timeout_s=100, page=None, **kw):
         clock = Clock()
         page = page or Page(clock)
@@ -171,6 +193,24 @@ class AskTest(unittest.TestCase):
         text = "The concept avoids anything that violates trademark or copyright."
         out = self.ask(lambda t: st(assistant=1, text=text, codes=['{"title": "ok"}']))
         self.assertIn("ok", out)
+
+    def test_limit_words_inside_streaming_answer_are_not_quota(self):
+        """Log 20/10: concept về giáo viên có "Overloaded Supply Cart", "wait until the bell"... đang viết dở (chưa
+        thành khối code) bị nhận là hết lượt -> đuổi lần lượt cả 12 tài khoản."""
+        body = ('{\n  "months": [\n    {"title": "Overloaded Supply Cart", "tip": "Load heavier supplies low; '
+                'wait until the hallway clears. Rate limit your coffee."},\n    {"title": "High Demand Copier"}')
+        long_prose = "Twelve months of classroom comedy. " * 30 + "The overloaded supply cart is at capacity."
+
+        def script(t):
+            if t < 0.5:
+                return st(user=0)
+            if t < 20:
+                return st(assistant=1, busy=True, text=body[:int(t * 10)])
+            return st(assistant=1, text=body + "]}", codes=[body + "]}"])
+        self.assertIn("Overloaded Supply Cart", self.ask(script))
+        out = self.ask(lambda t: st(user=0) if t < 0.5 else
+                       st(assistant=1, busy=t < 10, text=long_prose, codes=[] if t < 10 else ['{"a": 1}']))
+        self.assertIn('{"a": 1}', out)
 
     def test_never_starts_answering(self):
         with self.assertRaises(cw.SendFailed) as e:

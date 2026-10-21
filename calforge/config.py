@@ -24,6 +24,7 @@ DEFAULTS = {
     "idea_lookahead": None,      # nghĩ ý trước tối đa bấy nhiêu cuốn chưa kịp vẽ (tự tính: = book_workers)
     "p2_parallel": None,         # số concept (P2) viết song song mỗi lượt (tự tính: 3..5)
     "finish_workers": None,      # số cuốn làm hậu kỳ (dàn trang, mockup) cùng lúc (tự tính: 1..2)
+    "max_active_books": None,    # chung idea + clone: 2 cuốn với <=24 Chrome, tối đa 4 khi đủ 40
     "account_busy_max_wait_s": 600,  # clone: acc bị chiếm / hết chỗ Chrome quá lâu thì để cuốn chạy tiếp sau
     "quota_wait_s": 1800,        # cả 5 tài khoản hết lượt: tạm dừng batch, cứ bấy nhiêu giây thử lại một lần
     "quota_max_wait_h": 24,      # chờ tối đa bấy nhiêu giờ cho một chỗ kẹt rồi mới coi là hỏng   # vòng vét cuối batch: chờ tài khoản ChatGPT hồi lượt rồi làm lại cuốn dở
@@ -63,6 +64,14 @@ def load() -> dict:
         merged = {k: {**cfg[k], **user.get(k, {})} for k in ("llm", "imagegen", "printify")}
         cfg.update(user)
         cfg.update(merged)
+    # The installer refreshes this fallback separately from calforge.json,
+    # which must be preserved on updates. Keep a user-supplied connection intact.
+    if not any((cfg.get('sheets') or {}).get(k) for k in ('endpoint', 'secret')):
+        try:
+            bundled = json.loads((ROOT / 'data' / 'sheet_sync_defaults.json').read_text(encoding='utf-8'))
+            cfg['sheets'] = {k: str(bundled.get(k) or '').strip() for k in ('endpoint', 'secret')}
+        except (OSError, ValueError, AttributeError):
+            pass
     cfg["projects_dir"] = str((ROOT / cfg["projects_dir"]).resolve())
     if os.environ.get('CALFORGE_PROJECT_ID'):
         from .projects import require

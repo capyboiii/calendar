@@ -26,10 +26,12 @@ DETAILS_TEXT = ("Details\n"
                 "- Sizes:\n"
                 "  - 11 x 8.5 in (opens to 11 x 17 in)\n"
                 "  - 14 x 11.5 in (opens to 14 x 23 in)\n"
+                "- Finish: Matte or Glossy\n"
                 "- Binding: wire-bound, with a hanging hole\n"
                 "- Printing: printed on demand and shipped to you")
 DETAILS_HTML = ("<p><strong>Details</strong></p><ul><li>Sizes:<ul><li>11 x 8.5 in (opens to 11 x 17 in)</li>"
                 "<li>14 x 11.5 in (opens to 14 x 23 in)</li></ul></li>"
+                "<li>Finish: Matte or Glossy</li>"
                 "<li>Binding: wire-bound, with a hanging hole</li>"
                 "<li>Printing: printed on demand and shipped to you</li></ul>")
 

@@ -24,6 +24,22 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+
+def read_image(path, flags=cv2.IMREAD_COLOR):
+    """Read via Python filesystem APIs so Windows Unicode paths work."""
+    try:
+        return cv2.imdecode(np.frombuffer(Path(path).read_bytes(), dtype=np.uint8), flags)
+    except (OSError, cv2.error):
+        return None
+
+
+def write_image(path, image, params=None):
+    path = Path(path)
+    ok, data = cv2.imencode(path.suffix, image, params or [])
+    if not ok:
+        raise OSError(f'Không mã hóa được ảnh: {path.name}')
+    path.write_bytes(data.tobytes())
+
 HERE = Path(__file__).resolve().parents[2] / "data" / "mockups"   # ảnh mockup gốc
 SCALE = 2
 BLEED = 38        # lề tràn file in (37.5 px @300dpi)
@@ -187,7 +203,7 @@ def render(name: str, pages: Path, out_path: Path, debug: bool = False) -> None:
     if cfg.get("year_grid"):
         return render_year_grid(cfg, pages, out_path)
     sheets = cfg["sheets"]
-    mock0 = cv2.imread(str(HERE / cfg["file"]), cv2.IMREAD_COLOR)
+    mock0 = read_image(HERE / cfg["file"])
     g0 = cv2.cvtColor(mock0, cv2.COLOR_BGR2GRAY)
     H0, W0 = g0.shape
     n = len(sheets)
@@ -285,7 +301,7 @@ def render(name: str, pages: Path, out_path: Path, debug: bool = False) -> None:
 
     def warp_full(name_png, quad):
         """Ghép CẢ trang (kèm lề tràn) sao cho khung trim rơi đúng tứ giác đích."""
-        img = cv2.imread(str(pages / f"{name_png}.png"), cv2.IMREAD_COLOR)
+        img = read_image(pages / f"{name_png}.png")
         if img is None:
             raise FileNotFoundError(pages / f"{name_png}.png")
         ih, iw = img.shape[:2]
@@ -419,14 +435,14 @@ def render(name: str, pages: Path, out_path: Path, debug: bool = False) -> None:
         if k in seams:
             p, d = seams[k]
             cv2.line(dbg, tuple(np.int32(p - d * 400)), tuple(np.int32(p + d * 400)), (255, 0, 0), 1)
-    cv2.imwrite(str(out_path.with_name(out_path.stem + "_debug.png")), dbg)
+    write_image(out_path.with_name(out_path.stem + "_debug.png"), dbg)
 
 
 def render_curl(cfg: dict, pages: Path, out_path: Path) -> None:
     """Lịch treo tường đang lật trang dưới: tranh tháng N ở trên lò xo, lịch tháng N trên phần trang đang cong,
     lịch tháng N+1 ở phần trang sau lộ ra dưới đường cong; bàn tay (màu da) luôn nằm trên cùng.
     Đường cong dò tự động theo từng cột: chỗ đầu tiên dưới lò xo mà mockup tối hẳn so với giấy."""
-    mock0 = cv2.imread(str(HERE / cfg["file"]), cv2.IMREAD_COLOR)
+    mock0 = read_image(HERE / cfg["file"])
     g0 = cv2.cvtColor(mock0, cv2.COLOR_BGR2GRAY).astype(np.float32)
     H0, W0 = g0.shape
     top_q, front_q, back_q = (np.float32(cfg[k]) for k in ("top", "front", "back"))
@@ -445,7 +461,7 @@ def render_curl(cfg: dict, pages: Path, out_path: Path) -> None:
     up = lambda q: np.float32(q) * S + (S - 1) / 2
 
     def warp(name_png, quad):
-        img = cv2.imread(str(pages / f"{name_png}.png"), cv2.IMREAD_COLOR)
+        img = read_image(pages / f"{name_png}.png")
         ih, iw = img.shape[:2]
         sc = np.linalg.norm(quad[1] - quad[0]) * 1.25 / (iw - 2 * BLEED)
         small = cv2.resize(img, (round(iw * sc), round(ih * sc)), interpolation=cv2.INTER_AREA)
@@ -505,7 +521,7 @@ def render_year_grid(cfg: dict, pages: Path, out_path: Path, size: int = 3000) -
             finally:
                 MOCKUPS.pop("_year_grid_month", None)
             with Image.open(one) as im:
-                k = im.width / cv2.imread(str(HERE / base["file"]), cv2.IMREAD_GRAYSCALE).shape[1]
+                k = im.width / read_image(HERE / base["file"], cv2.IMREAD_GRAYSCALE).shape[1]
                 tiles.append(im.convert("RGB").crop((round(x0 * k), round(y0 * k), round(x1 * k), round(y1 * k))))
     w, h = tiles[0].size
     cols, rows, margin, gap = 4, 3, round(size * .037), round(size * .02)
@@ -532,9 +548,9 @@ def _save(out_path: Path, img) -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     img = np.clip(img, 0, 255).astype(np.uint8)
     if out_path.suffix.lower() in (".jpg", ".jpeg"):
-        cv2.imwrite(str(out_path), img, [cv2.IMWRITE_JPEG_QUALITY, 92])
+        write_image(out_path, img, [cv2.IMWRITE_JPEG_QUALITY, 92])
     else:
-        cv2.imwrite(str(out_path), img)
+        write_image(out_path, img)
 
 
 # Một tờ lịch mở treo tường nhìn thẳng trên nền xám xanh (móc treo trên đỉnh, lỗ dưới đáy) - đo 06/10/2026.

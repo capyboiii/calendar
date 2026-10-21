@@ -135,29 +135,32 @@ class ShopCsvTest(unittest.TestCase):
                 self.assertEqual(reader.fieldnames, calendaria_csv.HEADER)
             variants = [row for row in rows if row["Variant SKU"]]
             images = [row for row in rows if not row["Variant SKU"]]
-            self.assertEqual(len(variants), 5)                 # 11x8.5: Matte + in tại nhà; 14x11.5: Matte + Glossy + in tại nhà
+            self.assertEqual(len(variants), 6)                 # mỗi khổ: Matte + Glossy + Printable
             self.assertEqual([row["Option2 Value"] for row in variants],
-                             ["Spiral", "Printable", "Spiral", "Spiral", "Printable"])
+                             ["Spiral", "Spiral", "Printable", "Spiral", "Spiral", "Printable"])
             self.assertEqual(variants[0]["Option3 Name"], "Paper")
             self.assertEqual([row["Option3 Value"] for row in variants],
-                             ["Matte", "N/A", "Matte", "Glossy", "N/A"])
+                             ["Matte", "Glossy", "N/A", "Matte", "Glossy", "N/A"])
             self.assertEqual([(row["Variant Price"], row["Variant Compare At Price"]) for row in variants],
-                             [("19.95", "29.95"), ("7.95", "12.95"), ("24.95", "39.95"), ("24.95", "39.95"),
+                             [("19.95", "29.95"), ("19.95", "29.95"), ("7.95", "12.95"), ("24.95", "39.95"), ("24.95", "39.95"),
                               ("9.95", "14.95")])
             self.assertEqual({row["Product Category"] for row in rows}, {"Calendars & Planners"})
-            self.assertEqual([row["Is Digital"] for row in variants], ["FALSE", "TRUE", "FALSE", "FALSE", "TRUE"])
-            self.assertTrue(variants[3]["Variant SKU"].endswith("-14SG"))
-            self.assertEqual(variants[3]["Variant Design"], variants[2]["Variant Design"])   # Glossy cùng file in
+            self.assertEqual([row["Is Digital"] for row in variants], ["FALSE", "FALSE", "TRUE", "FALSE", "FALSE", "TRUE"])
+            self.assertTrue(variants[1]["Variant SKU"].endswith("-11SG"))
+            self.assertTrue(variants[4]["Variant SKU"].endswith("-14SG"))
+            self.assertEqual(variants[1]["Variant Design"], variants[0]["Variant Design"])
+            self.assertEqual(variants[4]["Variant Design"], variants[3]["Variant Design"])
+            self.assertTrue(variants[1]["Variant Design"])
             self.assertIn("14 x 11.5 in (opens to 14 x 23 in)", variants[0]["Body (HTML)"])
             self.assertEqual(variants[0]["Title"], "Cat Days 2027 Wall Calendar | Gift")
-            self.assertEqual(variants[1]["Variant File"].endswith("/in_tai_nha_11x8.5.pdf"), True)
-            for v, label in ((variants[0], "11x8.5"), (variants[2], "14x11.5")):   # bản in: link trang in theo thứ tự cuốn
+            self.assertEqual(variants[2]["Variant File"].endswith("/in_tai_nha_11x8.5.pdf"), True)
+            for v, label in ((variants[0], "11x8.5"), (variants[3], "14x11.5")):   # bản in: link trang in theo thứ tự cuốn
                 links = v["Variant Design"].split("|")
                 self.assertTrue(links[0].endswith(f"/{label}/front_cover.png"), links[0])
                 self.assertTrue(links[-1].endswith(f"/{label}/back_cover.png"), links[-1])
                 self.assertTrue(all(l.startswith("https://cdn.x.com/") and f"/{label}/" in l for l in links))
-            self.assertEqual(variants[1]["Variant Design"], "")                 # bản in tại nhà: không có design
-            self.assertEqual(variants[4]["Variant Design"], "")
+            self.assertEqual(variants[2]["Variant Design"], "")                 # bản in tại nhà: không có design
+            self.assertEqual(variants[5]["Variant Design"], "")
             self.assertEqual(len(images), 4)
             self.assertTrue(all(row["Image Src"] for row in images))
 

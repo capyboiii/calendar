@@ -103,13 +103,15 @@ class LinkFlowTest(unittest.TestCase):
         art_prompts = [p for _, p in world.calls if p.startswith("OUTPUT FORMAT")]
         self.assertTrue(art_prompts)
 
-    def test_no_file_first_time_tries_another_session_then_succeeds(self):
+    def test_no_file_first_time_repairs_same_session_then_succeeds(self):
         def ask(k, p):
             if k == 1:
                 return "Etsy gallery images are visible, but could not be downloaded.", []
             return "ok", [("artworks.zip", GOOD_ZIP)]
         ds, calls, _ = self.go(ask)
         self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[0][0], calls[1][0])
+        self.assertIn('Không truy cập lại', calls[1][1])
         complete(self, ds[0])
 
     def test_no_zip_at_all_fails_book_without_drawing(self):

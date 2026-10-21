@@ -11,6 +11,8 @@ import io
 import re
 import zipfile
 import uuid
+import json
+import time
 from pathlib import Path
 
 from ..imagegen.driver import TempError
@@ -19,13 +21,27 @@ from . import session, store
 MAX_LINK_REFS = 12            # tối đa 12 artwork (1 tháng 1 ảnh); dán tay vẫn 10
 MIN_SIDE = 100                # ảnh nhỏ hơn: biểu tượng. Artwork cắt từ ảnh xem trước Etsy chỉ ~225x165 px
 
+
+def _event(b, name, event, started, **details):
+    data = {"time": time.strftime("%Y-%m-%d %H:%M:%S"), "account": name, "event": event,
+            "elapsed_s": round(time.monotonic() - started, 2), **details}
+    try:
+        with (b.d / "source_fetch.jsonl").open("a", encoding="utf-8") as stream:
+            stream.write(json.dumps(data, ensure_ascii=False) + "\n")
+    except OSError:
+        b.on_event(f"[{name}] không lưu được log lấy nguồn; xem log tác vụ")
+    b.on_event(f"[{name}] lấy nguồn: {event} · {data['elapsed_s']:.0f}s"
+               + (f" · {details}" if details else ""))
+
 # NGUYÊN VĂN câu người dùng làm tay thành công (13/10/2026). Không đòi ZIP / tên file: bắt đóng gói ZIP thì máy xử lý
 # của ChatGPT phải tự tải ảnh gốc từ Etsy (bị chặn). ChatGPT gửi ảnh nào trong chat thì tool tự lưu làm ảnh mẫu
 # (gửi kèm file ZIP / PNG thì tải file về). Không cho lối thoát kiểu "không làm được thì trả lời X".
 # Thêm (14/10/2026): lấy ẢNH GỐC từ network - lần thử đầu ChatGPT cắt từ ảnh thu nhỏ, artwork chỉ ~225x165 px.
 FETCH_PROMPT = """Từ link sản phẩm này, hãy lấy ảnh của sản phẩm, cắt chỉ lấy mỗi artwork rồi gửi tôi: {url}
 
-Tải TRỰC TIẾP từng ảnh gốc theo URL il_fullxfull: lấy link ảnh gallery trên i.etsystatic.com, đổi phần kích thước trong link (vd il_794xN, il_570xN, il_300x300) thành il_fullxfull rồi tải thẳng link đó - đây là file gốc độ phân giải lớn nhất. KHÔNG dùng ảnh thu nhỏ / ảnh preview hiển thị trong gallery. Cắt artwork từ ảnh gốc đó, giữ nguyên độ phân giải, không phóng to, không vẽ lại."""
+Tải TRỰC TIẾP từng ảnh gốc theo URL il_fullxfull: lấy link ảnh gallery trên i.etsystatic.com, đổi phần kích thước trong link (vd il_794xN, il_570xN, il_300x300) thành il_fullxfull rồi tải thẳng link đó - đây là file gốc độ phân giải lớn nhất. KHÔNG dùng ảnh thu nhỏ / ảnh preview hiển thị trong gallery. Cắt artwork từ ảnh gốc đó, giữ nguyên độ phân giải, không phóng to, không vẽ lại.
+
+Nếu trang lịch được chụp nghiêng hoặc xoay, hãy nắn phối cảnh mặt phẳng artwork và xoay về chiều xem tự nhiên trước khi cắt. Chỉ giữ hình chữ nhật của tranh, loại sạch nền trắng, mép giấy, lò xo, lịch ngày tháng và nền mockup. Không gửi nguyên ảnh sản phẩm rồi gọi là artwork. Không kéo giãn nhân vật, không cắt cụt nội dung chính; không vẽ thêm trong bước lấy ảnh. Kiểm tra từng ảnh xuất ra đã đúng chiều, tranh phẳng và không còn phần trình bày sản phẩm."""
 
 
 def valid_url(url: str) -> str:
@@ -101,6 +117,21 @@ def save_refs(d: Path, images: list[tuple[str, bytes]]) -> int:
 
 
 def fetch_work(b, s, name: str) -> None:
+    started = time.monotonic()
+    _event(b, name, "bắt đầu", started)
+    try:
+        _fetch_work(b, s, name, started)
+    except Exception as exc:
+        _event(b, name, "lỗi phiên", started, error=f"{type(exc).__name__}: {str(exc)[:250]}")
+        try:
+            store.write(b.d, last_source_chat=s.chat_url())
+            s.page.screenshot(path=str(b.d / 'last_source_error.png'), timeout=5000)
+        except Exception:
+            pass  # Diagnostics must not hide the original failure.
+        raise
+
+
+def _fetch_work(b, s, name: str, started: float) -> None:
     """Bước "lấy ảnh mẫu từ link" (chạy trong run_stage: hết lượt / lỗi mạng / lỗi trang -> đổi tài khoản như
     các bước khác). ChatGPT không vào được trang -> lỗi tạm, phiên sau (tài khoản khác) thử lại."""
     url = b.item.get("source_url", "")
@@ -111,7 +142,10 @@ def fetch_work(b, s, name: str) -> None:
     images: list[tuple[str, bytes]] = []
     prompt = fetch_prompt(url)
     for attempt in range(2):
+        _event(b, name, "gửi yêu cầu" if attempt == 0 else "sửa file trong cùng chat", started, attempt=attempt+1)
         reply, files = s.ask_files(prompt)
+        download_errors = list(getattr(s, 'last_download_errors', []) or [])
+        _event(b, name, "nhận kết quả", started, files=len(files), download_errors=download_errors)
         seen: set[bytes] = set()
         invalid_zip = False
         files = [f for f in files if f[1] and not (f[1] in seen or seen.add(f[1]))]
@@ -129,8 +163,27 @@ def fetch_work(b, s, name: str) -> None:
                     images += store.to_images(fname, data)
                 except ValueError:
                     pass
-        if images or not invalid_zip or attempt:
+        if not images and not files and not download_errors and not attempt:
+            b.on_event(f'[{name}] chưa có file tải thật — yêu cầu gửi lại trong cùng chat, không lấy lại nguồn')
+            prompt = ('Tôi chưa nhận được tệp artwork tải được trong câu trả lời vừa rồi. '
+                      'Hãy gửi lại những artwork đã cắt trong chính cuộc trò chuyện này bằng tệp ZIP hoặc PNG/JPG '
+                      'có liên kết tải thật. Không chỉ viết tên file hay hứa gửi file. '
+                      'Không truy cập lại trang sản phẩm, không cắt lại và không vẽ ảnh mới. '
+                      'Nếu chưa tạo được file thì nói rõ lỗi cụ thể.')
+            continue
+        if not invalid_zip and not download_errors:
             break
+        if attempt:
+            if download_errors:
+                raise TempError(f"không tải đủ ảnh nguồn sau sửa link: {download_errors[0]}")
+            break
+        if download_errors:
+            b.on_event(f"[{name}] link tải lỗi - yêu cầu cấp lại link trong cùng chat, không lấy lại nguồn")
+            prompt = ("Các liên kết tải file vừa rồi không tải được hoặc bị ngắt. "
+                      "Hãy gửi lại file artwork đã cắt trong cuộc trò chuyện này bằng liên kết tải hoạt động. "
+                      "Không truy cập lại trang sản phẩm, không vẽ lại và không đổi nội dung. "
+                      "Gửi đủ bộ ảnh đã cắt, có thể đóng một ZIP hoàn chỉnh; kiểm tra file đã ghi xong trước khi gửi.")
+            continue
         b.on_event(f"[{name}] ZIP không dùng được - yêu cầu gửi lại file hợp lệ trong cùng chat")
         prompt = ("File ZIP bạn vừa gửi không giải nén được hoặc không chứa artwork đọc được. "
                   "Hãy dùng lại các artwork đã cắt từ link này, không vẽ lại và không đổi nội dung: " + url +
@@ -141,5 +194,8 @@ def fetch_work(b, s, name: str) -> None:
         images = [(f"{i:02d}.png", data) for i, data in enumerate(s.harvest(), 1)]
     if not images:
         raise TempError("ChatGPT chưa gửi artwork nào: " + (reply or "")[-160:].replace("\n", " "))
+    # A repaired ZIP can repeat files already downloaded in the first turn.
+    images = list({data: (name, data) for name, data in images}.values())
     n = save_refs(b.d, images)
+    _event(b, name, "đã lưu đủ kết quả", started, refs_count=n)
     b.on_event(f"[{name}] đã lấy {n} artwork từ link làm ảnh mẫu")

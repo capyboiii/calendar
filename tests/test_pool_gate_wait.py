@@ -46,6 +46,33 @@ class PoolGateWaitTest(unittest.TestCase):
         with self.b._process_gate() as acquired:
             self.assertTrue(acquired)
 
+    def test_waiter_cleanup_does_not_block_account_release_on_busy_global_gate(self):
+        self.assertEqual(self.a.acquire(IMAGE, only='acc1'), 'acc1')
+        self.assertIsNone(self.b.acquire(IMAGE, only='acc1', request_id='blocked'))
+        with self.b._process_gate():
+            started=time.monotonic()
+            self.a.cancel_wait(IMAGE, 'cleanup')
+            self.a.release('acc1')
+            self.assertLess(time.monotonic()-started,.5)
+        self.assertEqual(self.a.use,{})
+        self.b.cancel_wait(IMAGE,'blocked')
+        self.assertEqual(self.b.acquire(IMAGE,only='acc1'),'acc1')
+        self.b.release('acc1')
+
+    def test_deferred_cleanup_is_flushed_before_next_allocation(self):
+        import json
+        from calforge.llm.pool_waiters import FILE
+        self.assertEqual(self.b.acquire(IMAGE,only='acc1'),'acc1')
+        self.assertIsNone(self.a.acquire(IMAGE,only='acc1',request_id='cancelled'))
+        with self.b._process_gate():
+            self.a.cancel_wait(IMAGE,'cancelled')
+        self.assertTrue(self.a._wait_cancels)
+        self.assertEqual(self.a.acquire(IMAGE,only='acc2',request_id='next'),'acc2')
+        self.assertFalse(self.a._wait_cancels)
+        state=json.loads((self.root/FILE).read_text())
+        self.assertFalse(any(':cancelled:' in r['token'] for r in state['requests']))
+        self.a.release('acc2');self.b.release('acc1')
+
     @unittest.skipUnless(__import__('os').name == 'nt', 'Windows API')
     def test_fatal_lock_error_is_not_retried_forever(self):
         with mock.patch('msvcrt.locking', side_effect=OSError(errno.EBADF, 'invalid handle')):

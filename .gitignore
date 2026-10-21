@@ -14,3 +14,9 @@ data/account_emails.json
 .venv/
 dist/
 logs/
+# file tạm lúc chạy tool / thử nghiệm - không đưa lên git
+outputs/
+node_modules/
+.calforge_books.json
+.calforge_pool.lock
+data/sheet_sync_defaults.json

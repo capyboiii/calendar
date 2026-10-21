@@ -100,6 +100,20 @@ def _weekday_of(text: str) -> int | None:
     return None
 
 
+def _cell_has(img: Image.Image, box: tuple[int, int, int, int], n: int, hmed: float) -> bool:
+    """Đọc lại một ô ngày OCR bỏ sót. Phóng to x3 cạnh dòng chữ ngày lễ hay làm bộ dò chữ bỏ qua số đơn ("4" trên
+    "INDEPENDENCE DAY"), nên thử nhiều cỡ và một khung cắt bỏ phần dưới ô; thấy số ở bất kỳ lần nào là có."""
+    x0, y0, x1, y1 = box
+    tight = (x0, y0, x1, int(min(y1, (y0 + y1) / 2 + .9 * hmed)))      # số ngày + chút dưới, bỏ nhãn lễ
+    for b in (box, tight):
+        crop = img.crop(b)
+        for s in (3, 2, 1):
+            c = crop if s == 1 else crop.resize((crop.width * s, crop.height * s), Image.LANCZOS)
+            if str(n) in [re.sub(r"[^\d]", "", t) for t, *_ in _ocr(c)]:
+                return True
+    return False
+
+
 def check_grid_page(path: Path, year: int, month: int) -> str | None:
     img = Image.open(path).convert("RGB")
     toks = _ocr(img)
@@ -130,7 +144,7 @@ def check_grid_page(path: Path, year: int, month: int) -> str | None:
         if abs(x - cols[c]) > .6 * abs(b):
             continue                                    # không nằm trong cột nào: bỏ qua
         found.setdefault(int(text), []).append((x, y, h))
-    extra = sorted(n for n in found if n not in expect)
+    extra = sorted(n for n in found if n not in expect and n != 0)   # "0" lẻ: mảnh chữ OCR, không phải ngày
     if extra:
         return f"lịch sai: có số không thuộc tháng này ({', '.join(map(str, extra))})"
     dup = sorted(n for n, v in found.items() if len(v) > 1)
@@ -175,9 +189,6 @@ def check_grid_page(path: Path, year: int, month: int) -> str | None:
             cy = dict(rows).get(w, m0 + k * w)
             half_w, half_h = .45 * abs(b), .55 * abs(k) if k else 1.5 * hmed
             box = (int(cols[c] - half_w), int(cy - half_h), int(cols[c] + half_w), int(cy + half_h))
-            crop = img.crop(box)
-            crop = crop.resize((crop.width * 3, crop.height * 3), Image.LANCZOS)
-            digits = [t for t, *_ in _ocr(crop) if re.fullmatch(r"\d{1,2}", t)]
-            if str(n) not in digits:
+            if not _cell_has(img, box, n, hmed):
                 return f"lịch sai: thiếu ngày {n} (ô {WEEKDAYS[c]} tuần {w + 1})"
     return None

@@ -30,8 +30,8 @@ PY_VER = "3.12.10"
 PY_EMBED = f"https://www.python.org/ftp/python/{PY_VER}/python-{PY_VER}-embed-amd64.zip"
 # chặn cứng các thư mục/file riêng tư dù .gitignore có sót
 NEVER = ("projects/", ".chrome-profiles/", ".ui-browser/", ".venv/", "dist/", ".cache/", ".git/", ".claude/", ".idea/", "models/",
-         "__pycache__/", "logs/")
-NEVER_FILES = ("calforge.json", "data/account_emails.json", ".ui-install-id", ".ui-install-id.tmp")
+         "__pycache__/", "logs/", "outputs/", "node_modules/", "docs/")
+NEVER_FILES = ("calforge.json", "data/account_emails.json", "data/sheet_sync_defaults.json", ".ui-install-id", ".ui-install-id.tmp")
 EXTRA = ("data/kjv.json",)          # không nằm trong git (tải về) nhưng app cần, phạm vi công cộng
 
 
@@ -116,7 +116,7 @@ Type: filesandordirs; Name: "{app}\calforge"
 
 [Files]
 Source: "%(app)s\*"; DestDir: "{app}"; Excludes: "\calforge.json"; Flags: ignoreversion recursesubdirs createallsubdirs
-; khoá R2 kèm sẵn (chỉ khi đóng gói bằng --with-r2): chỉ chép nếu máy chưa có calforge.json, không đè khoá người dùng
+; R2 config is only installed once; bundled Sheet fallback is refreshed by the recursive copy above.
 Source: "%(app)s\calforge.json"; DestDir: "{app}"; Flags: onlyifdoesntexist uninsneveruninstall skipifsourcedoesntexist
 
 [Icons]
@@ -149,20 +149,31 @@ def _iscc() -> Path:
 
 
 def _bundle_r2(app: Path) -> None:
-    """python tools/package.py --with-r2: kèm KHOÁ R2 của máy này (chỉ mục "r2" trong calforge.json, không gì khác)
-    để người nhận đẩy R2 + xuất CSV được ngay. Ai có bộ cài đều đọc được khoá này - chỉ gửi người tin cậy, nên dùng
-    API token R2 giới hạn đúng 1 bucket."""
+    """Bundle R2 and Sheet sync credentials explicitly with --with-r2.
+    No other local settings or credentials are included.
+    """
     import json
     try:
-        r2 = json.loads((ROOT / "calforge.json").read_text(encoding="utf-8")).get("r2") or {}
+        settings = json.loads((ROOT / "calforge.json").read_text(encoding="utf-8"))
+        r2 = settings.get("r2") or {}
     except (OSError, ValueError):
-        r2 = {}
+        settings, r2 = {}, {}
     need = ("account_id", "access_key_id", "secret_access_key", "bucket", "public_url")
     missing = [k for k in need if not r2.get(k)]
     if missing:
         sys.exit(f"--with-r2: calforge.json chưa có đủ khoá R2 ({', '.join(missing)})")
+    if str(ROOT) not in sys.path:
+        sys.path.insert(0, str(ROOT))
+    from calforge.publish.sheets import SheetError, validate_settings
+    try:
+        sheets = validate_settings(settings.get('sheets') or {})
+    except SheetError as exc:
+        sys.exit(f'--with-r2: chưa thể kèm đồng bộ Sheet: {exc}')
     (app / "calforge.json").write_text(json.dumps({"r2": r2}, ensure_ascii=False, indent=2), encoding="utf-8")
+    (app / 'data').mkdir(parents=True, exist_ok=True)
+    (app / 'data' / 'sheet_sync_defaults.json').write_text(json.dumps(sheets, indent=2), encoding='utf-8')
     print(f"Kèm khoá R2 (bucket {r2['bucket']}) - bộ cài này chứa khoá bí mật, chỉ gửi người tin cậy")
+    print('Đã kèm cấu hình đồng bộ Sheet cho máy cài mới và máy cập nhật')
 
 
 def _guide_pdf() -> None:

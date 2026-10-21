@@ -221,22 +221,98 @@ class Session:
             return any(im.get('done') and min(im.get('w', 0), im.get('h', 0)) >= MIN_SIDE
                        for im in state.get('imgs', []) + state.get('pageImgs', []))
 
-        reply = self.ask_text(prompt, timeout_s, allow_cloud_browser=True, response_ready=ready)
+        try:
+            reply = self.ask_text(prompt, timeout_s, allow_cloud_browser=True, response_ready=ready)
+        except TempError as error:
+            # A final promise without a real file is recoverable in this chat.
+            # Return the reply so fetch can request the existing files again.
+            if 'chưa gửi file/ảnh hợp lệ' not in str(error):
+                raise
+            from ..llm.chatgpt_web import TURNS_JS
+            state = self.page.evaluate(TURNS_JS)
+            if state.get('busy') or not state.get('text', '').strip():
+                raise
+            reply = state['text']
+        return reply, self.download_files()
+
+    def download_files(self, timeout_s: float = 120) -> list[tuple[str, bytes]]:
+        """Download actual links in the latest reply without sending another prompt."""
         page, files = self.page, []
+        self.last_download_errors = []
+        deadline = self.clock() + timeout_s
         try:
             n = int(page.evaluate(FILE_LINKS_JS))
         except Exception:  # noqa: BLE001 - trang đổi DOM: coi như không có link
             n = 0
-        for i in range(n):
+        for i in range(min(n, 24)):
+            remaining = deadline - self.clock()
+            if remaining <= 0:
+                self.last_download_errors.append(f"hết {timeout_s:.0f}s tải file; còn {n-i} link")
+                break
             link = page.locator(f'[data-calforge-file="{i}"]').first
             try:
-                with page.expect_download(timeout=120_000) as dl:
-                    link.click(timeout=15_000)
+                with page.expect_download(timeout=max(1, int(min(20, remaining) * 1000))) as dl:
+                    link.click(timeout=max(1, int(min(5, remaining) * 1000)))
                 d = dl.value
-                files.append((d.suggested_filename or f"file{i}", Path(d.path()).read_bytes()))
-            except Exception:  # noqa: BLE001 - link này không tải được: thử link khác
+                if str(d.url).startswith(('https://', 'http://')):
+                    # Download.path() can wait forever for a stalled network transfer.
+                    # Use the browser-context request API (same cookies), with a bounded transfer.
+                    url = d.url
+                    d.cancel()
+                    remaining = deadline - self.clock()
+                    if remaining <= 0:
+                        raise TempError("hết thời gian tải file")
+                    response = page.request.get(url, timeout=max(1, int(min(60, remaining) * 1000)))
+                    try:
+                        if not response.ok:
+                            raise TempError(f"tải file trả HTTP {response.status}")
+                        data = response.body()
+                    finally:
+                        response.dispose()
+                else:  # Blob/data downloads are generated locally, without a network transfer.
+                    data = Path(d.path()).read_bytes()
+                files.append((d.suggested_filename or f"file{i}", data))
+            except Exception as exc:  # noqa: BLE001 - bounded, report instead of silently discarding
+                detail = f"link {i+1}/{n}: {type(exc).__name__}"
+                if isinstance(exc, TempError):
+                    detail += f" ({str(exc)[:120]})"
+                self.last_download_errors.append(detail)
+                print(f"   [lấy nguồn] không tải được {detail}", flush=True)
                 continue
-        return reply, files
+        return files
+
+    def file_images(self, want: int) -> list[bytes]:
+        import zipfile
+        from PIL import Image
+        out, seen = [], set()
+        def take(data):
+            try:
+                with Image.open(io.BytesIO(data)) as im:
+                    im.verify()
+                fp = _fingerprint(data)
+                if fp not in seen:
+                    seen.add(fp)
+                    out.append(data)
+            except Exception:
+                pass
+        for name, data in self.download_files():
+            if zipfile.is_zipfile(io.BytesIO(data)):
+                with zipfile.ZipFile(io.BytesIO(data)) as archive:
+                    total = 0
+                    for entry in archive.infolist():
+                        if len(out) >= want:
+                            break
+                        if Path(entry.filename).suffix.lower() not in ('.png', '.jpg', '.jpeg', '.webp'):
+                            continue
+                        total += entry.file_size
+                        if entry.file_size > 40_000_000 or total > 200_000_000:
+                            continue
+                        take(archive.read(entry))
+            else:
+                take(data)
+            if len(out) >= want:
+                break
+        return out[:want]
 
     # ---------------------------------------------------------------- chờ nhiều ảnh
     def _collect(self, before: dict, want: int) -> Turn:
@@ -302,6 +378,11 @@ class Session:
                     break
                 if not srcs and tail.strip() and idle >= 8:
                     if kind or driver.wants_source(tail) or idle >= 45:
+                        if not kind and re.search(r'download|sandbox:|\.zip\b|tải', tail, re.I):
+                            files = self.file_images(want)
+                            if files:
+                                turn.images, turn.text = files, tail
+                                return turn
                         turn.problem = (_problem(kind, tail) if kind else
                                         TempError(f"trả lời xong mà không có ảnh: {tail[-160:]!r}"))
                         break
@@ -382,7 +463,8 @@ FILE_LINKS_JS = r"""() => {
     const href = (el.getAttribute('href') || '').toLowerCase();
     const txt = (el.innerText || el.getAttribute('aria-label') || '').toLowerCase();
     const file = href.startsWith('sandbox:') || /\.(zip|png|jpe?g|webp)(\?|$)/.test(href)
-      || FILE.test(txt) || /download|tải xuống|tải về/.test(txt);
+      || el.hasAttribute('download') || FILE.test(txt) || /download|tải xuống|tải về/.test(txt)
+      || (/^tải\s/i.test(txt.trim()) && /\b(zip|png|jpe?g|webp|artwork|file)\b/i.test(txt));
     if (file && !/copy|sao chép|share|chia sẻ|retry|thử lại/.test(txt)) el.setAttribute('data-calforge-file', String(n++));
   }
   return n;

@@ -17,7 +17,8 @@ from pathlib import Path
 
 URL = "https://chatgpt.com/"
 SEL_PROMPT = ["#prompt-textarea", 'div.ProseMirror[contenteditable="true"]', "textarea[data-id]"]
-SEL_SEND = ['button[data-testid="send-button"]', 'button[aria-label*="Send" i]']
+SEL_SEND = ['button[data-testid="send-button"]', 'button[aria-label="Send" i]',
+            'button[aria-label="Gửi" i]', 'button[aria-label*="Send" i]']
 
 # Lượt trả lời của ChatGPT: thử nhiều mốc vì ChatGPT đã đổi DOM (xem ghi chú trong chatgpt_pool.py)
 TURNS_JS = r"""() => {
@@ -40,8 +41,16 @@ TURNS_JS = r"""() => {
   const work = pick('main .tabular-nums, main [role="status"], main button');
   if (work.some(el => vis(el) && /^(Working for\b|Working[.…]|Đang (?:làm việc|xử lý)(?:\s|[.…]))/i.test((el.innerText || '').trim()))) busy = true;
   const last = a.length ? a[a.length - 1] : null;
+  const identity = (el) => {
+    if (!el) return '';
+    const article = el.closest('article');
+    return el.getAttribute('data-message-id') || el.getAttribute('data-chatgpt-search-unit-key') ||
+      el.getAttribute('data-turn-id') || (article && (article.getAttribute('data-turn-id') ||
+      article.getAttribute('data-testid') || article.id)) || el.id || '';
+  };
   return {
     assistant: a.length, user: u.length, busy,
+    assistant_id: identity(last), user_id: identity(u[u.length - 1]),
     text: last ? last.innerText : '',
     codes: last ? Array.from(last.querySelectorAll('pre code')).map((c) => c.textContent) : [],
   };
@@ -153,15 +162,33 @@ class _WebChat:
 
         return _eval(self.page, TURNS_JS)
 
+    @staticmethod
+    def _new_reply(state: dict, before: dict) -> bool:
+        return (state['assistant'] > before['assistant'] or
+                bool(state.get('assistant_id') and state.get('assistant_id') != before.get('assistant_id')))
+
     def _wait_sent(self, before: dict, seconds: float) -> bool:
         deadline = time.monotonic() + seconds
         while True:
             st = self._state()
-            if st["user"] > before["user"] or st["assistant"] > before["assistant"] or st.get("busy"):
+            if (st["user"] > before["user"] or self._new_reply(st, before) or st.get("busy") or
+                    bool(st.get('user_id') and st.get('user_id') != before.get('user_id'))):
                 return True
             if time.monotonic() > deadline:
                 return False
             self.page.wait_for_timeout(400)
+
+    def _submit(self, box):
+        """Resolve the current Send control again after Work/composer rerenders."""
+        for sel in SEL_SEND:
+            btn = self.page.locator(sel).first
+            try:
+                if btn.is_visible() and btn.is_enabled():
+                    btn.click(timeout=4000)
+                    return
+            except Exception:
+                continue
+        box.press('Enter')
 
     def ask(self, prompt: str, label: str) -> str:
         print(f"   [chat] gửi yêu cầu ({label})...", flush=True)
@@ -172,18 +199,7 @@ class _WebChat:
         box.click()
         box.evaluate(INSERT_JS, prompt)
         self.page.wait_for_timeout(400)
-        sent = False
-        for sel in SEL_SEND:
-            btn = self.page.locator(sel).first
-            try:
-                if btn.is_visible() and btn.is_enabled():
-                    btn.click(timeout=4000)
-                    sent = True
-                    break
-            except Exception:  # noqa: BLE001
-                continue
-        if not sent:
-            box.press("Enter")
+        self._submit(box)
 
         sent_at = time.monotonic()
         if not self._wait_sent(before, 15):
@@ -191,7 +207,7 @@ class _WebChat:
                 raise QuotaExceeded(f"chặn lúc gửi: {self._limited(sent_at)}")
             print(f"   [chat] tin nhắn chưa đi sau 15s, bấm gửi lại...", flush=True)
             try:
-                box.press("Enter")
+                self._submit(self._find(SEL_PROMPT))
             except Exception:  # noqa: BLE001 - khung nhập bị popup che: để bước dưới báo lỗi
                 pass
             if not self._wait_sent(before, 15):
@@ -220,28 +236,33 @@ class _WebChat:
                     self.page.wait_for_timeout(700)
                     continue
             st = self._state()
-            if st.get("busy") or st["assistant"] > before["assistant"]:
+            new_reply = self._new_reply(st, before)
+            if st.get("busy") or new_reply:
                 saw_reply_activity = True
             reply_changed = st["text"] != last_text
-            if st["assistant"] > before["assistant"] and (not st["busy"] or
+            if new_reply and (not st["busy"] or
                     (self.response_ready is None and self._complete_json(st["codes"]))):
                 if reply_changed:
                     last_text, stable_since = st["text"], time.monotonic()
                 elif time.monotonic() - stable_since >= self.settle_s and last_text.strip() and (
                         self.response_ready is None or self.response_ready()):
                     break
-            if not (st["assistant"] > before["assistant"] and st["text"].strip()) and not st["busy"]:
+                elif (self.response_ready is not None and last_text.strip() and
+                      time.monotonic() - stable_since >= 120):
+                    raise SendFailed(f"[{label}] ChatGPT đã dừng 120s nhưng chưa gửi file/ảnh hợp lệ: {last_text[-200:]}")
+            if not (new_reply and st["text"].strip()) and not st["busy"]:
                 limited = self._limited(started)
                 if limited:
                     raise QuotaExceeded(limited)
             now = time.monotonic()
-            has_reply_text = st["assistant"] > before["assistant"] and bool(st["text"].strip())
+            has_reply_text = new_reply and bool(st["text"].strip())
             if has_reply_text:
                 from .limits import classify, page_notice
 
-                kind = classify(st["text"] + " " + page_notice(self.page))
+                notice = page_notice(self.page)
+                kind = classify(_notice_text(st) + " " + notice)
                 if kind == "quota":
-                    raise QuotaExceeded(st["text"][-200:])
+                    raise QuotaExceeded((notice or st["text"])[-200:])
                 if kind in ("error", "refused", "ip_refused") and not st.get("codes"):
                     raise SendFailed(f"[{label}] ChatGPT trả {kind}: {st['text'][-200:]}")
             elif not st.get("busy"):
@@ -279,11 +300,25 @@ class _WebChat:
         if not st["codes"]:
             from .limits import classify, page_notice
 
-            if classify(st["text"] + " " + page_notice(self.page)) == "quota":
-                raise QuotaExceeded(st["text"][-160:])
+            notice = page_notice(self.page)
+            if classify(_notice_text(st) + " " + notice) == "quota":
+                raise QuotaExceeded((notice or st["text"])[-160:])
         # innerText không còn dấu ``` của markdown -> dựng lại khối code để bộ bóc JSON nhận ra
         blocks = "".join(f"\n```json\n{code.strip()}\n```\n" for code in st["codes"])
         return st["text"] + ("\n" + blocks if blocks else "")
+
+
+NOTICE_MAX_CHARS = 600
+
+
+def _notice_text(st: dict) -> str:
+    """Lượt trả lời chỉ được coi là thông báo của ChatGPT khi nó ngắn và không phải JSON / khối code. Câu trả lời thật
+    (concept, listing...) hay chứa chữ trùng câu báo lỗi ("Overloaded Supply Cart", "wait until spring"...) - dò cả
+    bài sẽ đuổi nhầm tài khoản đang trả lời bình thường."""
+    text = (st.get("text") or "").strip()
+    if st.get("codes") or len(text) > NOTICE_MAX_CHARS or "{" in text or '":' in text:
+        return ""
+    return text
 
 
 class QuotaExceeded(RuntimeError):
@@ -327,9 +362,12 @@ class _RotatingChat:
         pool = get_pool()
         self._waiting_pool = pool
         while True:
-            for name in list(self.order):
-                if name in self.failed or name in exclude or pool.acquire(CHAT, only=name) is None:
-                    continue
+            self._waiting_pool = pool
+            usable = [n for n in self.order if n not in self.failed and n not in exclude]
+            # Register the complete eligible set so the earlier queue job can
+            # claim any available chat account, not just the last profile probed.
+            name = pool.acquire(CHAT, prefer=usable, eligible=usable) if usable else None
+            for name in ([name] if name is not None else []):
                 self.order.remove(name)
                 self.order.append(name)                     # lần sau bắt đầu từ tài khoản khác
                 udir = self.backend.profiles_dir / name
@@ -374,6 +412,8 @@ class _RotatingChat:
                         pool.rest(name, CHAT, 600, f"không mở được Chrome: {e}")
                         pool.trouble(name, f"chat không mở được: {e}")
                     self.close()
+            if name is not None and name in self.failed:
+                continue
             usable = [n for n in self.order if n not in self.failed and n not in exclude]
             if not usable or all(pool._resting(n, CHAT) for n in usable):
                 if exclude:
