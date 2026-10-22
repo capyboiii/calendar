@@ -232,7 +232,8 @@ def source_dir(d: Path) -> Path:
     if not value:
         raise ValueError("thiếu nhóm ảnh nguồn")
     result = Path(value).resolve()
-    result.relative_to(d.parent.parent.resolve())
+    from ..projects import run_root
+    result.relative_to(run_root(d.parent.parent.resolve(), read(d)).resolve())
     if result.parent.name != "_clone_sources" or not re.fullmatch(r"[a-z0-9]{6,20}", result.name):
         raise ValueError("nhóm ảnh nguồn không hợp lệ")
     return result
@@ -286,9 +287,12 @@ def _publish_group(projects_dir, group: Path) -> None:
 
 
 def recover_batches(projects_dir) -> None:
+    from ..projects import roots
     base = Path(projects_dir)
     groups = list((base / "_clone_sources").glob("*/item.json"))
     groups += list((base / "_du_an").glob("*/_clone_sources/*/item.json"))
+    for external in roots(base)[1:]:
+        groups += list((external / '_clone_sources').glob('*/item.json'))
     for manifest in groups:
         if not manifest.parent.name.startswith("."):
             _publish_group(projects_dir, manifest.parent)

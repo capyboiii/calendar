@@ -50,9 +50,10 @@ def _money(value: float) -> str:
 def _book_rows(cdir: Path, shop: dict) -> list[dict]:
     listing = json.loads(layout.listing_file(cdir).read_text(encoding="utf-8"))
     try:
-        product = products.product_id(json.loads(layout.concept_file(cdir).read_text(encoding="utf-8")))
+        concept = json.loads(layout.concept_file(cdir).read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        product = products.DEFAULT
+        concept = {}
+    product = products.product_id(concept)
     files = r2.read_state(cdir).get("files", {})
     previews = [files[n]["url"] for n in sorted(files) if "/" not in n and n.lower().endswith(".jpg")]
     handle = r2.slug(listing["title"], 200)
@@ -69,8 +70,8 @@ def _book_rows(cdir: Path, shop: dict) -> list[dict]:
         cover = (files.get(f"{label}/front_cover.png") or {}).get("url", "")
         if not cover:
             continue
-        design = "|".join((files.get(f"{label}/{pg.name}") or {}).get("url", "")
-                          for pg in r2.print_pages(cdir, size["format_id"]))
+        design = "|".join((files.get(f"{label}/{name}") or {}).get("url", "")
+                          for name in r2.design_names(cdir, size["format_id"], files))
         for variant in shop["variants"]:
             printable = variant["format"].lower() == "printable"
             if printable and not (files.get(layout.printable_file(cdir, size["format_id"]).name) or {}).get("url"):
@@ -107,7 +108,7 @@ def _book_rows(cdir: Path, shop: dict) -> list[dict]:
                 row.update({
                     "Title": listing["title"], "Body (HTML)": body_html(listing),
                     "Type": shop["type"], "Tags": ", ".join(listing.get("tags", [])),
-                    "Is Trademark": "FALSE",
+                    "Is Trademark": "TRUE" if concept.get("trademark") else "FALSE",
                     "Option1 Name": shop["size_option"], "Option2 Name": shop["format_option"],
                     "Option3 Name": "Paper", "Image Src": previews[0] if previews else cover,
                 })

@@ -41,6 +41,90 @@ class ProjectTest(unittest.TestCase):
             with self.assertRaises(ValueError): projects.require(self.root, ident)
         self.assertEqual(projects.run_root(self.root, {}), self.root)
 
+    def test_external_storage_discovery_resume_and_path_permissions(self):
+        with tempfile.TemporaryDirectory(dir=server.ROOT / '.cache') as folder:
+            parent = Path(folder)
+            p = projects.create(self.root, 'Other drive', str(parent))
+            target = projects.require(self.root, p['id'])
+            self.assertEqual(target.parent, parent)
+            self.assertNotEqual(target, parent)
+            book = layout.new_book_dir(products.root(target) / 'topic', 'Example', 'r1a1')
+            layout.concept_file(book).write_text(json.dumps(fixtures.concept()), encoding='utf-8')
+            self.assertIn(book, layout.books(self.root))
+            self.assertTrue(server._in_projects(book))
+            self.assertFalse(server._in_projects(parent / 'private.txt'))
+            self.assertEqual(server._book_arg({'concept': str(book)}), book)
+            self.assertEqual((server.ROOT / server._rel(book)).resolve(), book.resolve())
+            h = mock.Mock()
+            server.StudioHandler._api_list_projects(h)
+            result = h._send_json.call_args.args[0]
+            self.assertEqual(result['projects'][0]['project_id'], p['id'])
+            self.assertEqual(result['projects'][0]['concepts'][0]['path'], server._rel(book))
+            image = book / 'sample.png'
+            image.write_bytes(b'image')
+            h = mock.Mock()
+            server.StudioHandler._api_get_file(h, server._rel(image))
+            self.assertEqual(h._serve_file.call_args.args[0], image.resolve())
+            with mock.patch.dict(os.environ, {'CALFORGE_PROJECT_ID': p['id']}):
+                self.assertEqual(projects.run_root(self.root, {'project_id': p['id']}), target)
+
+    def test_external_clone_shared_source_and_recovery(self):
+        with tempfile.TemporaryDirectory(dir=server.ROOT / '.cache') as folder:
+            p = projects.create(self.root, 'Clone external', folder)
+            rows = store.add_link_batch(self.root, 'https://example.com/item', book_count=2, project_id=p['id'])
+            d = store.item_dir(self.root, rows[0]['id'])
+            source = store.source_dir(d)
+            self.assertTrue(source.is_relative_to(projects.require(self.root, p['id'])))
+            store.write(source, published=False)
+            (d / 'item.json').unlink()
+            d.rmdir()
+            store.recover_batches(self.root)
+            self.assertEqual(store.source_dir(d), source)
+            store.write(d, source_path=str(Path(folder) / '_clone_sources' / 'abc123'))
+            with self.assertRaises(ValueError): store.source_dir(d)
+
+    def test_external_clone_adoption_uses_selected_directory(self):
+        from calforge.clone.run import Book
+        with tempfile.TemporaryDirectory(dir=server.ROOT / '.cache') as folder:
+            p = projects.create(self.root, 'External adoption', folder)
+            item = store.add_link(self.root, 'https://example.com/item', project_id=p['id'])
+            d = store.item_dir(self.root, item['id'])
+            work = d / 'work'
+            layout.ensure_system(work)
+            meta = {'title': 'Example', 'etsy_title': 'Example calendar', 'etsy_description': 'Description',
+                    'tags': ['calendar'], 'months': [f'Month {i}' for i in range(1, 13)]}
+            layout.tech(work).mkdir(parents=True, exist_ok=True)
+            (layout.tech(work) / 'clone_meta.json').write_text(json.dumps(meta))
+            b = Book(self.cfg, d, on_event=lambda _: None)
+            b._adopt_locked()
+            saved = Path(store.read(d)['book'])
+            self.assertTrue(saved.is_relative_to(projects.require(self.root, p['id'])))
+            self.assertTrue(layout.is_book(saved))
+            self.assertIn(saved, layout.books(self.root))
+
+    def test_external_invalid_parent_and_missing_drive(self):
+        for value in ('relative', str(self.root / 'missing')):
+            with self.assertRaises(ValueError): projects.create(self.root, 'Invalid', value)
+        self.assertEqual(projects.entries(self.root), [])
+        with tempfile.TemporaryDirectory(dir=server.ROOT / '.cache') as folder:
+            p = projects.create(self.root, 'Offline', folder)
+            projects.require(self.root, p['id']).rmdir()
+            with self.assertRaisesRegex(ValueError, 'ổ đĩa'): projects.require(self.root, p['id'])
+            h = mock.Mock()
+            server.StudioHandler._api_list_projects(h)
+            self.assertEqual(h._send_json.call_args.args[0]['workspaces'][0]['id'], p['id'])
+
+    def test_external_delete_keeps_selected_parent_and_removes_registry(self):
+        with tempfile.TemporaryDirectory(dir=server.ROOT / '.cache') as folder:
+            p = projects.create(self.root, 'Delete external', folder)
+            target = projects.require(self.root, p['id'])
+            q = mock.Mock(items=[], lock=threading.RLock())
+            with mock.patch.object(server, 'batch_queue', return_value=q), mock.patch.object(server.TASK_MANAGER, 'tasks', {}), mock.patch.object(server, '_to_recycle_bin', side_effect=lambda path: path.rmdir()):
+                server._delete_workspace(p['id'])
+            self.assertFalse(target.exists())
+            self.assertTrue(Path(folder).is_dir())
+            self.assertEqual(projects.entries(self.root), [])
+
     def test_two_projects_same_keyword_separate_batches_and_legacy_visible(self):
         a, b = [projects.create(self.root, name) for name in ('A', 'B')]
         for p, ok in ((a, True), (b, False)):

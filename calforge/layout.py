@@ -57,7 +57,8 @@ def is_book(c: Path) -> bool:
 
 def books(projects_root: Path) -> list[Path]:
     """Mọi cuốn lịch dưới projects_root (projects/<loại lịch>/<chủ đề>/<cuốn>/ hoặc cấu trúc cũ ít cấp hơn)."""
-    return sorted({f.parent.parent for f in Path(projects_root).rglob("concept.json")
+    from .projects import roots
+    return sorted({f.parent.parent for root in roots(projects_root) for f in root.rglob("concept.json")
                    if f.parent.name == SYSTEM and not f.parent.parent.name.startswith((".", "_"))})
 
 

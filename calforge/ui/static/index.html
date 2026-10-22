@@ -40,6 +40,8 @@
         <label for="runProject"><strong>Dự án</strong></label>
         <select id="runProject"><option value="">Chọn dự án…</option></select>
         <input id="newProjectName" maxlength="100" placeholder="Tên dự án mới…" aria-label="Tên dự án mới">
+        <input id="newProjectFolder" placeholder="Nơi lưu: mặc định của tool" aria-label="Thư mục lưu dự án" title="Chọn thư mục cha; tool sẽ tạo thư mục riêng cho dự án">
+        <button type="button" class="btn btn-small btn-ghost" id="btnProjectFolder">Chọn thư mục</button>
         <button type="button" class="btn btn-small btn-ghost" id="btnCreateProject">Tạo dự án</button>
       </div>
       <fieldset class="kinds" id="modePicker">
@@ -277,6 +279,8 @@
       </div>
       <div class="zone-bar" id="zoneBar" role="group" aria-label="Lọc theo trạng thái" hidden></div>
       <div class="sheet-export-row">
+        <button class="btn btn-small btn-ghost" id="btnImportXlsx" title="Tạo cuốn từ file Sheet (SKU, Description, Tags, Title, Sizes, Paper, Design, Mockup) vào dự án TM; SKU đã có thì bỏ qua">Import xlsx → dự án TM</button>
+        <input type="file" id="xlsxFile" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden>
         <button class="btn btn-small btn-ghost" id="btnImportSkuTxt">Nhập TXT → Excel</button>
         <input type="file" id="skuTxtFile" accept=".txt,text/plain" hidden>
         <span class="hint" id="skuTxtResult" role="status">Lọc Sheet theo SKU đã chọn</span>

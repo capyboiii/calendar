@@ -54,6 +54,14 @@ document.addEventListener('DOMContentLoaded', () => {
 // --------------------------------------------------------------------------
 function bindEvents() {
   $('btnCreateProject').addEventListener('click', createProject);
+  $('btnProjectFolder').addEventListener('click', async () => {
+    const btn = $('btnProjectFolder'); btn.disabled = true;
+    try {
+      const result = await api('/api/workspaces/pick-folder', {});
+      if (result.path) $('newProjectFolder').value = result.path;
+    } catch (e) { toast(e.message, 'error'); }
+    finally { btn.disabled = false; }
+  });
   $('newProjectName').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); createProject(); } });
   $('btnBackProjects').addEventListener('click', () => { S.openWorkspace = null; $('bookSearch').value = ''; renderResults(); });
   $('btnStart').addEventListener('click', startBatch);
@@ -87,6 +95,8 @@ function bindEvents() {
   $('btnR2Save').addEventListener('click', saveR2);
   $('btnShop').addEventListener('click', () => openShopPicker('printify'));
   $('btnCalendaria').addEventListener('click', () => openShopPicker('calendaria'));
+  $('btnImportXlsx').addEventListener('click', () => $('xlsxFile').click());
+  $('xlsxFile').addEventListener('change', importXlsx);
   $('btnImportSkuTxt').addEventListener('click', () => $('skuTxtFile').click());
   $('skuTxtFile').addEventListener('change', exportSkuTxt);
   $('btnShopGo').addEventListener('click', () => {
@@ -130,6 +140,47 @@ function bindEvents() {
 
 function countValue() {
   return Math.max(1, Math.min(20, parseInt($('inputCount').value, 10) || 1));
+}
+
+// Import xlsx dạng Sheet -> cuốn mới trong dự án TM (tải mockup + listing; trang in giữ link R2; SKU đã có thì bỏ qua)
+async function importXlsx() {
+  const input = $('xlsxFile'), file = input.files[0];
+  if (!file) return;
+  const button = $('btnImportXlsx'), box = $('shopResult');
+  button.disabled = true;
+  box.hidden = false;
+  box.textContent = 'Đang gửi file xlsx…';
+  try {
+    if (file.size > 50e6) throw new Error('File xlsx quá lớn (tối đa 50 MB).');
+    const buf = new Uint8Array(await file.arrayBuffer());
+    let bin = '';
+    for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode.apply(null, buf.subarray(i, i + 0x8000));
+    const data = await api('/api/import-xlsx', { name: file.name, data: btoa(bin) });
+    await new Promise((resolve) => {
+      const poll = setInterval(async () => {
+        const t = await api(`/api/task?id=${data.task_id}&since=0`).catch(() => null);
+        if (!t) return;
+        const logs = t.logs || [];
+        const head = logs.find((l) => l.startsWith('File có')) || 'Đang đọc file…';
+        const done = logs.filter((l) => /\[\d+\/\d+\]/.test(l)).length;
+        if (t.status === 'running') { box.textContent = `${head} · đã xử lý ${done} cuốn`; return; }
+        clearInterval(poll);
+        const end = logs.find((l) => l.startsWith('Xong:')) || '';
+        const err = logs.find((l) => l.trim().startsWith('✘'));
+        box.innerHTML = t.status === 'success' ? esc(end || head)
+          : `<span class="why">${esc(err || 'Import chưa xong, xem Chi tiết.')}</span>${end ? ' · ' + esc(end) : ''}`;
+        loadProjects();
+        resolve();
+      }, 2000);
+    });
+  } catch (error) {
+    box.textContent = error.status === 404
+      ? 'Backend đang chạy bản cũ, chưa có Import xlsx. Tắt tool rồi mở lại.' : error.message;
+    toast(box.textContent, 'error');
+  } finally {
+    button.disabled = false;
+    input.value = '';
+  }
 }
 
 async function exportSkuTxt() {
@@ -663,10 +714,11 @@ async function createProject() {
   if (!name) { toast('Nhập tên dự án mới.', 'error'); input.focus(); return; }
   const btn = $('btnCreateProject'); btn.disabled = true;
   try {
-    const p = await api('/api/workspaces/create', { name });
+    const p = await api('/api/workspaces/create', { name, storage_parent: $('newProjectFolder').value.trim() });
     await loadProjects();
     $('runProject').value = p.id;
     input.value = '';
+    $('newProjectFolder').value = '';
     S.openWorkspace = p.id;
     renderResults();
     toast(`Đã tạo dự án "${p.name}".`, 'success');
@@ -707,6 +759,11 @@ function renderWorkspaceCards() {
       renderResults();
     });
     card.innerHTML = `<strong>📁 ${esc(p.name)}</strong><span>${books.length} cuốn · Mở dự án →</span>`;
+    if (p.storage_path) {
+      const location = document.createElement('small');
+      location.className = 'workspace-location'; location.textContent = p.storage_path;
+      location.title = p.storage_path; card.appendChild(location);
+    }
     const container = document.createElement('div');
     container.className = 'workspace-item';
     container.appendChild(card);

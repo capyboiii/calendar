@@ -392,7 +392,7 @@ def _shop_books() -> list[dict]:
 def _book_arg(params: dict) -> Path:
     root = (ROOT / config.load()["projects_dir"]).resolve()
     target = (ROOT / str(params.get("concept", ""))).resolve()
-    if not target.is_relative_to(root) or not layout.is_book(target):   # chỉ nhận thư mục cuốn nằm TRONG projects
+    if not _in_projects(target) or not layout.is_book(target):   # chỉ nhận thư mục cuốn nằm TRONG projects
         raise ValueError("Không tìm thấy cuốn này.")
     return target
 
@@ -805,6 +805,33 @@ class StudioHandler(SimpleHTTPRequestHandler):
                 message = str(error) if isinstance(error, SelectionError) else 'Không đọc được nội dung TXT.'
                 return self._send_json({'error': message}, status=HTTPStatus.BAD_REQUEST)
 
+        if path == '/api/import-xlsx':
+            # nút Import xlsx: lưu file vào projects/_imports/ rồi chạy "import-sheet" như một việc nền (cùng làn với
+            # Đẩy R2 nên không đè r2.json của nhau; batch vẫn chạy song song)
+            import base64
+            try:
+                length = int(self.headers.get('Content-Length', 0))
+                if not 0 < length <= 80_000_000:
+                    raise ValueError('File xlsx trống hoặc quá lớn (tối đa 50 MB).')
+                body = json.loads(self.rfile.read(length).decode('utf-8'))
+                data = base64.b64decode(str(body.get('data') or ''), validate=True)
+                if not data.startswith(b'PK'):
+                    raise ValueError('File không phải xlsx.')
+            except (ValueError, UnicodeError) as e:
+                return self._send_json({'error': str(e) if str(e) else 'Không đọc được file xlsx.'},
+                                       status=HTTPStatus.BAD_REQUEST)
+            busy = TASK_MANAGER.shop_running()
+            if busy:
+                return self._send_json({'error': f'Đang chạy việc khác: {busy.description}. Chờ xong rồi Import.'},
+                                       status=HTTPStatus.CONFLICT)
+            folder = Path(config.load()['projects_dir']) / '_imports'
+            folder.mkdir(parents=True, exist_ok=True)
+            target = folder / f"import_{time.strftime('%Y%m%d_%H%M%S')}.xlsx"
+            target.write_bytes(data)
+            desc = 'Import xlsx → dự án TM'
+            task_id = TASK_MANAGER.start_task(['import-sheet', str(target)], desc, 'shop', {})
+            return self._send_json({'task_id': task_id, 'description': desc, 'status': 'started'})
+
         if path == "/api/action":
             try:
                 length = int(self.headers.get("Content-Length", 0))
@@ -902,7 +929,7 @@ class StudioHandler(SimpleHTTPRequestHandler):
                     picked = []
                     for b in books:
                         target = (ROOT / str(b)).resolve()
-                        if not str(target).startswith(str(root)) or not layout.is_book(target):
+                        if not _in_projects(target) or not layout.is_book(target):
                             return self._send_json({"error": f"Không tìm thấy cuốn: {b}"}, status=HTTPStatus.BAD_REQUEST)
                         picked.append(str(target))
                     if not picked:
@@ -954,10 +981,16 @@ class StudioHandler(SimpleHTTPRequestHandler):
             except OSError as e:
                 return self._send_json({'error': f'Không xóa được dự án: {e}'}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
 
+        if path == '/api/workspaces/pick-folder':
+            try:
+                return self._send_json({'path': _pick_project_folder()})
+            except (OSError, subprocess.SubprocessError) as e:
+                return self._send_json({'error': f'Không mở được cửa sổ chọn thư mục: {e}'}, status=400)
+
         if path == '/api/workspaces/create':
             try:
                 body = json.loads(self.rfile.read(int(self.headers.get('Content-Length', 0))).decode('utf-8'))
-                item = workspaces.create(Path(config.load()['projects_dir']), body.get('name', ''))
+                item = workspaces.create(Path(config.load()['projects_dir']), body.get('name', ''), body.get('storage_parent') or '')
                 return self._send_json(item)
             except (ValueError, AttributeError) as e:
                 return self._send_json({'error': str(e)}, status=HTTPStatus.BAD_REQUEST)
@@ -1060,7 +1093,7 @@ class StudioHandler(SimpleHTTPRequestHandler):
                 return self._send_json({"ok": ok})
             target = (ROOT / str(body.get("path", "")).lstrip("/\\")).resolve()
             # CHỈ mở THƯ MỤC nằm trong tool: mở file bằng os.startfile = chạy file đó (python.exe, .bat...)
-            if not target.is_relative_to(ROOT.resolve()) or not target.is_dir():
+            if not (target.is_relative_to(ROOT.resolve()) or _in_projects(target)) or not target.is_dir():
                 return self._send_json({"error": "Không tìm thấy thư mục"}, status=HTTPStatus.NOT_FOUND)
             _open_in_explorer(target)
             return self._send_json({"ok": True})
@@ -1159,8 +1192,10 @@ class StudioHandler(SimpleHTTPRequestHandler):
         folders = {v["folder"]: k for k, v in products.PRODUCTS.items()}
         kw_dirs = []
         catalog = workspaces.entries(projects_dir)
-        roots = [(projects_dir, '')] + [(workspaces.require(projects_dir, p['id']), p['id']) for p in catalog]
+        roots = [(projects_dir, '')] + [(Path(p.get('storage_path') or projects_dir / workspaces.DIRECTORY / p['id']), p['id']) for p in catalog]
         for base, project_id in roots:
+            if not base.is_dir():
+                continue
             for top in sorted(base.iterdir()):
                 if not top.is_dir() or top.name.startswith((".", "_")):
                     continue
@@ -1213,7 +1248,7 @@ class StudioHandler(SimpleHTTPRequestHandler):
                     "id": c_dir.name,
                     **_clone_book_info(c_dir, concept_data),
                     "sku": _sku_of(c_dir),
-                    "path": str(c_dir.relative_to(ROOT)).replace("\\", "/"),
+                    "path": _rel(c_dir),
                     "title": (concept_data.get("cover") or {}).get("title") or c_dir.name,
                     "subtitle": (concept_data.get("cover") or {}).get("subtitle", ""),
                     "product": products.product_id(concept_data),
@@ -1245,7 +1280,7 @@ class StudioHandler(SimpleHTTPRequestHandler):
                 "keyword": kw_dir.name,
                 "group": group,
                 "product": group_product,
-                "path": str(kw_dir.relative_to(ROOT)).replace("\\", "/"),
+                "path": _rel(kw_dir),
                 "total_angles": len(angles),
                 "concepts": concepts,
                 "batch": _read_batch(kw_dir),
@@ -1482,8 +1517,33 @@ class StudioHandler(SimpleHTTPRequestHandler):
         pass
 
 
+def _pick_project_folder() -> str:
+    if os.name != 'nt':
+        raise OSError('Nhập đường dẫn thư mục lưu bên cạnh nút Chọn thư mục.')
+    script = """
+Add-Type -AssemblyName System.Windows.Forms
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+$dialog = New-Object System.Windows.Forms.FolderBrowserDialog
+$dialog.Description = 'Chọn nơi lưu dự án CalForge'
+$owner = New-Object System.Windows.Forms.Form
+$owner.TopMost = $true
+$owner.ShowInTaskbar = $false
+try {
+    if ($dialog.ShowDialog($owner) -eq 'OK') { [Console]::Write($dialog.SelectedPath) }
+} finally { $dialog.Dispose(); $owner.Dispose() }
+"""
+    result = subprocess.run(['powershell.exe', '-NoProfile', '-STA', '-Command', script],
+                            capture_output=True, encoding='utf-8', check=True,
+                            creationflags=subprocess.CREATE_NO_WINDOW)
+    return result.stdout.strip()
+
+
 def _rel(p: Path) -> str:
-    return str(p.relative_to(ROOT)).replace("\\", "/")
+    try:
+        value = p.relative_to(ROOT)
+    except ValueError:
+        value = p.resolve()
+    return str(value).replace("\\", "/")
 
 
 def _vrel(p: Path) -> str:
@@ -1569,6 +1629,10 @@ def _delete_workspace(project_id: str) -> None:
                 shutil.move(str(source), str(destination))
                 moved.append((source, destination))
             _to_recycle_bin(target)
+            registry = root / workspaces.DIRECTORY / project_id
+            if registry.resolve() != target:
+                (registry / 'project.json').unlink()
+                registry.rmdir()
         except Exception:
             for source, destination in reversed(moved):
                 if destination.exists():
@@ -1611,7 +1675,7 @@ def _in_projects(target: Path) -> bool:
     (calforge.json có khoá R2, .chrome-profiles có cookie tài khoản...) không bao giờ được trả ra."""
     try:
         root = Path(config.load()["projects_dir"]).resolve()
-        return Path(target).resolve().is_relative_to(root)
+        return workspaces.contains(root, target)
     except (OSError, KeyError, ValueError):
         return False
 

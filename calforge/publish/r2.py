@@ -135,6 +135,18 @@ def print_pages(cdir: Path, format_id: str) -> list[Path]:
     return [d / f"{n}.png" for n in names if (d / f"{n}.png").exists()]
 
 
+def design_names(cdir: Path, format_id: str, files: dict | None = None) -> list[str]:
+    """Tên trang in của một khổ (đúng thứ tự cuốn): trang PNG trên máy; cuốn Import xlsx không tải trang in về thì lấy
+    các trang đã có link trong r2.json."""
+    local = [p.name for p in print_pages(cdir, format_id)]
+    if local:
+        return local
+    files = read_state(cdir).get("files", {}) if files is None else files
+    label = layout.SIZE_LABEL[format_id]
+    names = PAGE_ORDER if ai_grid_book(cdir) else [n for n in PAGE_ORDER if not n.endswith("_grid")]
+    return [f"{n}.png" for n in names if (files.get(f"{label}/{n}.png") or {}).get("url")]
+
+
 def ai_grid_book(cdir: Path) -> bool:
     """Cuốn có trang grid riêng để in (Wall Calendar (Blank)); grid in sẵn (Wall Calendar) thì không."""
     import json
@@ -217,6 +229,8 @@ def push_book(cdir: Path, cfg: dict, on_event=print, s3=None, gate: Throttle | N
     tries = max(1, int(r2.get("upload_retries", 8)))
     st = read_state(cdir)
     destination = {k: r2.get(k, "") for k in ("account_id", "bucket", "prefix", "public_url")}
+    if st.get("imported") and not st.get("destination"):
+        st["destination"] = destination                 # cuốn Import xlsx tạo lúc chưa có khoá R2: link đã sẵn trên R2
     if st.get("destination") != destination:
         st = {"destination": destination}
     key_base = st.get("key_base") or f"{r2['prefix'].strip('/')}/{_group(cdir)}{slug(cdir.parent.name, 40)}/{slug(cdir.name)}"

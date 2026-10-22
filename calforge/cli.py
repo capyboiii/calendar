@@ -301,6 +301,16 @@ def cmd_printify(args, cfg):
     print("product:", st.get("product_id"), "(đã publish)" if st.get("published") else "(NHÁP)")
 
 
+def cmd_import_sheet(args, cfg):
+    from .publish.sheet_import import ImportError_, import_file
+    try:
+        res = import_file(Path(args.xlsx), cfg)
+    except ImportError_ as e:
+        sys.exit(f"✘ {e}")
+    if res["failed"]:
+        sys.exit(f"✘ {len(res['failed'])} cuốn chưa tạo được (bấm Import lại để làm nốt): {res['failed'][0]}")
+
+
 def cmd_shop(args, cfg):
     from .publish.r2 import R2Error
     if args.format == "calendaria":
@@ -497,6 +507,10 @@ def main(argv=None):
     p.add_argument("--book", action="append", help="chỉ cuốn này (thư mục cuốn, lặp lại được); bỏ trống = mọi cuốn")
     p.add_argument("--format", choices=("printify", "calendaria"), default="printify", help="mẫu CSV cần xuất")
     p.set_defaults(func=cmd_shop)
+
+    p = sub.add_parser("import-sheet", help="tạo cuốn từ file xlsx dạng Sheet Crayonahub vào dự án TM (bỏ SKU đã có)")
+    p.add_argument("xlsx")
+    p.set_defaults(func=cmd_import_sheet)
 
     p = sub.add_parser("rename-sku", help="đổi tên thư mục các cuốn cũ sang mã SKU (giữ SKU đã xuất)")
     p.set_defaults(func=cmd_rename_sku)

@@ -29,12 +29,22 @@ def require(root: Path, project_id: str) -> Path:
     target = Path(root) / DIRECTORY / project_id
     if not target.resolve().is_relative_to(Path(root).resolve()):
         raise ValueError('Đường dẫn dự án không hợp lệ.')
-    if not any(p['id'] == project_id for p in entries(root)):
+    item = next((p for p in entries(root) if p['id'] == project_id), None)
+    if item is None:
         raise ValueError('Dự án không còn tồn tại. Hãy chọn lại dự án.')
+    if item.get('storage_path'):
+        target = Path(item['storage_path'])
+        if not target.is_absolute():
+            raise ValueError('Đường dẫn lưu dự án không hợp lệ.')
+        if not target.is_dir():
+            raise ValueError('Không truy cập được thư mục dự án. Kiểm tra ổ đĩa lưu dự án.')
     return target
 
 
-def create(root: Path, name: str) -> dict:
+def create(root: Path, name: str, storage_parent: str = '') -> dict:
+    if not isinstance(storage_parent, str):
+        raise ValueError('Đường dẫn thư mục lưu không hợp lệ.')
+    storage_parent = storage_parent.strip()
     name = str(name).strip()
     if not name or len(name) > 100 or any(ord(c) < 32 for c in name):
         raise ValueError('Tên dự án cần từ 1 đến 100 ký tự.')
@@ -46,6 +56,25 @@ def create(root: Path, name: str) -> dict:
         if not target.resolve().is_relative_to(Path(root).resolve()):
             raise ValueError('Đường dẫn dự án không hợp lệ.')
         target.mkdir(parents=True)
+        if storage_parent:
+            parent = Path(storage_parent).expanduser()
+            if not parent.is_absolute() or not parent.is_dir():
+                target.rmdir()
+                raise ValueError('Chọn thư mục lưu có sẵn trên máy (đường dẫn đầy đủ).')
+            # Dedicated child: deleting a project must never delete the selected parent.
+            safe_name = re.sub(r'[^\w-]+', '-', name, flags=re.UNICODE).strip('-_')[:32] or 'CalForge'
+            destination = parent / (safe_name + '-' + item['id'][:8])
+            try:
+                destination.mkdir()
+                probe = destination / '.write-test'
+                probe.write_text('ok', encoding='utf-8')
+                probe.unlink()
+            except OSError:
+                if destination.is_dir() and not any(destination.iterdir()):
+                    destination.rmdir()
+                target.rmdir()
+                raise
+            item['storage_path'] = str(destination.resolve())
         temporary = target / 'project.tmp'
         temporary.write_text(json.dumps(item, ensure_ascii=False), encoding='utf-8')
         temporary.replace(target / 'project.json')
@@ -54,3 +83,12 @@ def create(root: Path, name: str) -> dict:
 
 def run_root(root: Path, params: dict) -> Path:
     return require(root, params['project_id']) if params.get('project_id') else Path(root)
+
+
+def roots(root: Path) -> list[Path]:
+    """Registered storage roots, including temporarily unavailable drives."""
+    return [Path(root)] + [Path(p['storage_path']) for p in entries(root) if p.get('storage_path')]
+
+
+def contains(root: Path, target: Path) -> bool:
+    return any(Path(target).resolve().is_relative_to(p.resolve()) for p in roots(root))
